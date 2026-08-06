@@ -4,25 +4,38 @@
 |---|---|---:|---|
 | Nền tảng | 100% Kotlin, không Lua/runtime Lua | Đủ | `tools/verify_project.py` |
 | Nguồn audio | Tệp, microphone, playback capture | Đủ | `audio/*AudioSource.kt` |
-| Audio | Resampler streaming, PCM 16 kHz, player jitter | Đủ | `StreamingPcmConverter.kt`, test |
+| Quyền audio | Kiểm tra `RECORD_AUDIO` tại nguồn, không chỉ ở UI | Đủ | `MicAudioSource.kt`, `InternalAudioSource.kt` |
+| Tương thích API | Playback Capture chỉ tạo từ Android 10 | Đủ | `TranslationService.kt` |
+| Audio | Resampler streaming, PCM 16 kHz, player jitter | Đủ | `StreamingPcmConverter.kt`, unit test |
 | Mạng | WebSocket backpressure hai tầng | Đủ | `GeminiLiveClient.kt`, `TranslationService.kt` |
 | Phiên | Session resumption và GoAway | Đủ | `GeminiLiveClient.kt` |
 | Queue | `pacingMaxBuffer` điều khiển queue thật | Đủ | `TranslationService.kt`, `SettingsPolicy.kt` |
 | MediaProjection | Callback thu hồi, giải phóng AudioRecord | Đủ | `InternalAudioSource.kt` |
 | Nhật ký | Kho dùng chung, rotation, lọc, tìm kiếm, stack trace | Đủ | `AppLogRepository.kt`, `LogViewerActivity.kt` |
-| Chẩn đoán | ZIP summary + memory log + file log, che secret | Đủ | `docs/DIAGNOSTICS.md` |
+| Chẩn đoán | ZIP summary, memory/file log và che secret | Đủ | `docs/DIAGNOSTICS.md` |
 | Riêng tư | Transcript log tắt mặc định | Đủ | `AppSettings`, `AppLogRepository` |
-| Cài đặt | Sanitize tập trung, profile một nguồn | Đủ | `SettingsPolicy.kt`, test |
+| Cài đặt | Sanitize tập trung, profile một nguồn | Đủ | `SettingsPolicy.kt`, unit test |
 | Áp dụng | Ngay / tạo lại player / reconnect / phiên sau | Đủ | `TranslationService.kt` |
 | Reset | Xóa theo phạm vi, không xóa mù `filesDir` | Đủ | `SettingsActivity.kt` |
-| Unit test | Resampler và SettingsPolicy | Đủ cơ bản | `app/src/test` |
-| CI | Secret scan, verify, test, lint, assemble APK | Đủ cấu hình | `.github/workflows/android-ci.yml` |
-| APK | Kiểm tra ZIP, DEX, manifest, resources và chữ ký | Đủ cấu hình | `tools/verify_apk.py`, CI |
-| Release | APK + AAB ký bằng GitHub Secrets | Đủ cấu hình | `.github/workflows/android-release.yml` |
+| Wrapper | Bootstrap có source, checksum JAR và checksum Gradle | Đã kiểm chứng | `tools/verify_github_ready.py`, `gradle/wrapper` |
+| Unit test | Resampler và SettingsPolicy | Đã chạy xanh | `app/src/test`, Android CI |
+| CI | Secret scan, verify, test, lint, assemble APK | Đã chạy xanh | `.github/workflows/android-ci.yml` |
+| APK | ZIP, DEX, manifest, resources và chữ ký | Đã kiểm chứng | `tools/verify_apk.py`, `apksigner` |
+| APK debug | 4.343.906 byte, SHA-256 `5e24fe...47b3` | Đã tạo | Android CI ngày 06/08/2026 |
+| Actions artifact | Lưu và tải artifact từ GitHub | Bị chặn bởi quota | Cần xóa artifact cũ hoặc tăng quota |
+| Release | APK + AAB ký bằng GitHub Secrets | Đủ cấu hình, chưa chạy | `.github/workflows/android-release.yml` |
 | Chuỗi cung ứng | Dependabot và dependency graph | Đủ | `.github/dependabot.yml`, workflow |
 | Hỗ trợ lỗi | Issue template yêu cầu gói chẩn đoán | Đủ | `.github/ISSUE_TEMPLATE/bug_report.yml` |
 | Pháp lý | Privacy, Security, License | Đủ | tệp gốc repository |
-| Thiết bị thật | Ma trận Android 8 đến 15 và nguồn audio | Cần kiểm thử thủ công | `docs/BUILD_AND_RELEASE.md` |
-| Store | Play Console, app signing, Data safety | Chưa thực hiện | Cần tài khoản Google Play |
+| Thiết bị thật | Android 8 đến 15 và ba nguồn audio | Cần kiểm thử thủ công | `docs/BUILD_AND_RELEASE.md` |
+| Google Play | Play App Signing, Data safety, phát hành store | Chưa thực hiện | Cần tài khoản Google Play |
 
-“Đủ cấu hình” nghĩa là mã và workflow đã có, nhưng chỉ được đổi thành “đã kiểm chứng” sau khi workflow liên quan chạy xanh. Bản release ký chỉ được tạo khi chủ repository cung cấp keystore qua GitHub Secrets. Kiểm thử thiết bị thật và quy trình Google Play không thể được chứng minh hoàn toàn bằng CI không có thiết bị Android thật.
+## Cách hiểu trạng thái
+
+- **Đủ**: mã hoặc tài liệu đã có và được kiểm tra tĩnh.
+- **Đã chạy xanh / Đã kiểm chứng**: GitHub Actions đã thực thi thành công bước liên quan.
+- **Đủ cấu hình, chưa chạy**: workflow hoàn chỉnh nhưng cần secret hoặc tài nguyên chưa được cung cấp.
+- **Bị chặn bởi quota**: APK đã được build và kiểm tra, nhưng GitHub không thể lưu artifact mới do giới hạn lưu trữ của tài khoản.
+- **Cần kiểm thử thủ công**: không thể chứng minh đầy đủ bằng runner Linux không có thiết bị Android thật.
+
+Bản release ký chỉ được coi là hoàn thành sau khi thêm đủ bốn keystore Secrets và workflow `Android Signed Release` chạy xanh. Phát hành Google Play là phạm vi riêng, cần tài khoản nhà phát triển, Play App Signing và khai báo Data safety.

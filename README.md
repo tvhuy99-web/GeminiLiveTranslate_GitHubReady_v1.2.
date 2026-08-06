@@ -47,7 +47,7 @@ Repository dùng bootstrap JAR có mã nguồn tại `gradle/wrapper/bootstrap-s
 
 ## Kết quả GitHub Actions đã kiểm chứng
 
-Workflow **Android CI** đã chạy xanh với các bước:
+Workflow **Android CI** thực hiện:
 
 1. quét API Key, token và private key;
 2. kiểm tra cấu trúc dự án và GitHub readiness;
@@ -55,15 +55,34 @@ Workflow **Android CI** đã chạy xanh với các bước:
 4. build debug APK;
 5. kiểm tra APK có manifest, resources và DEX hợp lệ;
 6. xác minh chữ ký bằng `apksigner`;
-7. chạy Android Lint nghiêm ngặt.
+7. chạy Android Lint nghiêm ngặt;
+8. đăng APK và SHA-256 lên GitHub prerelease `debug-latest`.
 
 APK debug đã kiểm chứng ngày **06/08/2026**:
 
-- Kích thước: **4.343.906 byte**.
-- SHA-256: `5e24feebf9b3c347e5e9b77a5ccb1ffd8d69a7569339152e22fd5565f84947b3`.
+- Kích thước: khoảng **4,34 MB**.
 - Chữ ký debug: APK Signature Scheme v2 hợp lệ.
 
-GitHub hiện có thể không giữ được Actions artifact mới khi quota lưu trữ của tài khoản đã đầy. Đây là giới hạn lưu trữ tài khoản, không phải lỗi test, build, APK hoặc chữ ký. Xóa artifact cũ hoặc tăng quota để tải artifact trực tiếp từ tab Actions.
+## Tải APK mới nhất
+
+Sau khi workflow trên nhánh `main` chạy xanh, mở:
+
+```text
+Releases → Gemini Live Translate v1.2.0 Debug (latest)
+```
+
+Hoặc truy cập release tag:
+
+```text
+https://github.com/tvhuy99-web/GeminiLiveTranslate_GitHubReady_v1.2./releases/tag/debug-latest
+```
+
+Release chứa:
+
+- `GeminiLiveTranslate-v1.2.0-debug.apk`
+- `GeminiLiveTranslate-v1.2.0-debug.apk.sha256`
+
+CI không còn dùng Actions artifact storage, vì quota artifact của tài khoản có thể bị chia sẻ với GitHub Packages hoặc bị giới hạn bởi billing/budget.
 
 ## Release ký chính thức
 
@@ -94,4 +113,4 @@ Xem [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) và dùng mẫu [Báo lỗi ứng
 
 ## Trạng thái phạm vi
 
-Phần mã nguồn, CI debug, kiểm tra APK, bảo mật repository và cấu hình release đã hoàn thiện. Bản release ký chưa thể được tạo cho đến khi chủ repository cung cấp keystore qua Secrets. Kiểm thử trên thiết bị Android thật và phát hành Google Play vẫn là các bước thủ công cần tài khoản và thiết bị tương ứng.
+Phần mã nguồn, CI debug, kiểm tra APK, bảo mật repository và phát hành APK debug qua GitHub Releases đã hoàn thiện. Bản release ký chưa thể được tạo cho đến khi chủ repository cung cấp keystore qua Secrets. Kiểm thử trên thiết bị Android thật và phát hành Google Play vẫn là các bước thủ công cần tài khoản và thiết bị tương ứng.

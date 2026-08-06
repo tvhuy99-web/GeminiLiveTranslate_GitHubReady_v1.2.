@@ -1,7 +1,7 @@
 name: Android CI
 
 on:
-  pull_request:
+  push:
     branches: [main]
   workflow_dispatch:
 
@@ -9,41 +9,108 @@ permissions:
   contents: write
 
 concurrency:
-  group: requested-conversion-${{ github.ref }}
+  group: android-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Commit previously verified conversion
+    name: Build signed updateable APK 1.2.2
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
 
     steps:
-      - name: Apply and push verified source
+      - name: Build, verify, publish and deliver APK
         env:
           GH_TOKEN: ${{ github.token }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
+          UPDATE_STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
+          UPDATE_KEY_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
+          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: 46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
         shell: bash
         run: |
           set -euo pipefail
+          for name in KEYSTORE_BASE64 UPDATE_STORE_PASSWORD UPDATE_KEY_ALIAS UPDATE_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing stable update-signing secret: $name" >&2
+              exit 1
+            fi
+          done
+
           AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
-            clone --branch agent/audio-stream-public-files --single-branch "$REPO_URL" source
+            clone --branch main --single-branch "$REPO_URL" source
           cd source
 
-          cp .github/workflows/android-ci.yml /tmp/android-ci-bootstrap.yml
-          python3 tools/apply_requested_patch.py
+          JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
+          if [[ -n "$JAVA17" ]]; then
+            export JAVA_HOME="$JAVA17/x64"
+            export PATH="$JAVA_HOME/bin:$PATH"
+          fi
+          java -version
+
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
+          chmod +x gradlew
+          ./gradlew --version
 
-          cp /tmp/android-ci-bootstrap.yml .github/workflows/android-ci.yml
-          rm -rf .kotlin
-          rm -f tools/apply_requested_patch.py
-          chmod -x gradlew
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
+          test -s update-keystore.jks
+          export UPDATE_STORE_FILE="$PWD/update-keystore.jks"
+
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
+          ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
+
+          mkdir -p out
+          cp "$APK" out/GeminiLiveTranslate-debug-latest.apk
+          (cd out && sha256sum GeminiLiveTranslate-debug-latest.apk > GeminiLiveTranslate-debug-latest.apk.sha256)
+          printf '%s\n' \
+            'versionName=1.2.2-debug' \
+            'versionCode=10202' \
+            'applicationId=com.oai.geminilivetranslate.debug' \
+            "certificateSha256=$EXPECTED_CERT_SHA256" > out/VERSION.txt
+
+          TAG="debug-latest"
+          TITLE="Gemini Live Translate 1.2.2 Debug (latest)"
+          NOTES="Verified updateable debug build from commit ${GITHUB_SHA}. Adds aiAudioStreamType, ACTION_GET_CONTENT and public WAV output in Music/GeminiLiveTranslate. Unit tests, APK integrity, stable signature and Android Lint passed."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --prerelease
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+              [[ -z "$asset" ]] || gh release delete-asset "$TAG" "$asset" --yes
+            done
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --prerelease
+          fi
+
+          mkdir -p /tmp/apk-delivery
+          cp out/* /tmp/apk-delivery/
+          rm -f update-keystore.jks apksigner.txt badging.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Add audio stream routing and public file access"
+          git checkout --orphan apk-delivery-build
+          git rm -rf . || true
+          git clean -fdx
+          mkdir -p delivery
+          cp /tmp/apk-delivery/* delivery/
+          printf '%s\n' \
+            'This branch contains the latest verified APK generated by Android CI.' \
+            "Source commit: $GITHUB_SHA" > delivery/README.txt
+          git add -f delivery
+          git commit -m "Deliver Gemini Live Translate 1.2.2 APK"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
-            push origin HEAD:agent/audio-stream-public-files
+            push --force origin HEAD:apk-delivery

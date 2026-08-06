@@ -1,0 +1,36 @@
+name: One-time Android source fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Replace invalid AudioAttributes constant
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            app/src/main/java/com/oai/geminilivetranslate/audio/StreamingPcmPlayer.kt
+            app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          )
+          sed -i 's/AudioAttributes\.USAGE_ACCESSIBILITY/AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY/g' "${files[@]}"
+          if git diff --quiet -- "${files[@]}"; then
+            echo "Source is already corrected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${files[@]}"
+          git commit -m "fix: use valid Android accessibility audio usage"
+          git push origin "HEAD:${{ github.head_ref }}"

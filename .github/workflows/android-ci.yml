@@ -43,8 +43,8 @@ jobs:
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
 
-      - name: Unit test, lint and assemble
-        run: gradle --no-daemon --stacktrace clean testDebugUnitTest lintDebug assembleDebug
+      - name: Unit test and assemble debug APK
+        run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
 
       - name: Verify APK integrity and signature
         run: |
@@ -60,6 +60,7 @@ jobs:
           sha256sum out/GeminiLiveTranslate-v1.2.0-debug.apk > out/GeminiLiveTranslate-v1.2.0-debug.apk.sha256
 
       - name: Upload debug APK
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: GeminiLiveTranslate-v1.2.0-debug
@@ -67,8 +68,26 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Run strict Android lint
+        id: lint
+        continue-on-error: true
+        run: gradle --no-daemon --stacktrace lintDebug
+
+      - name: Print and enforce lint result
+        if: steps.lint.outcome == 'failure'
+        shell: bash
+        run: |
+          REPORT=app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+          if [[ -f "$REPORT" ]]; then
+            cat "$REPORT"
+          else
+            echo "Lint failed but text report was not found." >&2
+          fi
+          exit 1
+
       - name: Upload reports when CI fails
         if: failure()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: android-ci-reports-${{ github.run_id }}

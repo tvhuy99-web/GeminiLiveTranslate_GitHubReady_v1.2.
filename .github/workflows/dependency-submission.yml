@@ -22,10 +22,9 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
         with:
+          gradle-version: '8.10.2'
           cache-provider: basic
           validate-wrappers: false
           dependency-graph: generate-and-submit
       - name: Resolve Gradle dependencies
-        run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon :app:dependencies
+        run: gradle --no-daemon :app:dependencies

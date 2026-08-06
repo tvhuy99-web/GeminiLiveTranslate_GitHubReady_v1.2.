@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Apply requested patch and build updateable APK
+    name: Apply requested patch and validate APK
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -50,7 +50,8 @@ jobs:
           chmod +x gradlew
           ./gradlew --version
 
-      - name: Require stable update-signing secrets
+      - name: Require stable update-signing secrets on main
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
@@ -66,14 +67,20 @@ jobs:
             fi
           done
 
-      - name: Restore stable update keystore
+      - name: Restore stable update keystore on main
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
           test -s update-keystore.jks
 
-      - name: Unit test and assemble updateable debug APK
+      - name: Unit test and assemble PR debug APK
+        if: github.event_name == 'pull_request'
+        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
+
+      - name: Unit test and assemble updateable debug APK on main
+        if: github.event_name != 'pull_request'
         env:
           UPDATE_STORE_FILE: ${{ github.workspace }}/update-keystore.jks
           UPDATE_STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
@@ -81,9 +88,7 @@ jobs:
           UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
         run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
 
-      - name: Verify APK integrity, package, version and stable signature
-        env:
-          EXPECTED_CERT_SHA256: 46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
+      - name: Verify APK integrity, package and version
         shell: bash
         run: |
           set -euo pipefail
@@ -93,22 +98,30 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
+
+      - name: Enforce stable update certificate on main
+        if: github.event_name != 'pull_request'
+        env:
+          EXPECTED_CERT_SHA256: 46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
+        shell: bash
+        run: |
+          set -euo pipefail
           ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
 
       - name: Run strict Android lint
         run: ./gradlew --no-daemon --stacktrace lintDebug
 
-      - name: Prepare requested APK
+      - name: Prepare validation APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-1.2.2-updateable-debug.apk
-          (cd out && sha256sum GeminiLiveTranslate-1.2.2-updateable-debug.apk > GeminiLiveTranslate-1.2.2-updateable-debug.apk.sha256)
+          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-1.2.2-pr-validation.apk
+          (cd out && sha256sum GeminiLiveTranslate-1.2.2-pr-validation.apk > GeminiLiveTranslate-1.2.2-pr-validation.apk.sha256)
 
-      - name: Upload requested APK
+      - name: Upload validation APK
         uses: actions/upload-artifact@v4
         with:
-          name: GeminiLiveTranslate-1.2.2-updateable
+          name: GeminiLiveTranslate-1.2.2-pr-validation
           path: out/*
           if-no-files-found: error
           retention-days: 1

@@ -1,0 +1,4 @@
+result=success
+stage=complete
+signingMode=android-debug
+updatedAt=2026-08-06T17:01:49Z

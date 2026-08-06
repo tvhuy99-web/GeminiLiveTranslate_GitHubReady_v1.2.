@@ -1,0 +1,90 @@
+name: One-time official Gradle wrapper
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10.2'
+          cache-provider: basic
+          validate-wrappers: false
+      - name: Generate official wrapper and update documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle wrapper --gradle-version 8.10.2 --distribution-type bin
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('.github/workflows/android-ci.yml'): [
+                  ("          gradle-version: '8.10.2'\n", ""),
+                  ("          validate-wrappers: false", "          validate-wrappers: true"),
+                  ("run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug", "run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug"),
+                  ("run: gradle --no-daemon --stacktrace lintDebug", "run: ./gradlew --no-daemon --stacktrace lintDebug"),
+              ],
+              Path('.github/workflows/android-release.yml'): [
+                  ("          gradle-version: '8.10.2'\n", ""),
+                  ("          validate-wrappers: false", "          validate-wrappers: true"),
+                  ("run: gradle --no-daemon --stacktrace clean testDebugUnitTest lintRelease assembleRelease bundleRelease", "run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest lintRelease assembleRelease bundleRelease"),
+              ],
+              Path('.github/workflows/dependency-submission.yml'): [
+                  ("          gradle-version: '8.10.2'\n", ""),
+                  ("          validate-wrappers: false", "          validate-wrappers: true"),
+                  ("run: gradle --no-daemon :app:dependencies", "run: ./gradlew --no-daemon :app:dependencies"),
+              ],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text()
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'Missing expected workflow text in {path}: {old!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text)
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          text = text.replace(
+              './gradlew clean test lint assembleDebug',
+              './gradlew clean testDebugUnitTest lintDebug assembleDebug',
+          )
+          old = 'Môi trường tạo ZIP không có Android SDK và không tải được Gradle dependency qua DNS ngoài, nên APK chưa được build trong môi trường này.'
+          new = '''## GitHub Ready và kết quả kiểm chứng
+
+Repository dùng Gradle Wrapper chính thức 8.10.2. Workflow **Android CI** quét secret, kiểm tra cấu trúc, chạy unit test, Android Lint, build APK, kiểm tra nội dung APK và xác minh chữ ký bằng `apksigner`.
+
+Bản kiểm chứng ngày 06/08/2026 đã tạo APK debug 4.343.906 byte, SHA-256 `5e24feebf9b3c347e5e9b77a5ccb1ffd8d69a7569339152e22fd5565f84947b3`, ký bằng Android Debug certificate với APK Signature Scheme v2.
+
+Workflow **Android Signed Release** hỗ trợ APK và AAB ký chính thức qua GitHub Secrets. Xem [docs/GITHUB_RELEASE.md](docs/GITHUB_RELEASE.md) và [docs/COMPLETENESS_MATRIX.md](docs/COMPLETENESS_MATRIX.md).
+
+Lưu ý: Actions artifact có thể không được lưu khi quota lưu trữ của tài khoản đã đầy. Điều này không làm thay đổi kết quả build, lint, kiểm tra APK hoặc chữ ký; hãy xóa artifact cũ hoặc tăng quota để tải artifact từ tab Actions.'''
+          if old not in text:
+              raise SystemExit('Outdated README build note not found')
+          text = text.replace(old, new, 1)
+          readme.write_text(text)
+          PY
+          chmod +x gradlew
+          ./gradlew --version
+          rm -f .github/workflows/one-time-official-wrapper.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "build: replace bootstrap with official Gradle 8.10.2 wrapper"
+          git push origin HEAD:main

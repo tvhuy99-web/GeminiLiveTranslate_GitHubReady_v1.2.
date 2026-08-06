@@ -153,6 +153,9 @@ def main() -> None:
             "ACTION_REFRESH_API_KEY",
             "restoreDefaultsPreservingKeys",
             "logIncludeTranscript: Boolean = false",
+            "aiAudioStreamType",
+            "PublicRecordingStore",
+            "MediaStore.Audio.Media.RELATIVE_PATH",
         ],
         "settings policy",
     )
@@ -192,8 +195,8 @@ def main() -> None:
     require_tokens(
         build_file,
         [
-            'versionName = "1.2.1"',
-            "versionCode = 10201",
+            'versionName = "1.2.2"',
+            "versionCode = 10202",
             'applicationIdSuffix = ".debug"',
             "UPDATE_STORE_FILE",
             'testImplementation("junit:junit:4.13.2")',
@@ -221,7 +224,7 @@ def main() -> None:
     print("[OK] Rotating buffered logs, redaction and diagnostic ZIP")
     print("[OK] Centralized settings validation and live/deferred application")
     print("[OK] Scoped reset paths and no obsolete apply buttons")
-    print("[OK] Version 1.2.1 and stable update-signing configuration")
+    print("[OK] Version 1.2.2, public recordings and stable update-signing configuration")
     print("[OK] No Lua dependency or source")
     print(f"[OK] Gradle bootstrap SHA-256: {digest}")
     print("PROJECT_STRUCTURE_OK")

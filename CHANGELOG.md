@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2
+
+### Âm thanh và tệp người dùng
+
+- Bổ sung `aiAudioStreamType` với bốn chế độ: trợ năng, đa phương tiện, giao tiếp giọng nói và trợ lý.
+- Đổi bộ chọn nguồn sang `ACTION_GET_CONTENT` cho tệp audio/video.
+- WAV hoàn tất được xuất ra thư mục công khai `Music/GeminiLiveTranslate` qua MediaStore.
+- Android 8/9 yêu cầu quyền bộ nhớ cũ chỉ khi tính năng ghi WAV được bật.
+- API Key, cài đặt và nhật ký chẩn đoán vẫn ở vùng dữ liệu riêng tư.
+
 ## 1.2.1
 
 ### Tương thích Gemini Live

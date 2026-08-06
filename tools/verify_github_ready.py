@@ -93,7 +93,7 @@ def main() -> None:
         "ANDROID_UPDATE_KEY_PASSWORD",
         UPDATE_CERT_SHA256,
         "com.oai.geminilivetranslate.debug",
-        "versionCode='10201'",
+        "versionCode='10202'",
         "gh release create",
         "gh release upload",
         "gh release delete-asset",
@@ -127,8 +127,8 @@ def main() -> None:
         "signingConfigs",
         "enableV3Signing",
         'applicationIdSuffix = ".debug"',
-        "versionCode = 10201",
-        'versionName = "1.2.1"',
+        "versionCode = 10202",
+        'versionName = "1.2.2"',
     ]:
         if token not in build:
             fail(f"Build/update signing configuration is missing token: {token}")

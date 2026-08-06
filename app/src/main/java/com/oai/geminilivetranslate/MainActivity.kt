@@ -57,20 +57,27 @@ class MainActivity : AppCompatActivity() {
     private var bound = false
     private var spinnerReady = false
     private var micSpinnerReady = false
+    private var aiStreamSpinnerReady = false
     private var pendingStartMode: SourceMode? = null
     private var pendingProjectionResultCode: Int? = null
     private var pendingProjectionData: Intent? = null
     private var pendingSelectedUri: Uri? = null
     private var pendingSelectedFileName: String? = null
     private var permissionPendingMode: SourceMode? = null
+    private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
+    private val aiStreamValues = listOf("accessibility", "media", "voice_communication", "assistant")
+    private val aiStreamLabels = listOf(
+        "Trợ năng - ưu tiên nghe rõ",
+        "Đa phương tiện / nhạc",
+        "Giao tiếp bằng giọng nói",
+        "Trợ lý Android",
+    )
     private var pendingExportText: String? = null
 
-    private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+    private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val uri = result.data?.data ?: return@registerForActivityResult
         val name = displayName(uri)
         logger.log(2, "UI", "Đã chọn tệp name=${name ?: uri.lastPathSegment} uriScheme=${uri.scheme}")
         val service = translationService
@@ -89,6 +96,14 @@ class MainActivity : AppCompatActivity() {
         permissionPendingMode = null
         logger.log(if (granted) 2 else 1, "Permission", "Kết quả quyền microphone granted=$granted mode=$mode")
         if (granted) startMode(mode) else toast("Cần quyền Microphone để bắt đầu")
+    }
+
+    private val legacyStoragePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val mode = legacyStoragePendingMode
+        legacyStoragePendingMode = null
+        logger.log(if (granted) 2 else 1, "Permission", "Quyền lưu tệp công khai Android 8/9 granted=$granted")
+        if (granted && mode != null) startMode(mode)
+        else if (!granted) toast("Cần quyền bộ nhớ để lưu WAV vào thư mục Music trên Android 8/9")
     }
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -212,7 +227,7 @@ class MainActivity : AppCompatActivity() {
         }
         audioSourceSpinner.post { spinnerReady = true }
 
-        selectFileButton.setOnClickListener { filePicker.launch(arrayOf("audio/*", "video/*")) }
+        selectFileButton.setOnClickListener { launchFilePicker() }
         miniBrowserButton.setOnClickListener { startActivity(Intent(this@MainActivity, MiniBrowserActivity::class.java)) }
         apiKeyButton.setOnClickListener { showApiKeyManager() }
         testConnectionButton.setOnClickListener { testConnection() }
@@ -236,7 +251,27 @@ class MainActivity : AppCompatActivity() {
             translatedVolumeSeekBar.contentDescription = "Âm lượng dịch: $value%"
             translationService?.setVolumes(originalVolumeSeekBar.progress, value)
         }))
-        aiVoiceSwitch.setOnCheckedChangeListener { _, checked -> translationService?.setAiVoice(checked) ?: preferences.setAiVoice(checked) }
+        aiAudioStreamSpinner.adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_item,
+            aiStreamLabels,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        aiAudioStreamSpinner.onItemSelectedListener = simpleSelection { position ->
+            if (!aiStreamSpinnerReady) return@simpleSelection
+            val value = aiStreamValues.getOrElse(position) { "accessibility" }
+            val before = preferences.load().aiAudioStreamType
+            if (before == value) return@simpleSelection
+            preferences.setAiAudioStreamType(value)
+            logger.log(2, "Settings", "Đổi luồng phát giọng AI từ $before sang $value")
+            if (translationService?.state?.value?.running == true) {
+                startService(Intent(this@MainActivity, TranslationService::class.java).setAction(TranslationService.ACTION_APPLY_SETTINGS))
+                toast("Đã đổi luồng phát giọng AI")
+            }
+        }
+        aiVoiceSwitch.setOnCheckedChangeListener { _, checked ->
+            translationService?.setAiVoice(checked) ?: preferences.setAiVoice(checked)
+            applyUiMode()
+        }
         autoDuckingSwitch.setOnCheckedChangeListener { _, checked -> translationService?.setAutoDucking(checked) ?: preferences.setAutoDucking(checked) }
         exportButton.setOnClickListener { exportTranscript() }
         settingsButton.setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
@@ -304,6 +339,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun startMode(mode: SourceMode) {
         logger.log(2, "UI", "Yêu cầu bắt đầu source=$mode serviceBound=${translationService != null}")
+        if (
+            Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            preferences.load().saveAudioEnabled &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            legacyStoragePendingMode = mode
+            legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            return
+        }
         val service = translationService
         if (service == null) {
             pendingStartMode = mode
@@ -360,6 +404,9 @@ class MainActivity : AppCompatActivity() {
         originalVolumeSeekBar.progress = settings.originalVolume
         translatedVolumeSeekBar.progress = settings.translatedVolume
         aiVoiceSwitch.isChecked = settings.aiVoice
+        aiStreamSpinnerReady = false
+        aiAudioStreamSpinner.setSelection(aiStreamValues.indexOf(settings.aiAudioStreamType).coerceAtLeast(0))
+        aiAudioStreamSpinner.post { aiStreamSpinnerReady = true }
         autoDuckingSwitch.isChecked = settings.autoDucking
         exportButton.text = if (settings.exportFormat == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         settingsButton.text = if (settings.uiMode == "simple") "Cài đặt" else "Cài đặt nâng cao"
@@ -382,6 +429,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyUiMode() = with(binding) {
         val simple = preferences.load().uiMode == "simple"
         autoDuckingSwitch.isVisible = !simple
+        aiAudioStreamLayout.isVisible = !simple && aiVoiceSwitch.isChecked
         logButton.isVisible = !simple
         if (simple && audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal) {
             rewindButton.isVisible = false
@@ -578,6 +626,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensureServiceStarted() {
         startService(Intent(this, TranslationService::class.java))
+    }
+
+    private fun launchFilePicker() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        filePicker.launch(Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video"))
     }
 
     private fun displayName(uri: Uri): String? = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {

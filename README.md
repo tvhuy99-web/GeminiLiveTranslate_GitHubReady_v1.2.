@@ -1,4 +1,4 @@
-# Gemini Live Translate Native v1.2.0
+# Gemini Live Translate Native v1.2.2
 
 Ứng dụng Android dịch âm thanh trực tiếp viết **100% bằng Kotlin**, không dùng Lua, Lua runtime hoặc bridge Lua.
 
@@ -9,6 +9,7 @@
 - Streaming PCM converter giữ trạng thái qua các chunk.
 - Phụ đề trực tiếp, xuất SRT/TXT và ghi WAV gốc, dịch hoặc trộn.
 - AI voice, Android TTS dự phòng, auto-ducking và điều khiển âm lượng.
+- Chọn luồng phát giọng AI (`aiAudioStreamType`) và lưu WAV công khai trong `Music/GeminiLiveTranslate`.
 - API Key được mã hóa AES-GCM bằng Android Keystore.
 - Nhật ký dùng chung toàn ứng dụng, xoay file, che secret và tạo ZIP chẩn đoán.
 - Cài đặt được sanitize tập trung và phân loại áp dụng ngay, reconnect hoặc phiên sau.

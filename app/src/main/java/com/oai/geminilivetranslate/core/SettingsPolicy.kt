@@ -6,6 +6,7 @@ object SettingsPolicy {
     val validProfiles = setOf("realtime", "balanced", "stable", "custom")
     val validSaveModes = setOf("translated", "original", "mixed")
     val validExportFormats = setOf("srt", "txt")
+    val validAiAudioStreamTypes = setOf("accessibility", "media", "voice_communication", "assistant")
 
     fun sanitize(input: AppSettings): AppSettings {
         val languages = input.micLanguages.mapNotNull(LanguageCatalog::normalize).distinct().ifEmpty { listOf("vi") }
@@ -14,6 +15,7 @@ object SettingsPolicy {
         return input.copy(
             model = input.model.trim().removePrefix("models/").ifBlank { AppPreferences.DEFAULT_MODEL },
             targetLanguage = target,
+            aiAudioStreamType = input.aiAudioStreamType.takeIf(validAiAudioStreamTypes::contains) ?: "accessibility",
             duckVolumeFactor = input.duckVolumeFactor.coerceIn(0f, 1f),
             uiMode = input.uiMode.takeIf(validUiModes::contains) ?: "advanced",
             performanceProfile = input.performanceProfile.takeIf(validProfiles::contains) ?: "custom",
@@ -108,6 +110,7 @@ object SettingsPolicy {
         mark("targetLanguage", before.targetLanguage != after.targetLanguage)
         mark("echoTargetLanguage", before.echoTargetLanguage != after.echoTargetLanguage)
         mark("aiVoice", before.aiVoice != after.aiVoice)
+        mark("aiAudioStreamType", before.aiAudioStreamType != after.aiAudioStreamType)
         mark("autoDucking", before.autoDucking != after.autoDucking)
         mark("duckVolumeFactor", before.duckVolumeFactor != after.duckVolumeFactor)
         mark("muteOriginalInInternal", before.muteOriginalInInternal != after.muteOriginalInInternal)
@@ -141,7 +144,7 @@ object SettingsPolicy {
 
         val reconnect = changed.intersect(setOf("model", "targetLanguage", "echoTargetLanguage"))
         val playbackRebuild = changed.intersect(setOf(
-            "translatedBufferBytes", "translatedQueueMax", "outputJitterTarget"
+            "translatedBufferBytes", "translatedQueueMax", "outputJitterTarget", "aiAudioStreamType"
         ))
         val nextSession = changed.intersect(setOf(
             "qualityMode", "inputBufferMs", "fileSyncDelayMs", "pacingEnabled", "pacingTargetLatencyMs",

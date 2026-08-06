@@ -31,6 +31,7 @@ jobs:
             clone --branch agent/audio-stream-public-files --single-branch "$REPO_URL" source
           cd source
 
+          cp .github/workflows/android-ci.yml /tmp/android-ci-bootstrap.yml
           python3 tools/apply_requested_patch.py
 
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
@@ -54,7 +55,10 @@ jobs:
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
 
+          cp /tmp/android-ci-bootstrap.yml .github/workflows/android-ci.yml
+          rm -rf .kotlin
           rm -f tools/apply_requested_patch.py badging.txt
+          chmod -x gradlew
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

@@ -88,3 +88,5 @@ Lưu ý: Actions artifact có thể không được lưu khi quota lưu trữ c�
           git add gradlew gradlew.bat gradle/wrapper README.md .github/workflows/android-ci.yml .github/workflows/android-release.yml .github/workflows/dependency-submission.yml
           git commit -m "build: replace bootstrap with official Gradle 8.10.2 wrapper"
           git push origin "HEAD:${{ github.head_ref }}"
+
+# Synchronize after PR creation so GitHub registers this temporary workflow.

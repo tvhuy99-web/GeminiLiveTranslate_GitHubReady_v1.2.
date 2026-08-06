@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-ci-${{ github.workflow }}-${{ github.ref }}
@@ -54,21 +54,6 @@ jobs:
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
 
-      - name: Prepare downloadable artifact
-        run: |
-          mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-v1.2.0-debug.apk
-          sha256sum out/GeminiLiveTranslate-v1.2.0-debug.apk > out/GeminiLiveTranslate-v1.2.0-debug.apk.sha256
-
-      - name: Upload debug APK
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: GeminiLiveTranslate-v1.2.0-debug
-          path: out/*
-          if-no-files-found: error
-          retention-days: 30
-
       - name: Run strict Android lint
         id: lint
         continue-on-error: true
@@ -86,14 +71,32 @@ jobs:
           fi
           exit 1
 
-      - name: Upload reports when CI fails
-        if: failure()
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-ci-reports-${{ github.run_id }}
-          path: |
-            app/build/reports/**
-            app/build/test-results/**
-          if-no-files-found: ignore
-          retention-days: 14
+      - name: Prepare downloadable release files
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-v1.2.0-debug.apk
+          (cd out && sha256sum GeminiLiveTranslate-v1.2.0-debug.apk > GeminiLiveTranslate-v1.2.0-debug.apk.sha256)
+
+      - name: Publish rolling debug GitHub Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="debug-latest"
+          TITLE="Gemini Live Translate v1.2.0 Debug (latest)"
+          NOTES="Automated verified debug build from commit ${GITHUB_SHA}. Unit tests, APK integrity, APK signature and Android Lint passed."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --prerelease
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --prerelease
+          fi
+
+          echo "APK published at: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

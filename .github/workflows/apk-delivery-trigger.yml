@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   deliver:
-    if: github.actor == 'tvhuy99-web' && github.event.pull_request.head.ref == 'apk-build-trigger'
+    if: github.event.pull_request.head.ref == 'apk-build-trigger' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 

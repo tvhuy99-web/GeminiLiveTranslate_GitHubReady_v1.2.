@@ -21,9 +21,10 @@
 | Unit test | Resampler và SettingsPolicy | Đã chạy xanh | `app/src/test`, Android CI |
 | CI | Secret scan, verify, test, lint, assemble APK | Đã chạy xanh | `.github/workflows/android-ci.yml` |
 | APK | ZIP, DEX, manifest, resources và chữ ký | Đã kiểm chứng | `tools/verify_apk.py`, `apksigner` |
-| APK debug | 4.343.906 byte, SHA-256 `5e24fe...47b3` | Đã tạo | Android CI ngày 06/08/2026 |
-| Actions artifact | Lưu và tải artifact từ GitHub | Bị chặn bởi quota | Cần xóa artifact cũ hoặc tăng quota |
-| Release | APK + AAB ký bằng GitHub Secrets | Đủ cấu hình, chưa chạy | `.github/workflows/android-release.yml` |
+| APK debug | Khoảng 4,34 MB, chữ ký v2 hợp lệ | Đã tạo | Android CI ngày 06/08/2026 |
+| Phân phối APK debug | GitHub prerelease `debug-latest` | Đã cấu hình, chờ run main | `.github/workflows/android-ci.yml` |
+| Actions artifact | Không còn dùng | Đã loại bỏ | CI không chứa `actions/upload-artifact` |
+| Release chính thức | APK + AAB ký bằng GitHub Secrets | Đủ cấu hình, chưa chạy | `.github/workflows/android-release.yml` |
 | Chuỗi cung ứng | Dependabot và dependency graph | Đủ | `.github/dependabot.yml`, workflow |
 | Hỗ trợ lỗi | Issue template yêu cầu gói chẩn đoán | Đủ | `.github/ISSUE_TEMPLATE/bug_report.yml` |
 | Pháp lý | Privacy, Security, License | Đủ | tệp gốc repository |
@@ -35,7 +36,7 @@
 - **Đủ**: mã hoặc tài liệu đã có và được kiểm tra tĩnh.
 - **Đã chạy xanh / Đã kiểm chứng**: GitHub Actions đã thực thi thành công bước liên quan.
 - **Đủ cấu hình, chưa chạy**: workflow hoàn chỉnh nhưng cần secret hoặc tài nguyên chưa được cung cấp.
-- **Bị chặn bởi quota**: APK đã được build và kiểm tra, nhưng GitHub không thể lưu artifact mới do giới hạn lưu trữ của tài khoản.
+- **Đã cấu hình, chờ run main**: thay đổi đã được CI trên pull request kiểm tra; bước phát hành chỉ chạy sau khi merge vào `main`.
 - **Cần kiểm thử thủ công**: không thể chứng minh đầy đủ bằng runner Linux không có thiết bị Android thật.
 
-Bản release ký chỉ được coi là hoàn thành sau khi thêm đủ bốn keystore Secrets và workflow `Android Signed Release` chạy xanh. Phát hành Google Play là phạm vi riêng, cần tài khoản nhà phát triển, Play App Signing và khai báo Data safety.
+Bản debug được phân phối bằng GitHub Release asset thay cho Actions artifact để không phụ thuộc quota artifact của tài khoản. Bản release ký chỉ được coi là hoàn thành sau khi thêm đủ bốn keystore Secrets và workflow `Android Signed Release` chạy xanh. Phát hành Google Play là phạm vi riêng, cần tài khoản nhà phát triển, Play App Signing và khai báo Data safety.

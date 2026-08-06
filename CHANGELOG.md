@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.1
+
+### Tương thích Gemini Live
+
+- Đối chiếu payload với công cụ Lua gốc và log thiết bị.
+- Giữ `translationConfig` trong `generationConfig` như bản Lua hoạt động.
+- Bỏ hai trường tùy chọn `inputAudioTranscription` và `outputAudioTranscription` khỏi setup, khớp payload Lua đang hoạt động và sửa lỗi WebSocket 1007 `Unknown name inputAudioTranscription at setup.generation_config`.
+- Thêm unit test khóa cấu trúc JSON setup để lỗi vị trí trường không quay lại.
+
+### Cài đè APK
+
+- Tăng `versionCode` lên 10201 và `versionName` lên 1.2.1.
+- Giữ nguyên package debug `com.oai.geminilivetranslate.debug`.
+- Buộc CI dùng keystore cập nhật ổn định từ GitHub Secrets và kiểm tra fingerprint trước khi phát hành.
+- Dùng tên asset cố định trong prerelease `debug-latest`, bản mới ghi đè asset cũ.
+
 ## 1.2.0
 
 ### Nhật ký và chẩn đoán
@@ -31,7 +47,7 @@
 
 ### Kiểm thử và tài liệu
 
-- Thêm test cho phân loại cài đặt và việc giữ nguyên cấu hình audio dành cho phiên kế tiếp.
+- Thêm test cho phân loại cài đặt và việc giữ nguyên cấu hình audio dành cho phiên tiếp theo.
 - Mở rộng `tools/verify_project.py` để kiểm tra logger dùng chung, redaction, diagnostic ZIP, settings policy và đường reset an toàn.
 - Thêm `docs/DIAGNOSTICS.md` với quy trình tái hiện lỗi và gửi báo cáo.
 

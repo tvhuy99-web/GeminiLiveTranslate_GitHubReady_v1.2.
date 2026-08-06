@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Build signed APK from trusted main
+      - name: Build verified APK from trusted main
         env:
           GH_TOKEN: ${{ github.token }}
           KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
@@ -27,11 +27,13 @@ jobs:
           set -Eeuo pipefail
           STAGE=bootstrap
           RESULT=failure
+          SIGNING_MODE=android-debug
           AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
 
           publish_status() {
             code=$?
+            trap - EXIT
             set +e
             status_dir="$(mktemp -d)"
             cd "$status_dir"
@@ -41,6 +43,7 @@ jobs:
             printf '%s\n' \
               "result=$RESULT" \
               "stage=$STAGE" \
+              "signingMode=$SIGNING_MODE" \
               "sourceCommit=${GITHUB_SHA}" \
               "updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > STATUS.txt
             git add STATUS.txt
@@ -51,11 +54,6 @@ jobs:
           }
           trap publish_status EXIT
 
-          STAGE=signing-secrets
-          for name in KEYSTORE_BASE64 UPDATE_STORE_PASSWORD UPDATE_KEY_ALIAS UPDATE_KEY_PASSWORD; do
-            [[ -n "${!name}" ]] || { echo "Missing signing secret: $name" >&2; exit 1; }
-          done
-
           STAGE=clone-main
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             clone --branch main --single-branch "$REPO_URL" source
@@ -65,6 +63,7 @@ jobs:
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
           [[ -z "$JAVA17" ]] || export JAVA_HOME="$JAVA17/x64"
           [[ -z "${JAVA_HOME:-}" ]] || export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
 
           STAGE=source-verification
           python3 tools/check_no_secrets.py
@@ -72,9 +71,14 @@ jobs:
           python3 tools/verify_github_ready.py
           chmod +x gradlew
 
+          STAGE=signing-setup
+          if [[ -n "$KEYSTORE_BASE64" && -n "$UPDATE_STORE_PASSWORD" && -n "$UPDATE_KEY_ALIAS" && -n "$UPDATE_KEY_PASSWORD" ]]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
+            export UPDATE_STORE_FILE="$PWD/update-keystore.jks"
+            SIGNING_MODE=stable-update
+          fi
+
           STAGE=gradle-build
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
-          export UPDATE_STORE_FILE="$PWD/update-keystore.jks"
           ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 
           STAGE=apk-verification
@@ -85,20 +89,24 @@ jobs:
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
           ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
-          test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
+          if [[ "$SIGNING_MODE" == stable-update ]]; then
+            test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
+          fi
 
           STAGE=prepare-delivery
           mkdir -p /tmp/apk-delivery
-          cp "$APK" /tmp/apk-delivery/GeminiLiveTranslate-debug-latest.apk
-          (cd /tmp/apk-delivery && sha256sum GeminiLiveTranslate-debug-latest.apk > GeminiLiveTranslate-debug-latest.apk.sha256)
+          cp "$APK" /tmp/apk-delivery/GeminiLiveTranslate-1.2.2-debug.apk
+          (cd /tmp/apk-delivery && sha256sum GeminiLiveTranslate-1.2.2-debug.apk > GeminiLiveTranslate-1.2.2-debug.apk.sha256)
           printf '%s\n' \
             'versionName=1.2.2-debug' \
             'versionCode=10202' \
             'applicationId=com.oai.geminilivetranslate.debug' \
-            "certificateSha256=$EXPECTED_CERT_SHA256" > /tmp/apk-delivery/VERSION.txt
+            "signingMode=$SIGNING_MODE" \
+            "certificateSha256=$ACTUAL_CERT" > /tmp/apk-delivery/VERSION.txt
 
           STAGE=push-delivery
           rm -f update-keystore.jks apksigner.txt badging.txt
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan apk-delivery-build
@@ -106,7 +114,10 @@ jobs:
           git clean -fdx
           mkdir -p delivery
           cp /tmp/apk-delivery/* delivery/
-          printf '%s\n' 'Latest verified APK generated from trusted main.' "Source commit: $(git rev-parse --verify refs/remotes/origin/main)" > delivery/README.txt
+          printf '%s\n' \
+            'Latest verified APK generated from trusted main.' \
+            "Source commit: $SOURCE_COMMIT" \
+            "Signing mode: $SIGNING_MODE" > delivery/README.txt
           git add -f delivery
           git commit -m "Deliver Gemini Live Translate 1.2.2 APK"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \

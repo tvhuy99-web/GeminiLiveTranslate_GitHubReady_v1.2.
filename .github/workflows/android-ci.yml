@@ -30,21 +30,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Gradle 8.10.2 and configure cache
+      - name: Configure Gradle cache
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.10.2'
           cache-provider: basic
           validate-wrappers: false
 
-      - name: Verify repository and secrets
+      - name: Verify repository, wrapper and secrets
         run: |
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
+          chmod +x gradlew
+          ./gradlew --version
 
       - name: Unit test and assemble debug APK
-        run: gradle --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
 
       - name: Verify APK integrity and signature
         run: |
@@ -71,7 +72,7 @@ jobs:
       - name: Run strict Android lint
         id: lint
         continue-on-error: true
-        run: gradle --no-daemon --stacktrace lintDebug
+        run: ./gradlew --no-daemon --stacktrace lintDebug
 
       - name: Print and enforce lint result
         if: steps.lint.outcome == 'failure'

@@ -2,7 +2,7 @@ name: Verified APK Release
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]
     branches: [main]
 
 permissions:
@@ -26,7 +26,6 @@ jobs:
           API_URL="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
           TAG="v1.2.2-debug"
           APK_NAME="GeminiLiveTranslate-1.2.2-debug.apk"
-          RELEASE_NAME="Gemini Live Translate v1.2.2 Debug"
 
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             clone --branch main --single-branch "$REPO_URL" source

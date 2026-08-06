@@ -2,7 +2,6 @@ package com.oai.geminilivetranslate.ui
 
 import android.app.AlertDialog
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -104,7 +103,6 @@ class SettingsActivity : AppCompatActivity() {
 
         root.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
-            contentDescription = "Các mục cài đặt"
             addView(bar)
         })
 
@@ -210,7 +208,6 @@ class SettingsActivity : AppCompatActivity() {
             isSingleLine = true
             minHeight = dp(48)
             textSize = 16f
-            contentDescription = "Tên bộ máy dịch"
         }.also(content::addView)
         description("Giữ nguyên lựa chọn này nếu ứng dụng đang dịch bình thường.")
 
@@ -231,7 +228,6 @@ class SettingsActivity : AppCompatActivity() {
             isSingleLine = true
             minHeight = dp(48)
             textSize = 16f
-            contentDescription = "Mã ngôn ngữ tùy chọn"
         }.also(content::addView)
         description("Chỉ nhập tay khi ngôn ngữ bạn cần chưa có trong danh sách.")
 
@@ -522,7 +518,7 @@ class SettingsActivity : AppCompatActivity() {
             text = "Xóa toàn bộ dữ liệu ứng dụng"
             isAllCaps = false
             minHeight = dp(48)
-            setTextColor(Color.RED)
+            setTextColor(themeColor(android.R.attr.colorError))
             contentDescription = "Xóa toàn bộ dữ liệu ứng dụng"
             setOnClickListener { confirmFullReset() }
         })
@@ -772,7 +768,7 @@ class SettingsActivity : AppCompatActivity() {
     ) {
         val safeSelected = selected.coerceIn(0, labels.lastIndex.coerceAtLeast(0))
         val view = Spinner(this).apply {
-            minHeight = dp(48)
+            minimumHeight = dp(48)
             contentDescription = "$accessibilityLabel. Đang chọn ${labels.getOrElse(safeSelected) { "" }}"
         }
         view.adapter = ArrayAdapter(
@@ -830,7 +826,7 @@ class SettingsActivity : AppCompatActivity() {
             val steps = ((maxValue - minValue) / step).coerceAtLeast(1)
             max = steps
             progress = ((current - minValue) / step).coerceIn(0, steps)
-            minHeight = dp(48)
+            minimumHeight = dp(48)
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,

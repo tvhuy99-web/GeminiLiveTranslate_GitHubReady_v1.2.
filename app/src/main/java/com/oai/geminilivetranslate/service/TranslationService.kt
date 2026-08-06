@@ -10,7 +10,6 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
-import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
@@ -26,6 +25,7 @@ import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
 import com.oai.geminilivetranslate.core.DiagnosticContext
 import com.oai.geminilivetranslate.core.LanguageCatalog
+import com.oai.geminilivetranslate.core.PublicRecordingStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SessionUiState
 import com.oai.geminilivetranslate.core.SettingsPolicy
@@ -49,7 +49,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -77,6 +76,7 @@ class TranslationService : LifecycleService() {
     private lateinit var keyStore: ApiKeyStore
     private lateinit var logger: SessionLogger
     private lateinit var notificationController: NotificationController
+    private lateinit var recordingStore: PublicRecordingStore
     private val subtitles = SubtitleStore()
 
     @Volatile private var settings = AppSettings()
@@ -129,6 +129,9 @@ class TranslationService : LifecycleService() {
     private var originalWriter: WavWriter? = null
     private var translatedWriter: WavWriter? = null
     private var mixedWriter: TimelineWavMixer? = null
+    private var originalRecording: PublicRecordingStore.Pending? = null
+    private var translatedRecording: PublicRecordingStore.Pending? = null
+    private var mixedRecording: PublicRecordingStore.Pending? = null
     private val stopping = AtomicBoolean(false)
 
     override fun onCreate() {
@@ -137,6 +140,7 @@ class TranslationService : LifecycleService() {
         keyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         notificationController = NotificationController(this)
+        recordingStore = PublicRecordingStore(this, logger)
         settings = preferences.load()
         _state.update {
             it.copy(
@@ -950,25 +954,37 @@ class TranslationService : LifecycleService() {
         bufferBytes = settings.translatedBufferBytes,
         queueCapacity = settings.translatedQueueMax,
         initialJitterChunks = if (settings.qualityMode) settings.outputJitterTarget else 1,
-        usage = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY,
+        usage = when (settings.aiAudioStreamType) {
+            "media" -> AudioAttributes.USAGE_MEDIA
+            "voice_communication" -> AudioAttributes.USAGE_VOICE_COMMUNICATION
+            "assistant" -> AudioAttributes.USAGE_ASSISTANT
+            else -> AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
+        },
         logger = logger,
-        diagnosticName = "TranslatedPlayer",
+        diagnosticName = "TranslatedPlayer-${settings.aiAudioStreamType}",
     )
 
     private fun setupRecorders() {
         if (!settings.saveAudioEnabled) return
-        val dir = File(getExternalFilesDir(Environment.DIRECTORY_MUSIC), "GeminiLiveTranslate")
-        dir.mkdirs()
-        logger.log(2, "Recorder", "Bật ghi audio mode=${settings.saveAudioMode} dir=${dir.absolutePath}")
+        logger.log(2, "Recorder", "Bật ghi audio mode=${settings.saveAudioMode}; đích công khai Music/GeminiLiveTranslate")
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        fun original() {
+            originalRecording = recordingStore.create("original_$stamp.wav")
+            originalWriter = WavWriter(requireNotNull(originalRecording).tempFile, 16_000)
+        }
+        fun translated() {
+            translatedRecording = recordingStore.create("translated_$stamp.wav")
+            translatedWriter = WavWriter(requireNotNull(translatedRecording).tempFile, 24_000)
+        }
         when (settings.saveAudioMode) {
-            "original" -> originalWriter = WavWriter(File(dir, "original_$stamp.wav"), 16_000)
+            "original" -> original()
             "mixed" -> {
-                originalWriter = WavWriter(File(dir, "original_$stamp.wav"), 16_000)
-                translatedWriter = WavWriter(File(dir, "translated_$stamp.wav"), 24_000)
-                mixedWriter = TimelineWavMixer(File(dir, "mixed_$stamp.wav"))
+                original()
+                translated()
+                mixedRecording = recordingStore.create("mixed_$stamp.wav")
+                mixedWriter = TimelineWavMixer(requireNotNull(mixedRecording).tempFile)
             }
-            else -> translatedWriter = WavWriter(File(dir, "translated_$stamp.wav"), 24_000)
+            else -> translated()
         }
     }
 
@@ -979,11 +995,30 @@ class TranslationService : LifecycleService() {
 
     private fun closeRecorders() {
         if (originalWriter != null || translatedWriter != null || mixedWriter != null) {
-            logger.log(2, "Recorder", "Đóng các tệp ghi audio")
+            logger.log(2, "Recorder", "Đóng và xuất các tệp ghi ra Music/GeminiLiveTranslate")
         }
-        runCatching { originalWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV gốc", it) }; originalWriter = null
-        runCatching { translatedWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV dịch", it) }; translatedWriter = null
-        runCatching { mixedWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV trộn", it) }; mixedWriter = null
+        runCatching { originalWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV gốc", it) }
+        runCatching { translatedWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV dịch", it) }
+        runCatching { mixedWriter?.close() }.onFailure { logger.log(0, "Recorder", "Lỗi đóng WAV trộn", it) }
+        originalWriter = null
+        translatedWriter = null
+        mixedWriter = null
+
+        fun publish(label: String, pending: PublicRecordingStore.Pending?) {
+            if (pending == null) return
+            runCatching { recordingStore.publish(pending) }
+                .onSuccess { uri -> logger.log(2, "Recorder", "Đã xuất WAV $label tới $uri") }
+                .onFailure {
+                    logger.log(0, "Recorder", "Không xuất được WAV $label", it)
+                    recordingStore.discard(pending)
+                }
+        }
+        publish("gốc", originalRecording)
+        publish("dịch", translatedRecording)
+        publish("trộn", mixedRecording)
+        originalRecording = null
+        translatedRecording = null
+        mixedRecording = null
     }
 
     private fun queueTts(text: String) {

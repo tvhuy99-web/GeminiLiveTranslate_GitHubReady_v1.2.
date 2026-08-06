@@ -13,6 +13,7 @@ data class AppSettings(
     val targetLanguage: String = "vi",
     val echoTargetLanguage: Boolean = false,
     val aiVoice: Boolean = true,
+    val aiAudioStreamType: String = "accessibility",
     val autoDucking: Boolean = false,
     val duckVolumeFactor: Float = 0.2f,
     val muteOriginalInInternal: Boolean = false,

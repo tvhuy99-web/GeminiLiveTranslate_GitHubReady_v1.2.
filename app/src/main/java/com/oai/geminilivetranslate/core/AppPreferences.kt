@@ -11,6 +11,7 @@ class AppPreferences(context: Context) {
         targetLanguage = prefs.getString(KEY_TARGET_LANGUAGE, "vi").orEmpty(),
         echoTargetLanguage = prefs.getBoolean(KEY_ECHO_TARGET, false),
         aiVoice = prefs.getBoolean(KEY_AI_VOICE, true),
+        aiAudioStreamType = prefs.getString(KEY_AI_AUDIO_STREAM_TYPE, "accessibility").orEmpty(),
         autoDucking = prefs.getBoolean(KEY_AUTO_DUCKING, false),
         duckVolumeFactor = prefs.getFloat(KEY_DUCK_FACTOR, 0.2f),
         muteOriginalInInternal = prefs.getBoolean(KEY_MUTE_INTERNAL, false),
@@ -50,6 +51,7 @@ class AppPreferences(context: Context) {
             .putString(KEY_TARGET_LANGUAGE, safe.targetLanguage)
             .putBoolean(KEY_ECHO_TARGET, safe.echoTargetLanguage)
             .putBoolean(KEY_AI_VOICE, safe.aiVoice)
+            .putString(KEY_AI_AUDIO_STREAM_TYPE, safe.aiAudioStreamType)
             .putBoolean(KEY_AUTO_DUCKING, safe.autoDucking)
             .putFloat(KEY_DUCK_FACTOR, safe.duckVolumeFactor)
             .putBoolean(KEY_MUTE_INTERNAL, safe.muteOriginalInInternal)
@@ -89,6 +91,7 @@ class AppPreferences(context: Context) {
     }
 
     fun setAiVoice(enabled: Boolean) = save(load().copy(aiVoice = enabled))
+    fun setAiAudioStreamType(value: String) = save(load().copy(aiAudioStreamType = value))
     fun setAutoDucking(enabled: Boolean) = save(load().copy(autoDucking = enabled))
     fun setTargetLanguage(code: String) = save(load().copy(targetLanguage = code))
     fun setMicLanguages(codes: List<String>, index: Int) = save(
@@ -113,6 +116,7 @@ class AppPreferences(context: Context) {
         private const val KEY_TARGET_LANGUAGE = "targetLanguage"
         private const val KEY_ECHO_TARGET = "echoTargetLanguage"
         private const val KEY_AI_VOICE = "useAIVoice"
+        private const val KEY_AI_AUDIO_STREAM_TYPE = "aiAudioStreamType"
         private const val KEY_AUTO_DUCKING = "autoDucking"
         private const val KEY_DUCK_FACTOR = "duckVolumeFactor"
         private const val KEY_MUTE_INTERNAL = "muteOriginalInInternal"

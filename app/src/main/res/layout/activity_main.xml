@@ -170,6 +170,24 @@
             android:checked="true"
             android:text="Giọng AI" />
 
+        <LinearLayout
+            android:id="@+id/aiAudioStreamLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Luồng phát giọng AI (aiAudioStreamType):"
+                android:textSize="15sp" />
+
+            <Spinner
+                android:id="@+id/aiAudioStreamSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
         <Switch
             android:id="@+id/autoDuckingSwitch"
             android:layout_width="match_parent"

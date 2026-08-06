@@ -119,6 +119,7 @@ jobs:
           (cd out && sha256sum GeminiLiveTranslate-1.2.2-pr-validation.apk > GeminiLiveTranslate-1.2.2-pr-validation.apk.sha256)
 
       - name: Upload validation APK
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: GeminiLiveTranslate-1.2.2-pr-validation

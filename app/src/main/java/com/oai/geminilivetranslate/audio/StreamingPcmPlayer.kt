@@ -22,7 +22,7 @@ class StreamingPcmPlayer(
     private val bufferBytes: Int,
     queueCapacity: Int,
     private val initialJitterChunks: Int = 1,
-    private val usage: Int = AudioAttributes.USAGE_ACCESSIBILITY,
+    private val usage: Int = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY,
     private val logger: SessionLogger? = null,
     private val diagnosticName: String = "PcmPlayer",
 ) {

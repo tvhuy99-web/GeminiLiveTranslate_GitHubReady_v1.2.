@@ -943,7 +943,7 @@ class TranslationService : LifecycleService() {
         bufferBytes = settings.translatedBufferBytes,
         queueCapacity = settings.translatedQueueMax,
         initialJitterChunks = if (settings.qualityMode) settings.outputJitterTarget else 1,
-        usage = AudioAttributes.USAGE_ACCESSIBILITY,
+        usage = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY,
         logger = logger,
         diagnosticName = "TranslatedPlayer",
     )

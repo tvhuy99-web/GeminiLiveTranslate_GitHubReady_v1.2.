@@ -1,4 +1,4 @@
-name: Verified APK Delivery
+name: Verified APK Release
 
 on:
   pull_request:
@@ -9,68 +9,42 @@ permissions:
   contents: write
 
 jobs:
-  deliver:
-    if: github.head_ref == 'apk-build-trigger-3'
+  release:
+    if: github.head_ref == 'release-build-trigger'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
-      - name: Build and deliver verified debug APK from main
+      - name: Build, verify, and publish official GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          STAGE=bootstrap
-          RESULT=failure
           AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          API_URL="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          TAG="v1.2.2-debug"
+          APK_NAME="GeminiLiveTranslate-1.2.2-debug.apk"
+          RELEASE_NAME="Gemini Live Translate v1.2.2 Debug"
 
-          publish_status() {
-            code=$?
-            trap - EXIT
-            set +e
-            status_dir="$(mktemp -d)"
-            cd "$status_dir"
-            git init -q
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            printf '%s\n' \
-              "result=$RESULT" \
-              "stage=$STAGE" \
-              'signingMode=android-debug' \
-              "updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > STATUS.txt
-            git add STATUS.txt
-            git commit -qm "APK delivery status: $RESULT at $STAGE"
-            git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
-              push --force "$REPO_URL" HEAD:apk-delivery-status >/dev/null 2>&1
-            exit "$code"
-          }
-          trap publish_status EXIT
-
-          STAGE=clone-main
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             clone --branch main --single-branch "$REPO_URL" source
           cd source
           SOURCE_COMMIT="$(git rev-parse HEAD)"
 
-          STAGE=toolchain
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
           [[ -z "$JAVA17" ]] || export JAVA_HOME="$JAVA17/x64"
           [[ -z "${JAVA_HOME:-}" ]] || export PATH="$JAVA_HOME/bin:$PATH"
           java -version
 
-          STAGE=source-verification
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
           chmod +x gradlew
-
-          STAGE=gradle-build
           ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 
-          STAGE=apk-verification
-          APK=app/build/outputs/apk/debug/app-debug.apk
+          APK="app/build/outputs/apk/debug/app-debug.apk"
           python3 tools/verify_apk.py "$APK"
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
@@ -78,34 +52,123 @@ jobs:
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
           CERT_SHA256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
 
-          STAGE=prepare-delivery
-          mkdir -p /tmp/apk-delivery
-          cp "$APK" /tmp/apk-delivery/GeminiLiveTranslate-1.2.2-debug.apk
-          (cd /tmp/apk-delivery && sha256sum GeminiLiveTranslate-1.2.2-debug.apk > GeminiLiveTranslate-1.2.2-debug.apk.sha256)
+          mkdir -p /tmp/release-files
+          cp "$APK" "/tmp/release-files/$APK_NAME"
+          (cd /tmp/release-files && sha256sum "$APK_NAME" > "$APK_NAME.sha256")
           printf '%s\n' \
             'versionName=1.2.2-debug' \
             'versionCode=10202' \
             'applicationId=com.oai.geminilivetranslate.debug' \
             'signingMode=android-debug' \
             "certificateSha256=$CERT_SHA256" \
-            "sourceCommit=$SOURCE_COMMIT" > /tmp/apk-delivery/VERSION.txt
+            "sourceCommit=$SOURCE_COMMIT" > /tmp/release-files/VERSION.txt
 
-          STAGE=push-delivery
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout --orphan apk-delivery-build
-          git rm -rf . || true
-          git clean -fdx
-          mkdir -p delivery
-          cp /tmp/apk-delivery/* delivery/
-          printf '%s\n' \
-            'Verified debug APK generated from trusted main.' \
-            "Source commit: $SOURCE_COMMIT" \
-            'Signing mode: android-debug' > delivery/README.txt
-          git add -f delivery
-          git commit -m "Deliver Gemini Live Translate 1.2.2 debug APK"
+          git tag -f "$TAG" "$SOURCE_COMMIT"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
-            push --force origin HEAD:apk-delivery
+            push --force origin "refs/tags/$TAG"
 
-          STAGE=complete
-          RESULT=success
+          python3 - <<'PY' > /tmp/release-payload.json
+          import json
+          body = """## Gemini Live Translate 1.2.2 Debug
+
+- Bổ sung lựa chọn `aiAudioStreamType`.
+- Đổi bộ chọn audio/video sang Android `ACTION_GET_CONTENT`.
+- Lưu WAV công khai trong `Music/GeminiLiveTranslate` qua MediaStore.
+- Đã chạy unit test, Android Lint, kiểm tra cấu trúc APK, package và version.
+
+**Lưu ý:** APK này dùng chữ ký Android debug và package `com.oai.geminilivetranslate.debug`. Nếu máy đã cài một APK cùng package nhưng khác chứng thư, Android có thể yêu cầu gỡ bản cũ trước khi cài.
+"""
+          print(json.dumps({
+              "tag_name": "v1.2.2-debug",
+              "target_commitish": "main",
+              "name": "Gemini Live Translate v1.2.2 Debug",
+              "body": body,
+              "draft": False,
+              "prerelease": False,
+              "make_latest": "true"
+          }))
+          PY
+
+          STATUS="$(curl -sS -o /tmp/release.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$API_URL/releases/tags/$TAG")"
+
+          if [[ "$STATUS" == "404" ]]; then
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/json' \
+              --data-binary @/tmp/release-payload.json \
+              "$API_URL/releases" > /tmp/release.json
+          elif [[ "$STATUS" == "200" ]]; then
+            RELEASE_ID="$(python3 -c 'import json; print(json.load(open("/tmp/release.json"))["id"])')"
+            curl -fsS -X PATCH \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/json' \
+              --data-binary @/tmp/release-payload.json \
+              "$API_URL/releases/$RELEASE_ID" > /tmp/release.json
+          else
+            cat /tmp/release.json >&2
+            exit 1
+          fi
+
+          RELEASE_ID="$(python3 -c 'import json; print(json.load(open("/tmp/release.json"))["id"])')"
+          UPLOAD_URL="$(python3 -c 'import json; print(json.load(open("/tmp/release.json"))["upload_url"].split("{")[0])')"
+
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$API_URL/releases/$RELEASE_ID/assets?per_page=100" > /tmp/assets.json
+
+          python3 - <<'PY' > /tmp/delete-assets.txt
+          import json
+          wanted = {
+              "GeminiLiveTranslate-1.2.2-debug.apk",
+              "GeminiLiveTranslate-1.2.2-debug.apk.sha256",
+              "VERSION.txt",
+          }
+          for asset in json.load(open('/tmp/assets.json')):
+              if asset.get('name') in wanted:
+                  print(asset['id'])
+          PY
+          while read -r asset_id; do
+            [[ -z "$asset_id" ]] || curl -fsS -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$API_URL/releases/assets/$asset_id"
+          done < /tmp/delete-assets.txt
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: application/vnd.android.package-archive' \
+            --data-binary @"/tmp/release-files/$APK_NAME" \
+            "$UPLOAD_URL?name=$APK_NAME" > /tmp/upload-apk.json
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: text/plain' \
+            --data-binary @"/tmp/release-files/$APK_NAME.sha256" \
+            "$UPLOAD_URL?name=$APK_NAME.sha256" > /tmp/upload-sha.json
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: text/plain' \
+            --data-binary @/tmp/release-files/VERSION.txt \
+            "$UPLOAD_URL?name=VERSION.txt" > /tmp/upload-version.json
+
+          python3 - <<'PY'
+          import json
+          release = json.load(open('/tmp/release.json'))
+          apk = json.load(open('/tmp/upload-apk.json'))
+          print('Release:', release['html_url'])
+          print('APK asset:', apk['browser_download_url'])
+          PY

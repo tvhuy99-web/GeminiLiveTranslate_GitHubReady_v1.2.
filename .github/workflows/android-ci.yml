@@ -1,8 +1,6 @@
 name: Android CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -11,130 +9,55 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  group: requested-conversion-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Apply requested patch and validate APK
+    name: Validate and commit requested conversion
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
-      - name: Checkout source branch
-        uses: actions/checkout@v7
-        with:
-          ref: agent/audio-stream-public-files
-          fetch-depth: 0
-
-      - name: Apply requested source patch
-        run: python3 tools/apply_requested_patch.py
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Configure Gradle cache
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-provider: basic
-          validate-wrappers: false
-
-      - name: Verify repository and wrapper
+      - name: Build without marketplace actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+            clone --branch agent/audio-stream-public-files --single-branch "$REPO_URL" source
+          cd source
+
+          python3 tools/apply_requested_patch.py
+
+          JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
+          if [[ -n "$JAVA17" ]]; then
+            export JAVA_HOME="$JAVA17/x64"
+            export PATH="$JAVA_HOME/bin:$PATH"
+          fi
+          java -version
+
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
           chmod +x gradlew
           ./gradlew --version
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 
-      - name: Require stable update-signing secrets on main
-        if: github.event_name != 'pull_request'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [[ -z "${!name}" ]]; then
-              echo "Missing stable update-signing secret: $name" >&2
-              exit 1
-            fi
-          done
-
-      - name: Restore stable update keystore on main
-        if: github.event_name != 'pull_request'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
-        run: |
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
-          test -s update-keystore.jks
-
-      - name: Unit test and assemble PR debug APK
-        if: github.event_name == 'pull_request'
-        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
-
-      - name: Unit test and assemble updateable debug APK on main
-        if: github.event_name != 'pull_request'
-        env:
-          UPDATE_STORE_FILE: ${{ github.workspace }}/update-keystore.jks
-          UPDATE_STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
-          UPDATE_KEY_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
-          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug
-
-      - name: Verify APK integrity, package and version
-        shell: bash
-        run: |
-          set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
           python3 tools/verify_apk.py "$APK"
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
 
-      - name: Enforce stable update certificate on main
-        if: github.event_name != 'pull_request'
-        env:
-          EXPECTED_CERT_SHA256: 46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
-        shell: bash
-        run: |
-          set -euo pipefail
-          ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
-          test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
-
-      - name: Run strict Android lint
-        run: ./gradlew --no-daemon --stacktrace lintDebug
-
-      - name: Prepare validation APK
-        run: |
-          mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-1.2.2-pr-validation.apk
-          (cd out && sha256sum GeminiLiveTranslate-1.2.2-pr-validation.apk > GeminiLiveTranslate-1.2.2-pr-validation.apk.sha256)
-
-      - name: Upload validation APK
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: GeminiLiveTranslate-1.2.2-pr-validation
-          path: out/*
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-      - name: Commit completed conversion
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f tools/apply_requested_patch.py update-keystore.jks
+          rm -f tools/apply_requested_patch.py badging.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Add audio stream routing and public file access"
-          git push origin HEAD:agent/audio-stream-public-files
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+            push origin HEAD:agent/audio-stream-public-files

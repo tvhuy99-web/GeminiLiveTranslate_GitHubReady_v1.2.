@@ -9,6 +9,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Binder
+import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
@@ -653,8 +654,14 @@ class TranslationService : LifecycleService() {
                 leadMs = settings.pacingTargetLatencyMs,
                 logger = logger,
             )
-            SourceMode.MICROPHONE -> MicAudioSource(logger)
-            SourceMode.INTERNAL -> InternalAudioSource(mediaProjection ?: return, logger)
+            SourceMode.MICROPHONE -> MicAudioSource(this, logger)
+            SourceMode.INTERNAL -> {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+          stopTranslation("Thu âm thanh nội bộ yêu cầu Android 10 trở lên")
+          return
+      }
+      InternalAudioSource(this, mediaProjection ?: return, logger)
+  }
         }
         source = created
         sourceStarted = true
@@ -943,7 +950,7 @@ class TranslationService : LifecycleService() {
         bufferBytes = settings.translatedBufferBytes,
         queueCapacity = settings.translatedQueueMax,
         initialJitterChunks = if (settings.qualityMode) settings.outputJitterTarget else 1,
-        usage = AudioAttributes.USAGE_ACCESSIBILITY,
+        usage = AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY,
         logger = logger,
         diagnosticName = "TranslatedPlayer",
     )

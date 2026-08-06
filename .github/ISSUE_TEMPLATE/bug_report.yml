@@ -1,0 +1,45 @@
+name: Báo lỗi ứng dụng
+description: Báo lỗi kèm thông tin đủ để tái hiện và chẩn đoán
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Không dán API Key vào issue. Hãy tạo gói chẩn đoán trong **Cài đặt > Hệ thống > Nhật ký > Chia sẻ gói chẩn đoán** rồi đính kèm nếu repository cho phép.
+  - type: input
+    id: version
+    attributes:
+      label: Phiên bản ứng dụng
+      placeholder: 1.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Nguồn âm thanh
+      options:
+        - Tệp âm thanh/video
+        - Microphone
+        - Âm thanh nội bộ / MediaProjection
+        - Không liên quan nguồn âm thanh
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Các bước tái hiện
+      placeholder: Liệt kê từng bước, kết quả mong đợi và kết quả thực tế.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Nhật ký hoặc gói chẩn đoán
+      description: Kéo thả ZIP chẩn đoán hoặc trích đoạn log đã kiểm tra không chứa bí mật.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Xác nhận bảo mật
+      options:
+        - label: Tôi đã kiểm tra và không đăng API Key, token hoặc dữ liệu riêng tư không cần thiết.
+          required: true

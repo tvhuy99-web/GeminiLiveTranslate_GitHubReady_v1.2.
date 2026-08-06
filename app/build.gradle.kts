@@ -31,6 +31,63 @@ android {
         jvmTarget = "17"
     }
 
+    val releaseStoreFile = providers.gradleProperty("releaseStoreFile").orNull
+        ?: System.getenv("RELEASE_STORE_FILE")
+    val releaseStorePassword = providers.gradleProperty("releaseStorePassword").orNull
+        ?: System.getenv("RELEASE_STORE_PASSWORD")
+    val releaseKeyAlias = providers.gradleProperty("releaseKeyAlias").orNull
+        ?: System.getenv("RELEASE_KEY_ALIAS")
+    val releaseKeyPassword = providers.gradleProperty("releaseKeyPassword").orNull
+        ?: System.getenv("RELEASE_KEY_PASSWORD")
+    val hasReleaseSigning = listOf(
+        releaseStoreFile,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        sarifReport = true
+        xmlReport = true
+        htmlReport = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1")
     }

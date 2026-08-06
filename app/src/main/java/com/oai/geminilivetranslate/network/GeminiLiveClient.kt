@@ -176,24 +176,12 @@ class GeminiLiveClient(
     }
 
     private fun buildSetupMessage(): String {
-        val translationConfig = JSONObject()
-            .put("targetLanguageCode", targetLanguage)
-            .put("echoTargetLanguage", echoTargetLanguage)
-        val generationConfig = JSONObject()
-            .put("responseModalities", JSONArray().put("AUDIO"))
-            .put("inputAudioTranscription", JSONObject())
-            .put("outputAudioTranscription", JSONObject())
-            .put("translationConfig", translationConfig)
-        val sessionResumption = JSONObject().apply {
-            resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { put("handle", it) }
-        }
-        return JSONObject().put(
-            "setup",
-            JSONObject()
-                .put("model", "models/${model.trim().removePrefix("models/")}")
-                .put("generationConfig", generationConfig)
-                .put("sessionResumption", sessionResumption)
-        ).toString()
+        return createSetupMessage(
+            model = model,
+            targetLanguage = targetLanguage,
+            echoTargetLanguage = echoTargetLanguage,
+            resumeHandle = resumeHandle,
+        )
     }
 
     private fun parseMessage(text: String) {
@@ -289,6 +277,34 @@ class GeminiLiveClient(
         private const val INPUT_MIME = "audio/pcm;rate=16000"
         private const val MIN_QUEUED_WIRE_BYTES = 64L * 1024L
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
+
+        /**
+         * Builds the raw WebSocket setup message used by the working Lua tool.
+         *
+         * The translation model only needs responseModalities and translationConfig inside
+         * generationConfig. Transcription objects are intentionally omitted: the server may
+         * still return input/output transcription, and parseMessage handles those opportunistically.
+         */
+        internal fun createSetupMessage(
+            model: String,
+            targetLanguage: String,
+            echoTargetLanguage: Boolean,
+            resumeHandle: String? = null,
+        ): String {
+            val translationConfig = JSONObject()
+                .put("targetLanguageCode", targetLanguage)
+                .put("echoTargetLanguage", echoTargetLanguage)
+            val generationConfig = JSONObject()
+                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("translationConfig", translationConfig)
+            val setup = JSONObject()
+                .put("model", "models/${model.trim().removePrefix("models/")}")
+                .put("generationConfig", generationConfig)
+            resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { handle ->
+                setup.put("sessionResumption", JSONObject().put("handle", handle))
+            }
+            return JSONObject().put("setup", setup).toString()
+        }
 
         suspend fun testConnection(
             apiKey: String,

@@ -36,10 +36,12 @@ REQUIRED = [
     "app/src/main/java/com/oai/geminilivetranslate/audio/FileAudioSource.kt",
     "app/src/test/java/com/oai/geminilivetranslate/audio/StreamingPcmConverterTest.kt",
     "app/src/test/java/com/oai/geminilivetranslate/core/SettingsPolicyTest.kt",
+    "app/src/test/java/com/oai/geminilivetranslate/network/GeminiLiveClientSetupTest.kt",
     "app/src/main/res/layout/activity_main.xml",
     "app/src/main/res/layout/activity_mini_browser.xml",
     "app/src/main/res/xml/file_paths.xml",
     "docs/DIAGNOSTICS.md",
+    "docs/UPDATE_SIGNING.md",
 ]
 
 
@@ -97,9 +99,10 @@ def main() -> None:
         [
             "gemini-3.5-live-translate-preview",
             'audio/pcm;rate=16000',
-            "inputAudioTranscription",
-            "outputAudioTranscription",
+            "createSetupMessage",
+            "responseModalities",
             "translationConfig",
+            "targetLanguageCode",
             "AudioPlaybackCaptureConfiguration",
             "AndroidKeyStore",
             "FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION",
@@ -109,7 +112,7 @@ def main() -> None:
     require_tokens(
         kotlin,
         [
-            'put("sessionResumption", sessionResumption)',
+            'setup.put("sessionResumption"',
             'optJSONObject("sessionResumptionUpdate")',
             'optJSONObject("goAway")',
             "queueSize()",
@@ -154,6 +157,11 @@ def main() -> None:
         "settings policy",
     )
 
+    client = (JAVA_ROOT / "com/oai/geminilivetranslate/network/GeminiLiveClient.kt").read_text(encoding="utf-8")
+    for forbidden in ['.put("inputAudioTranscription"', '.put("outputAudioTranscription"']:
+        if forbidden in client:
+            fail(f"Unsupported transcription request field is present in Gemini setup: {forbidden}")
+
     service = (JAVA_ROOT / "com/oai/geminilivetranslate/service/TranslationService.kt").read_text(encoding="utf-8")
     if service.count("notificationController.start(this, initialState)") != 1:
         fail("Foreground notification must be started exactly once per session")
@@ -181,7 +189,18 @@ def main() -> None:
     require_tokens(file_paths, ['<cache-path name="diagnostic_cache" path="diagnostic-share/"'], "diagnostic FileProvider")
 
     build_file = (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
-    require_tokens(build_file, ['versionName = "1.2.0"', 'versionCode = 10200', 'testImplementation("junit:junit:4.13.2")'], "build")
+    require_tokens(
+        build_file,
+        [
+            'versionName = "1.2.1"',
+            "versionCode = 10201",
+            'applicationIdSuffix = ".debug"',
+            "UPDATE_STORE_FILE",
+            'testImplementation("junit:junit:4.13.2")',
+            'testImplementation("org.json:json:20240303")',
+        ],
+        "build",
+    )
 
     lua_files = list(ROOT.rglob("*.lua"))
     if lua_files:
@@ -192,16 +211,17 @@ def main() -> None:
     if wrapper.stat().st_size < 1_000:
         fail("Gradle bootstrap jar is unexpectedly small")
 
-    print("[OK] Required project and diagnostics files")
+    print("[OK] Required project, update-signing and diagnostics files")
     print("[OK] XML well-formed")
     print("[OK] ViewBinding IDs")
-    print("[OK] Gemini/audio/security implementation markers")
+    print("[OK] Lua-compatible Gemini translation setup")
     print("[OK] WebSocket backpressure, resumption and GoAway")
     print("[OK] Streaming PCM conversion and MediaProjection lifecycle")
     print(f"[OK] Shared diagnostics coverage: {logger_calls} log points")
     print("[OK] Rotating buffered logs, redaction and diagnostic ZIP")
     print("[OK] Centralized settings validation and live/deferred application")
     print("[OK] Scoped reset paths and no obsolete apply buttons")
+    print("[OK] Version 1.2.1 and stable update-signing configuration")
     print("[OK] No Lua dependency or source")
     print(f"[OK] Gradle bootstrap SHA-256: {digest}")
     print("PROJECT_STRUCTURE_OK")

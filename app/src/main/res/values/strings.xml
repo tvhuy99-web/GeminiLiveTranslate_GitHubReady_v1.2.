@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Gemini Live Translate</string>
+    <string name="notification_channel_active">Dịch trực tiếp</string>
+    <string name="notification_channel_capture">Thu âm nội bộ</string>
+</resources>

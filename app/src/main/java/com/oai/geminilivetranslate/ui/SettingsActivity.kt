@@ -2,8 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 import android.app.AlertDialog
 import android.content.Intent
-import android.graphics.Color
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
@@ -18,13 +18,14 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
 import com.oai.geminilivetranslate.core.DiagnosticContext
 import com.oai.geminilivetranslate.core.LanguageCatalog
+import com.oai.geminilivetranslate.core.PublicRecordingStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SettingsPolicy
 import com.oai.geminilivetranslate.network.GeminiLiveClient
@@ -40,6 +41,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var logger: SessionLogger
     private lateinit var content: LinearLayout
     private lateinit var tabButtons: Map<String, Button>
+
     private var activeTab = "basic"
     private var original = AppSettings()
     private var draft = AppSettings()
@@ -52,12 +54,14 @@ class SettingsActivity : AppCompatActivity() {
         apiKeys = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         original = preferences.load()
+
         @Suppress("DEPRECATION")
         val restoredDraft = savedInstanceState?.getSerializable(STATE_DRAFT) as? AppSettings
         draft = restoredDraft?.let(SettingsPolicy::sanitize) ?: original
         activeTab = savedInstanceState?.getString(STATE_TAB).orEmpty().ifBlank { "basic" }
+
         setContentView(buildRoot())
-        showTab(activeTab)
+        showTab(activeTab, announce = false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -70,71 +74,92 @@ class SettingsActivity : AppCompatActivity() {
     private fun buildRoot(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(12, 12, 12, 12)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
         }
+
         root.addView(TextView(this).apply {
             text = "Cài đặt"
-            textSize = 22f
+            textSize = 24f
             gravity = Gravity.CENTER
-            setPadding(0, 4, 0, 4)
+            setPadding(0, dp(4), 0, dp(8))
+            ViewCompat.setAccessibilityHeading(this, true)
         })
-        root.addView(TextView(this).apply {
-            text = "Các thay đổi an toàn được áp dụng ngay. Model và ngôn ngữ sẽ tự nối lại Gemini; một số bộ đệm nguồn áp dụng từ phiên tiếp theo."
-            textSize = 12f
-            gravity = Gravity.CENTER
-            setPadding(12, 0, 12, 8)
-        })
-        val tabs = listOf(
-            "basic" to "Cơ bản",
-            "audio" to "Âm thanh",
-            "latency" to "Độ trễ",
-            "save" to "Lưu & xuất",
-            "system" to "Hệ thống",
-        )
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        tabButtons = tabs.associate { (key, label) ->
-            key to Button(this).apply {
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        tabButtons = TAB_LABELS.mapValues { (key, label) ->
+            Button(this).apply {
                 text = label
-                setOnClickListener { captureTextFields(); showTab(key) }
+                isAllCaps = false
+                minHeight = dp(48)
+                setOnClickListener {
+                    captureTextFields()
+                    showTab(key, announce = true)
+                }
                 bar.addView(this)
             }
         }
+
         root.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(bar)
         })
+
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 8, 20, 20)
+            setPadding(dp(20), dp(8), dp(20), dp(20))
         }
+
         root.addView(ScrollView(this).apply {
+            isFillViewport = true
             addView(content)
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f,
+            )
         })
-        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
         actions.addView(Button(this).apply {
-            text = "Lưu & áp dụng"
+            text = "Lưu thay đổi"
+            isAllCaps = false
+            minHeight = dp(48)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { saveAndClose() }
         })
         actions.addView(Button(this).apply {
             text = "Đóng"
+            isAllCaps = false
+            minHeight = dp(48)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { finish() }
         })
         root.addView(actions)
+
         return root
     }
 
-    private fun showTab(key: String) {
+    private fun showTab(key: String, announce: Boolean) {
         activeTab = key
         tabButtons.forEach { (tab, button) ->
-            val plain = button.text.toString().trim('[', ']')
-            button.text = if (tab == key) "[$plain]" else plain
+            val selected = tab == key
+            button.isSelected = selected
+            button.isActivated = selected
+            button.contentDescription = if (selected) {
+                "${TAB_LABELS.getValue(tab)}, đang chọn"
+            } else {
+                TAB_LABELS.getValue(tab)
+            }
         }
+
         content.removeAllViews()
         modelInput = null
         languageInput = null
+
         when (key) {
             "basic" -> buildBasic()
             "audio" -> buildAudio()
@@ -142,232 +167,418 @@ class SettingsActivity : AppCompatActivity() {
             "save" -> buildSave()
             else -> buildSystem()
         }
+
+        if (announce) {
+            content.post {
+                content.announceForAccessibility("Đã mở mục ${TAB_LABELS.getValue(key)}")
+            }
+        }
     }
 
     private fun buildBasic() {
-        title("Hồ sơ hoạt động")
+        title("Cách ứng dụng ưu tiên")
         val profiles = listOf("realtime", "balanced", "stable", "custom")
+        val profileLabels = listOf("Phản hồi nhanh", "Cân bằng", "Ổn định hơn", "Tự điều chỉnh")
         spinner(
-            labels = listOf("Thời gian thực", "Cân bằng", "Ổn định", "Tùy chỉnh"),
+            labels = profileLabels,
             selected = profiles.indexOf(draft.performanceProfile).coerceAtLeast(0),
+            accessibilityLabel = "Cách ứng dụng ưu tiên",
         ) { position ->
             captureTextFields()
             draft = SettingsPolicy.applyProfile(profiles[position], draft)
-            toast("Đã nạp hồ sơ ${listOf("Thời gian thực", "Cân bằng", "Ổn định", "Tùy chỉnh")[position]}")
-            showTab(activeTab)
+            toast("Đã chọn ${profileLabels[position]}")
+            showTab(activeTab, announce = false)
         }
-        description("Thời gian thực ưu tiên phản hồi nhanh; Cân bằng là mặc định; Ổn định tăng bộ đệm và khả năng phục hồi.")
+        description("Phản hồi nhanh giảm thời gian chờ. Cân bằng phù hợp với đa số trường hợp. Ổn định hơn hữu ích khi mạng yếu.")
 
-        title("Chế độ giao diện")
-        spinner(listOf("Đơn giản", "Nâng cao"), if (draft.uiMode == "simple") 0 else 1) {
+        title("Giao diện")
+        spinner(
+            labels = listOf("Đơn giản", "Đầy đủ"),
+            selected = if (draft.uiMode == "simple") 0 else 1,
+            accessibilityLabel = "Kiểu giao diện",
+        ) {
             draft = draft.copy(uiMode = if (it == 0) "simple" else "advanced")
         }
-        description("Đơn giản ẩn điều khiển ít dùng trên màn hình chính nhưng không xóa tính năng.")
+        description("Chế độ Đơn giản chỉ hiện các nút thường dùng.")
 
-        title("Model Gemini Live Translate")
+        title("Bộ máy dịch")
         modelInput = EditText(this).apply {
             setText(draft.model)
-            hint = AppPreferences.DEFAULT_MODEL
+            hint = "Giữ nguyên nếu không được hướng dẫn thay đổi"
             isSingleLine = true
+            minHeight = dp(48)
+            textSize = 16f
         }.also(content::addView)
-        description("Tên models/ ở đầu sẽ tự loại bỏ. Thay model trong lúc dịch sẽ tạo kết nối Gemini mới.")
+        description("Giữ nguyên lựa chọn này nếu ứng dụng đang dịch bình thường.")
 
-        title("Ngôn ngữ đích")
+        title("Ngôn ngữ cần dịch sang")
         val currentIndex = LanguageCatalog.codes.indexOf(draft.targetLanguage).coerceAtLeast(0)
-        spinner(LanguageCatalog.labels, currentIndex) { position ->
+        spinner(
+            labels = LanguageCatalog.labels,
+            selected = currentIndex,
+            accessibilityLabel = "Ngôn ngữ cần dịch sang",
+        ) { position ->
             val code = LanguageCatalog.codes[position]
             draft = draft.copy(targetLanguage = code)
             languageInput?.setText(code)
         }
         languageInput = EditText(this).apply {
             setText(draft.targetLanguage)
-            hint = "Mã BCP-47, ví dụ: fr-CA"
+            hint = "Ví dụ: vi, en-US"
             isSingleLine = true
+            minHeight = dp(48)
+            textSize = 16f
         }.also(content::addView)
-        description("Có thể chọn danh sách hoặc nhập mã BCP-47. Khi lưu, ứng dụng tự kiểm tra và chuẩn hóa.")
+        description("Chỉ nhập tay khi ngôn ngữ bạn cần chưa có trong danh sách.")
 
-        title("Tùy chọn dịch")
-        check("Lặp lại lời nói đã ở ngôn ngữ đích", draft.echoTargetLanguage,
-            "Bật để Gemini vẫn phát lại khi đầu vào đã đúng ngôn ngữ đích.") {
+        title("Khi dịch")
+        check(
+            label = "Đọc lại câu đã đúng ngôn ngữ cần dịch",
+            checked = draft.echoTargetLanguage,
+            detail = "Bật mục này khi bạn vẫn muốn nghe lại những câu đã ở đúng ngôn ngữ.",
+        ) {
             draft = draft.copy(echoTargetLanguage = it)
         }
-        check("Tắt âm media khi thu nội bộ", draft.muteOriginalInInternal,
-            "Đưa âm lượng media hệ thống về 0 trong phiên thu nội bộ và phục hồi khi dừng.") {
+        check(
+            label = "Tắt âm gốc khi nghe âm thanh trong máy",
+            checked = draft.muteOriginalInInternal,
+            detail = "Âm gốc sẽ tắt trong lúc dịch và tự trở lại khi dừng.",
+        ) {
             draft = draft.copy(muteOriginalInInternal = it)
         }
     }
 
     private fun buildAudio() {
-        title("Bộ đệm giọng dịch")
-        slider("Kích thước AudioTrack", draft.translatedBufferBytes, 48_000, 192_000, 4_000, " bytes") {
-            draft = draft.copy(translatedBufferBytes = it, performanceProfile = "custom")
+        title("Độ ổn định của giọng dịch")
+        slider(
+            label = "Dung lượng phát âm thanh",
+            current = draft.translatedBufferBytes / 1_000,
+            minValue = 48,
+            maxValue = 192,
+            step = 4,
+            unit = " KB",
+        ) {
+            draft = draft.copy(
+                translatedBufferBytes = it * 1_000,
+                performanceProfile = "custom",
+            )
         }
-        slider("Số chunk tối đa", draft.translatedQueueMax, 5, 100, 1, " chunks") {
-            draft = draft.copy(translatedQueueMax = it, performanceProfile = "custom")
+        slider(
+            label = "Số đoạn âm thanh chờ phát",
+            current = draft.translatedQueueMax,
+            minValue = 5,
+            maxValue = 100,
+            step = 1,
+            unit = " đoạn",
+        ) {
+            draft = draft.copy(
+                translatedQueueMax = it,
+                performanceProfile = "custom",
+            )
         }
-        description("Hai mục này có thể tạo lại bộ phát giọng dịch khi phiên đang chạy; một ít audio đang chờ có thể bị xả để tránh phát sai thời điểm.")
+        description("Tăng các mức này khi giọng dịch bị đứt quãng. Mức cao hơn có thể làm giọng phát chậm hơn.")
 
-        title("Tự động giảm âm nền")
-        check("Bật tự động giảm âm nền", draft.autoDucking,
-            "Giảm âm gốc khi giọng dịch đang phát.") { draft = draft.copy(autoDucking = it) }
-        slider("Mức âm gốc khi ducking", (draft.duckVolumeFactor * 10).toInt(), 0, 10, 1, "/10") {
+        title("Âm lượng nền")
+        check(
+            label = "Tự giảm âm gốc khi giọng dịch phát",
+            checked = draft.autoDucking,
+            detail = "Giúp nghe giọng dịch rõ hơn mà không cần tự chỉnh âm lượng.",
+        ) {
+            draft = draft.copy(autoDucking = it)
+        }
+        slider(
+            label = "Âm lượng gốc còn lại",
+            current = (draft.duckVolumeFactor * 10).toInt(),
+            minValue = 0,
+            maxValue = 10,
+            step = 1,
+            unit = "/10",
+        ) {
             draft = draft.copy(duckVolumeFactor = it / 10f)
         }
 
-        title("TTS thiết bị")
-        check("Làm mượt TTS thiết bị", draft.ttsSmoothEnabled,
-            "Khi tắt Giọng AI, gom các mảnh dịch ngắn trước khi đọc.") {
+        title("Giọng đọc của điện thoại")
+        check(
+            label = "Ghép các câu ngắn trước khi đọc",
+            checked = draft.ttsSmoothEnabled,
+            detail = "Giọng đọc sẽ chờ thêm một chút để câu nghe tự nhiên hơn.",
+        ) {
             draft = draft.copy(ttsSmoothEnabled = it)
-            showTab(activeTab)
+            showTab(activeTab, announce = false)
         }
         if (draft.ttsSmoothEnabled) {
-            slider("Timeout TTS mượt", draft.ttsSmoothTimeoutMs, 500, 5_000, 100, " ms") {
+            slider(
+                label = "Thời gian chờ ghép câu",
+                current = draft.ttsSmoothTimeoutMs,
+                minValue = 500,
+                maxValue = 5_000,
+                step = 100,
+                unit = " mili giây",
+            ) {
                 draft = draft.copy(ttsSmoothTimeoutMs = it)
             }
-            slider("Ký tự tối thiểu TTS", draft.ttsSmoothMinChars, 20, 200, 5, "") {
+            slider(
+                label = "Độ dài câu tối thiểu",
+                current = draft.ttsSmoothMinChars,
+                minValue = 20,
+                maxValue = 200,
+                step = 5,
+                unit = " ký tự",
+            ) {
                 draft = draft.copy(ttsSmoothMinChars = it)
             }
-            slider("Số từ tối thiểu TTS", draft.ttsSmoothMinWords, 3, 20, 1, "") {
+            slider(
+                label = "Số từ tối thiểu",
+                current = draft.ttsSmoothMinWords,
+                minValue = 3,
+                maxValue = 20,
+                step = 1,
+                unit = " từ",
+            ) {
                 draft = draft.copy(ttsSmoothMinWords = it)
             }
         }
     }
 
     private fun buildLatency() {
-        title("Chất lượng và bộ đệm")
-        check("Chế độ chất lượng (Tệp/Âm thanh nội bộ)", draft.qualityMode,
-            "Tích lũy nhiều audio hơn để ưu tiên ổn định, đổi lại độ trễ cao hơn.") {
-            draft = draft.copy(qualityMode = it, performanceProfile = "custom")
-            showTab(activeTab)
+        title("Độ ổn định khi dịch")
+        check(
+            label = "Ưu tiên âm thanh ổn định hơn",
+            checked = draft.qualityMode,
+            detail = "Ứng dụng sẽ chờ thêm một chút để giảm tình trạng âm thanh bị ngắt.",
+        ) {
+            draft = draft.copy(
+                qualityMode = it,
+                performanceProfile = "custom",
+            )
+            showTab(activeTab, announce = false)
         }
         if (draft.qualityMode) {
-            slider("Buffer đầu vào", draft.inputBufferMs, 200, 10_000, 100, " ms") {
-                draft = draft.copy(inputBufferMs = it, performanceProfile = "custom")
+            slider(
+                label = "Thời gian chuẩn bị âm thanh đầu vào",
+                current = draft.inputBufferMs,
+                minValue = 200,
+                maxValue = 10_000,
+                step = 100,
+                unit = " mili giây",
+            ) {
+                draft = draft.copy(
+                    inputBufferMs = it,
+                    performanceProfile = "custom",
+                )
             }
-            slider("Buffer đầu ra", draft.outputJitterTarget, 3, 20, 1, " chunks") {
-                draft = draft.copy(outputJitterTarget = it, performanceProfile = "custom")
+            slider(
+                label = "Số đoạn chờ trước khi phát",
+                current = draft.outputJitterTarget,
+                minValue = 3,
+                maxValue = 20,
+                step = 1,
+                unit = " đoạn",
+            ) {
+                draft = draft.copy(
+                    outputJitterTarget = it,
+                    performanceProfile = "custom",
+                )
             }
         }
-        slider("Độ trễ đồng bộ tệp", draft.fileSyncDelayMs, 0, 20_000, 250, " ms") {
-            draft = draft.copy(fileSyncDelayMs = it, performanceProfile = "custom")
+        slider(
+            label = "Thời gian chờ để khớp với tệp",
+            current = draft.fileSyncDelayMs,
+            minValue = 0,
+            maxValue = 20_000,
+            step = 250,
+            unit = " mili giây",
+        ) {
+            draft = draft.copy(
+                fileSyncDelayMs = it,
+                performanceProfile = "custom",
+            )
         }
 
-        title("Điều tiết gửi mạng")
-        check("Đồng bộ tốc độ đọc tệp", draft.pacingEnabled,
-            "Giữ tốc độ giải mã tệp gần thời gian thực để không đẩy audio đi quá nhanh.") {
-            draft = draft.copy(pacingEnabled = it, performanceProfile = "custom")
-            showTab(activeTab)
+        title("Tốc độ gửi âm thanh")
+        check(
+            label = "Gửi theo đúng tốc độ phát",
+            checked = draft.pacingEnabled,
+            detail = "Giúp ứng dụng không gửi cả tệp quá nhanh trong một lần.",
+        ) {
+            draft = draft.copy(
+                pacingEnabled = it,
+                performanceProfile = "custom",
+            )
+            showTab(activeTab, announce = false)
         }
-        slider("Hàng đợi gửi tối đa", draft.pacingMaxBuffer, 1, 50, 1, " chunks") {
-            draft = draft.copy(pacingMaxBuffer = it, performanceProfile = "custom")
+        slider(
+            label = "Số đoạn âm thanh chờ gửi",
+            current = draft.pacingMaxBuffer,
+            minValue = 1,
+            maxValue = 50,
+            step = 1,
+            unit = " đoạn",
+        ) {
+            draft = draft.copy(
+                pacingMaxBuffer = it,
+                performanceProfile = "custom",
+            )
         }
-        description("Giới hạn thật số chunk chờ gửi. Microphone/nội bộ bỏ chunk cũ khi nghẽn; tệp sẽ chờ để không mất nội dung. Thay đổi áp dụng từ phiên tiếp theo để không cắt audio đang chờ.")
+        description("Khi mạng chậm, âm thanh trực tiếp có thể bỏ bớt đoạn cũ để tránh bị trễ. Tệp sẽ chờ để không mất nội dung.")
         if (draft.pacingEnabled) {
-            slider("Độ dẫn trước khi đọc tệp", draft.pacingTargetLatencyMs, 100, 2_000, 50, " ms") {
-                draft = draft.copy(pacingTargetLatencyMs = it, performanceProfile = "custom")
+            slider(
+                label = "Khoảng chuẩn bị trước",
+                current = draft.pacingTargetLatencyMs,
+                minValue = 100,
+                maxValue = 2_000,
+                step = 50,
+                unit = " mili giây",
+            ) {
+                draft = draft.copy(
+                    pacingTargetLatencyMs = it,
+                    performanceProfile = "custom",
+                )
             }
         }
     }
 
     private fun buildSave() {
-        title("Lưu file audio")
-        check("Bật lưu file audio", draft.saveAudioEnabled,
-            "WAV được lưu trong thư mục Music riêng của ứng dụng. Thay đổi có hiệu lực từ phiên tiếp theo.") {
+        title("Lưu bản ghi âm")
+        check(
+            label = "Lưu âm thanh sau mỗi lần dịch",
+            checked = draft.saveAudioEnabled,
+        ) {
             draft = draft.copy(saveAudioEnabled = it)
-            showTab(activeTab)
+            showTab(activeTab, announce = false)
         }
         if (draft.saveAudioEnabled) {
             spinner(
-                listOf("Audio dịch (cần Giọng AI)", "Audio gốc", "Audio trộn (cần Giọng AI)"),
-                listOf("translated", "original", "mixed").indexOf(draft.saveAudioMode).coerceAtLeast(0),
-            ) { draft = draft.copy(saveAudioMode = listOf("translated", "original", "mixed")[it]) }
-            description("Chế độ trộn giữ cả file gốc và dịch riêng, đồng thời tạo bản trộn theo timeline.")
+                labels = listOf(
+                    "Chỉ giọng dịch",
+                    "Chỉ âm thanh gốc",
+                    "Âm thanh gốc và giọng dịch",
+                ),
+                selected = listOf("translated", "original", "mixed")
+                    .indexOf(draft.saveAudioMode)
+                    .coerceAtLeast(0),
+                accessibilityLabel = "Nội dung cần lưu",
+            ) {
+                draft = draft.copy(
+                    saveAudioMode = listOf("translated", "original", "mixed")[it],
+                )
+            }
         }
-        title("Xuất phụ đề / văn bản")
-        spinner(listOf("Phụ đề SRT", "Văn bản TXT"), if (draft.exportFormat == "txt") 1 else 0) {
+
+        title("Định dạng khi xuất lời dịch")
+        spinner(
+            labels = listOf("Phụ đề có thời gian", "Văn bản thường"),
+            selected = if (draft.exportFormat == "txt") 1 else 0,
+            accessibilityLabel = "Định dạng khi xuất lời dịch",
+        ) {
             draft = draft.copy(exportFormat = if (it == 1) "txt" else "srt")
         }
     }
 
     private fun buildSystem() {
-        title("Kết nối lại")
-        check("Tự động kết nối lại", draft.autoReconnect,
-            "Tự thử lại khi WebSocket bị mất.") {
+        title("Khi mất kết nối")
+        check(
+            label = "Tự kết nối lại",
+            checked = draft.autoReconnect,
+            detail = "Ứng dụng sẽ tự thử lại khi mạng hoặc dịch vụ bị gián đoạn.",
+        ) {
             draft = draft.copy(autoReconnect = it)
-            showTab(activeTab)
+            showTab(activeTab, announce = false)
         }
         if (draft.autoReconnect) {
-            slider("Số lần thử lại", draft.reconnectMaxRetries, 1, 10, 1, "") {
+            slider(
+                label = "Số lần thử lại",
+                current = draft.reconnectMaxRetries,
+                minValue = 1,
+                maxValue = 10,
+                step = 1,
+                unit = " lần",
+            ) {
                 draft = draft.copy(reconnectMaxRetries = it)
             }
         }
 
-        title("Nhật ký chẩn đoán")
-        spinner(listOf("Chỉ lỗi", "Lỗi + cảnh báo", "Thông thường", "Chi tiết"), draft.logLevel) {
-            draft = draft.copy(logLevel = it)
-        }
-        check("Ghi log xoay vòng ra file", draft.logToFile,
-            "Khuyến nghị bật. Tối đa 5 tệp, mỗi tệp khoảng 2 MB; tệp cũ tự bị thay thế.") {
-            draft = draft.copy(logToFile = it)
-        }
-        check("Cho phép ghi nội dung hội thoại", draft.logIncludeTranscript,
-            "Mặc định tắt để bảo vệ riêng tư. Chỉ bật tạm thời khi cần phân tích lỗi transcript.") {
-            draft = draft.copy(logIncludeTranscript = it)
-        }
-        rowButton("Mở nhật ký") { startActivity(Intent(this, LogViewerActivity::class.java)) }
-        rowButton("Tạo và gửi báo cáo chẩn đoán") { shareDiagnostics() }
-        rowButton("Xóa riêng nhật ký") { confirmClearLogs() }
-        description("Báo cáo gồm log, stack trace, cấu hình đã khử dữ liệu nhạy cảm và trạng thái phiên. API Key/token được che tự động.")
-
-        title("Kiểm tra")
+        title("Kiểm tra kết nối")
         content.addView(Button(this).apply {
-            text = "Kiểm tra API và kết nối"
-            setOnClickListener { captureTextFields(); testConnection(this) }
+            text = "Kiểm tra kết nối dịch"
+            isAllCaps = false
+            minHeight = dp(48)
+            contentDescription = "Kiểm tra kết nối dịch"
+            setOnClickListener {
+                captureTextFields()
+                testConnection(this)
+            }
         })
 
-        title("Khôi phục và dọn dữ liệu")
-        rowButton("Khôi phục cài đặt mặc định") { confirmRestoreSettings() }
-        rowButton("Xóa bản ghi audio") { confirmDeleteRecordings() }
-        rowButton("Xóa toàn bộ API Key") { confirmDeleteApiKeys() }
+        title("Khôi phục và xóa dữ liệu")
+        rowButton("Đưa cài đặt về mặc định") { confirmRestoreSettings() }
+        rowButton("Xóa các bản ghi âm") { confirmDeleteRecordings() }
+        rowButton("Xóa tất cả khóa truy cập") { confirmDeleteApiKeys() }
         content.addView(Button(this).apply {
-            text = "XÓA TOÀN BỘ DỮ LIỆU ỨNG DỤNG"
-            setTextColor(Color.RED)
+            text = "Xóa toàn bộ dữ liệu ứng dụng"
+            isAllCaps = false
+            minHeight = dp(48)
+            setTextColor(themeColor(android.R.attr.colorError))
+            contentDescription = "Xóa toàn bộ dữ liệu ứng dụng"
             setOnClickListener { confirmFullReset() }
         })
-        description("Các nút được tách riêng để tránh xóa nhầm. Xóa toàn bộ chỉ dùng khi cần đưa ứng dụng về trạng thái mới cài.")
     }
 
     private fun saveAndClose() {
         captureTextFields()
         val normalizedLanguage = LanguageCatalog.normalize(draft.targetLanguage)
         if (normalizedLanguage == null) {
-            AlertDialog.Builder(this).setTitle("Mã ngôn ngữ không hợp lệ")
-                .setMessage("Hãy nhập mã BCP-47 như vi, en-US hoặc fr-CA.")
-                .setPositiveButton("Đóng", null).show()
+            AlertDialog.Builder(this)
+                .setTitle("Ngôn ngữ chưa đúng")
+                .setMessage("Hãy nhập dạng ngắn như vi, en-US hoặc fr-CA.")
+                .setPositiveButton("Đóng", null)
+                .show()
             return
         }
-        val safe = SettingsPolicy.sanitize(draft.copy(targetLanguage = normalizedLanguage))
+
+        val safe = SettingsPolicy.sanitize(
+            draft.copy(targetLanguage = normalizedLanguage),
+        )
         val diff = SettingsPolicy.diff(original, safe)
         preferences.save(safe)
-        logger.log(2, "Settings", "Đã lưu cài đặt; changed=${diff.changed.joinToString().ifBlank { "none" }}")
+        logger.log(
+            2,
+            "Settings",
+            "Đã lưu cài đặt; changed=${diff.changed.joinToString().ifBlank { "none" }}",
+        )
         runCatching {
-            startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_APPLY_SETTINGS))
-        }.onFailure { logger.log(1, "Settings", "Không gửi được yêu cầu áp dụng cài đặt", it) }
+            startService(
+                Intent(this, TranslationService::class.java)
+                    .setAction(TranslationService.ACTION_APPLY_SETTINGS),
+            )
+        }.onFailure {
+            logger.log(1, "Settings", "Không gửi được yêu cầu áp dụng cài đặt", it)
+        }
 
         if (diff.isEmpty) {
             toast("Không có thay đổi")
             finish()
             return
         }
+
         val message = buildString {
             appendLine("Đã lưu cài đặt.")
-            if (diff.immediate.isNotEmpty()) appendLine("• Đã áp dụng ngay: ${friendly(diff.immediate)}")
-            if (diff.reconnect.isNotEmpty()) appendLine("• Gemini sẽ tự kết nối lại: ${friendly(diff.reconnect)}")
-            if (diff.playbackRebuild.isNotEmpty()) appendLine("• Bộ phát sẽ được tạo lại: ${friendly(diff.playbackRebuild)}")
-            if (diff.nextSession.isNotEmpty()) appendLine("• Có hiệu lực từ phiên tiếp theo: ${friendly(diff.nextSession)}")
+            if (diff.immediate.isNotEmpty()) {
+                appendLine("• Đã dùng ngay: ${friendly(diff.immediate)}")
+            }
+            if (diff.reconnect.isNotEmpty()) {
+                appendLine("• Ứng dụng sẽ kết nối lại để dùng: ${friendly(diff.reconnect)}")
+            }
+            if (diff.playbackRebuild.isNotEmpty()) {
+                appendLine("• Giọng phát sẽ khởi động lại để dùng: ${friendly(diff.playbackRebuild)}")
+            }
+            if (diff.nextSession.isNotEmpty()) {
+                appendLine("• Sẽ dùng từ lần dịch tiếp theo: ${friendly(diff.nextSession)}")
+            }
         }.trim()
+
         AlertDialog.Builder(this)
-            .setTitle("Đã lưu & áp dụng")
+            .setTitle("Đã lưu")
             .setMessage(message)
             .setPositiveButton("Đóng") { _, _ -> finish() }
             .show()
@@ -375,16 +586,27 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun captureTextFields() {
         modelInput?.text?.toString()?.let { draft = draft.copy(model = it) }
-        languageInput?.text?.toString()?.let { draft = draft.copy(targetLanguage = it) }
+        languageInput?.text?.toString()?.let {
+            draft = draft.copy(targetLanguage = it)
+        }
     }
 
     private fun testConnection(button: Button) {
         val safeDraft = SettingsPolicy.sanitize(draft)
         val key = apiKeys.load().selected
-        if (key.isNullOrBlank()) { toast("Chưa có API Key để kiểm tra"); return }
+        if (key.isNullOrBlank()) {
+            toast("Chưa có khóa truy cập")
+            return
+        }
+
         button.isEnabled = false
         button.text = "Đang kiểm tra..."
-        logger.log(2, "Settings", "Bắt đầu kiểm tra API model=${safeDraft.model} target=${safeDraft.targetLanguage}")
+        logger.log(
+            2,
+            "Settings",
+            "Bắt đầu kiểm tra API model=${safeDraft.model} target=${safeDraft.targetLanguage}",
+        )
+
         lifecycleScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -398,106 +620,102 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }.onSuccess {
                 logger.log(2, "Settings", "Kiểm tra API thành công latencyMs=$it")
-                toast("Kết nối tốt - $it ms")
+                toast("Kết nối tốt")
             }.onFailure {
                 logger.log(0, "Settings", "Kiểm tra API thất bại", it)
                 AlertDialog.Builder(this@SettingsActivity)
-                    .setTitle("Kiểm tra thất bại")
-                    .setMessage("${it.javaClass.simpleName}: ${it.message}\n\nMở Nhật ký & chẩn đoán để gửi báo cáo nếu cần.")
-                    .setPositiveButton("Mở nhật ký") { _, _ -> startActivity(Intent(this@SettingsActivity, LogViewerActivity::class.java)) }
-                    .setNegativeButton("Đóng", null)
+                    .setTitle("Không thể kết nối")
+                    .setMessage(
+                        "Hãy kiểm tra mạng, khóa truy cập và bộ máy dịch, rồi thử lại.",
+                    )
+                    .setPositiveButton("Đóng", null)
                     .show()
             }
+
             button.isEnabled = true
-            button.text = "Kiểm tra API và kết nối"
-        }
-    }
-
-    private fun shareDiagnostics() {
-        lifecycleScope.launch {
-            val result = runCatching { withContext(Dispatchers.IO) { logger.createDiagnosticBundle() } }
-            result.onSuccess { file ->
-                val uri = FileProvider.getUriForFile(this@SettingsActivity, "$packageName.files", file)
-                runCatching {
-                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                        type = "application/zip"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        putExtra(Intent.EXTRA_SUBJECT, "Gemini Live Translate - báo cáo chẩn đoán")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }, "Gửi báo cáo chẩn đoán"))
-                }.onFailure {
-                    logger.log(0, "Diagnostics", "Không mở được bảng chia sẻ báo cáo", it)
-                    toast("Thiết bị không có ứng dụng nhận tệp ZIP")
-                }
-            }.onFailure { toast("Không tạo được báo cáo: ${it.message}") }
-        }
-    }
-
-    private fun confirmClearLogs() = confirm(
-        "Xóa nhật ký?",
-        "Xóa log trong bộ nhớ và tất cả tệp log xoay vòng. Không ảnh hưởng cài đặt, API Key hay bản ghi.",
-        "Xóa",
-    ) {
-        lifecycleScope.launch {
-            withContext(Dispatchers.IO) { logger.clear() }
-            toast("Đã xóa nhật ký")
+            button.text = "Kiểm tra kết nối dịch"
         }
     }
 
     private fun confirmRestoreSettings() = confirm(
-        "Khôi phục cài đặt mặc định?",
-        "API Key, log và bản ghi audio được giữ nguyên. Phiên đang chạy sẽ nhận các thay đổi có thể áp dụng an toàn.",
-        "Khôi phục",
+        title = "Đưa cài đặt về mặc định?",
+        message = "Khóa truy cập và các bản ghi âm vẫn được giữ lại.",
+        positive = "Khôi phục",
     ) {
         val restored = preferences.restoreDefaultsPreservingKeys()
         draft = restored
         original = restored
         logger.log(1, "Settings", "Đã khôi phục cài đặt mặc định")
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_APPLY_SETTINGS))
-        showTab(activeTab)
+        startService(
+            Intent(this, TranslationService::class.java)
+                .setAction(TranslationService.ACTION_APPLY_SETTINGS),
+        )
+        showTab(activeTab, announce = false)
         toast("Đã khôi phục cài đặt mặc định")
     }
 
     private fun confirmDeleteRecordings() = confirm(
-        "Xóa tất cả bản ghi audio?",
-        "Chỉ xóa thư mục Music/GeminiLiveTranslate của ứng dụng.",
-        "Xóa",
+        title = "Xóa tất cả bản ghi âm?",
+        message = "Các tệp âm thanh do ứng dụng đã lưu sẽ bị xóa.",
+        positive = "Xóa",
     ) {
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_STOP))
-        val recordings = File(getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), "GeminiLiveTranslate")
-        val deleted = !recordings.exists() || recordings.deleteRecursively()
-        logger.log(if (deleted) 1 else 0, "Settings", "Xóa bản ghi audio result=$deleted path=${recordings.absolutePath}")
-        toast(if (deleted) "Đã xóa bản ghi" else "Không xóa hết được bản ghi")
+        startService(
+            Intent(this, TranslationService::class.java)
+                .setAction(TranslationService.ACTION_STOP),
+        )
+        lifecycleScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                PublicRecordingStore(this@SettingsActivity, logger).deleteAll()
+            }
+            toast(
+                if (deleted >= 0) {
+                    "Đã xóa $deleted bản ghi âm"
+                } else {
+                    "Không thể xóa hết các bản ghi âm"
+                },
+            )
+        }
     }
 
     private fun confirmDeleteApiKeys() = confirm(
-        "Xóa toàn bộ API Key?",
-        "Cài đặt, log và bản ghi được giữ nguyên. Bạn phải nhập lại API Key để dịch.",
-        "Xóa API Key",
+        title = "Xóa tất cả khóa truy cập?",
+        message = "Bạn phải nhập lại khóa truy cập trước khi dịch.",
+        positive = "Xóa khóa",
     ) {
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_STOP))
+        startService(
+            Intent(this, TranslationService::class.java)
+                .setAction(TranslationService.ACTION_STOP),
+        )
         apiKeys.clear()
         logger.log(1, "Settings", "Đã xóa toàn bộ API Key và yêu cầu dừng phiên")
-        toast("Đã xóa API Key")
+        toast("Đã xóa khóa truy cập")
     }
 
     private fun confirmFullReset() = confirm(
-        "Xóa toàn bộ dữ liệu ứng dụng?",
-        "Thao tác này xóa API Key, cài đặt, log và bản ghi audio. Không thể hoàn tác.",
-        "Xóa toàn bộ",
+        title = "Xóa toàn bộ dữ liệu ứng dụng?",
+        message = "Cài đặt, khóa truy cập và các bản ghi âm sẽ bị xóa. Không thể hoàn tác.",
+        positive = "Xóa toàn bộ",
     ) {
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_STOP))
+        startService(
+            Intent(this, TranslationService::class.java)
+                .setAction(TranslationService.ACTION_STOP),
+        )
         apiKeys.clear()
         logger.clear()
         preferences.clear()
-        File(getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), "GeminiLiveTranslate").deleteRecursively()
+        PublicRecordingStore(this, logger).deleteAll()
         File(cacheDir, "diagnostic-share").deleteRecursively()
         DiagnosticContext.clearAll()
-        toast("Đã xóa toàn bộ dữ liệu do ứng dụng quản lý")
+        toast("Đã xóa toàn bộ dữ liệu ứng dụng")
         finish()
     }
 
-    private fun confirm(title: String, message: String, positive: String, action: () -> Unit) {
+    private fun confirm(
+        title: String,
+        message: String,
+        positive: String,
+        action: () -> Unit,
+    ) {
         AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(message)
@@ -506,40 +724,80 @@ class SettingsActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun title(text: String) = content.addView(TextView(this).apply {
-        this.text = text
-        textSize = 18f
-        setPadding(0, 16, 0, 4)
-    })
+    private fun title(text: String) {
+        content.addView(TextView(this).apply {
+            this.text = text
+            textSize = 19f
+            setPadding(0, dp(20), 0, dp(6))
+            ViewCompat.setAccessibilityHeading(this, true)
+        })
+    }
 
-    private fun description(text: String) = content.addView(TextView(this).apply {
-        this.text = text
-        textSize = 12f
-        setTextColor(Color.DKGRAY)
-        setPadding(0, 2, 0, 10)
-    })
+    private fun description(text: String) {
+        content.addView(TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            setTextColor(themeColor(android.R.attr.textColorSecondary))
+            setPadding(0, dp(2), 0, dp(12))
+        })
+    }
 
-    private fun check(label: String, checked: Boolean, detail: String, onChanged: (Boolean) -> Unit) {
+    private fun check(
+        label: String,
+        checked: Boolean,
+        detail: String? = null,
+        onChanged: (Boolean) -> Unit,
+    ) {
         content.addView(CheckBox(this).apply {
             text = label
             isChecked = checked
+            minHeight = dp(48)
+            setPadding(0, dp(4), 0, dp(4))
             setOnCheckedChangeListener { _, value -> onChanged(value) }
         })
-        description(detail)
+        if (!detail.isNullOrBlank()) {
+            description(detail)
+        }
     }
 
-    private fun spinner(labels: List<String>, selected: Int, onSelected: (Int) -> Unit) {
-        val view = Spinner(this)
-        view.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also {
+    private fun spinner(
+        labels: List<String>,
+        selected: Int,
+        accessibilityLabel: String,
+        onSelected: (Int) -> Unit,
+    ) {
+        val safeSelected = selected.coerceIn(0, labels.lastIndex.coerceAtLeast(0))
+        val view = Spinner(this).apply {
+            minimumHeight = dp(48)
+            contentDescription = "$accessibilityLabel. Đang chọn ${labels.getOrElse(safeSelected) { "" }}"
+        }
+        view.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            labels,
+        ).also {
             it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
-        view.setSelection(selected.coerceIn(0, labels.lastIndex.coerceAtLeast(0)))
+        view.setSelection(safeSelected)
+
         var ready = false
         view.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, item: View?, position: Int, id: Long) {
-                if (ready) onSelected(position)
+            override fun onItemSelected(
+                parent: android.widget.AdapterView<*>?,
+                item: View?,
+                position: Int,
+                id: Long,
+            ) {
+                view.contentDescription =
+                    "$accessibilityLabel. Đang chọn ${labels.getOrElse(position) { "" }}"
+                if (ready) {
+                    onSelected(position)
+                }
             }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+            override fun onNothingSelected(
+                parent: android.widget.AdapterView<*>?,
+            ) = Unit
         }
         view.post { ready = true }
         content.addView(view)
@@ -554,86 +812,155 @@ class SettingsActivity : AppCompatActivity() {
         unit: String,
         onChanged: (Int) -> Unit,
     ) {
-        val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 8, 0, 8) }
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val labelView = TextView(this).apply {
-            text = "$label:"
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, .35f)
+        val wrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
         }
-        val valueView = TextView(this).apply {
-            text = "$current$unit"
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, .22f)
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
+
         val seek = SeekBar(this).apply {
+            id = View.generateViewId()
             val steps = ((maxValue - minValue) / step).coerceAtLeast(1)
             max = steps
             progress = ((current - minValue) / step).coerceIn(0, steps)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, .43f)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+            minimumHeight = dp(48)
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                .43f,
+            )
+            contentDescription = "$label: $current$unit"
+        }
+
+        val labelView = TextView(this).apply {
+            text = label
+            textSize = 14f
+            labelFor = seek.id
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                .35f,
+            )
+        }
+        val valueView = TextView(this).apply {
+            text = "$current$unit"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                .22f,
+            )
+        }
+
+        seek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    bar: SeekBar?,
+                    progress: Int,
+                    fromUser: Boolean,
+                ) {
                     val value = (minValue + progress * step).coerceAtMost(maxValue)
                     valueView.text = "$value$unit"
-                    if (fromUser) onChanged(value)
+                    seek.contentDescription = "$label: $value$unit"
+                    if (fromUser) {
+                        onChanged(value)
+                    }
                 }
+
                 override fun onStartTrackingTouch(bar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(bar: SeekBar?) = Unit
-            })
-        }
-        top.addView(labelView); top.addView(seek); top.addView(valueView)
+            },
+        )
+
+        top.addView(labelView)
+        top.addView(seek)
+        top.addView(valueView)
         wrapper.addView(top)
         content.addView(wrapper)
     }
 
-    private fun rowButton(label: String, action: () -> Unit) = content.addView(Button(this).apply {
-        text = label
-        setOnClickListener { action() }
-    })
+    private fun rowButton(label: String, action: () -> Unit) {
+        content.addView(Button(this).apply {
+            text = label
+            isAllCaps = false
+            minHeight = dp(48)
+            setOnClickListener { action() }
+        })
+    }
 
     private fun friendly(keys: Set<String>): String = keys.joinToString { key ->
         FRIENDLY_NAMES[key] ?: key
     }
 
-    private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+    private fun themeColor(attribute: Int): Int {
+        val value = TypedValue()
+        theme.resolveAttribute(attribute, value, true)
+        return if (value.resourceId != 0) {
+            getColor(value.resourceId)
+        } else {
+            value.data
+        }
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun toast(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+    }
 
     companion object {
         private const val STATE_DRAFT = "settings_draft"
         private const val STATE_TAB = "settings_tab"
+
+        private val TAB_LABELS = linkedMapOf(
+            "basic" to "Cơ bản",
+            "audio" to "Âm thanh",
+            "latency" to "Độ ổn định",
+            "save" to "Lưu và xuất",
+            "system" to "Hệ thống",
+        )
+
         private val FRIENDLY_NAMES = mapOf(
-            "model" to "model",
-            "targetLanguage" to "ngôn ngữ đích",
-            "echoTargetLanguage" to "lặp ngôn ngữ đích",
-            "aiVoice" to "giọng AI",
-            "autoDucking" to "tự giảm âm",
-            "duckVolumeFactor" to "mức giảm âm",
-            "muteOriginalInInternal" to "tắt âm nội bộ",
-            "uiMode" to "chế độ giao diện",
-            "performanceProfile" to "hồ sơ hoạt động",
+            "model" to "bộ máy dịch",
+            "targetLanguage" to "ngôn ngữ cần dịch sang",
+            "echoTargetLanguage" to "đọc lại câu đã đúng ngôn ngữ",
+            "aiVoice" to "giọng dịch",
+            "aiAudioStreamType" to "cách phát giọng dịch",
+            "autoDucking" to "tự giảm âm gốc",
+            "duckVolumeFactor" to "âm lượng gốc còn lại",
+            "muteOriginalInInternal" to "tắt âm gốc khi nghe trong máy",
+            "uiMode" to "giao diện",
+            "performanceProfile" to "cách ứng dụng ưu tiên",
             "autoReconnect" to "tự kết nối lại",
-            "reconnectMaxRetries" to "số lần kết nối lại",
-            "qualityMode" to "chế độ chất lượng",
-            "inputBufferMs" to "buffer đầu vào",
-            "outputJitterTarget" to "jitter đầu ra",
-            "fileSyncDelayMs" to "đồng bộ tệp",
-            "pacingEnabled" to "điều tiết tệp",
-            "pacingTargetLatencyMs" to "độ dẫn trước",
-            "pacingMaxBuffer" to "hàng đợi gửi",
-            "translatedBufferBytes" to "buffer phát",
-            "translatedQueueMax" to "queue phát",
-            "ttsSmoothEnabled" to "làm mượt TTS",
-            "ttsSmoothTimeoutMs" to "timeout TTS",
-            "ttsSmoothMinChars" to "ngưỡng ký tự TTS",
-            "ttsSmoothMinWords" to "ngưỡng từ TTS",
-            "saveAudioEnabled" to "lưu audio",
-            "saveAudioMode" to "kiểu lưu audio",
-            "exportFormat" to "định dạng xuất",
-            "logLevel" to "mức log",
-            "logToFile" to "ghi log file",
-            "logIncludeTranscript" to "ghi hội thoại",
+            "reconnectMaxRetries" to "số lần thử lại",
+            "qualityMode" to "ưu tiên âm thanh ổn định",
+            "inputBufferMs" to "thời gian chuẩn bị âm thanh",
+            "outputJitterTarget" to "số đoạn chờ trước khi phát",
+            "fileSyncDelayMs" to "thời gian chờ khớp với tệp",
+            "pacingEnabled" to "gửi theo tốc độ phát",
+            "pacingTargetLatencyMs" to "khoảng chuẩn bị trước",
+            "pacingMaxBuffer" to "số đoạn chờ gửi",
+            "translatedBufferBytes" to "dung lượng phát âm thanh",
+            "translatedQueueMax" to "số đoạn chờ phát",
+            "ttsSmoothEnabled" to "ghép câu trước khi đọc",
+            "ttsSmoothTimeoutMs" to "thời gian chờ ghép câu",
+            "ttsSmoothMinChars" to "độ dài câu tối thiểu",
+            "ttsSmoothMinWords" to "số từ tối thiểu",
+            "saveAudioEnabled" to "lưu bản ghi âm",
+            "saveAudioMode" to "nội dung cần lưu",
+            "exportFormat" to "định dạng lời dịch",
+            "logLevel" to "mức ghi lỗi",
+            "logToFile" to "lưu nhật ký lỗi",
+            "logIncludeTranscript" to "ghi nội dung hội thoại",
             "originalVolume" to "âm lượng gốc",
-            "translatedVolume" to "âm lượng dịch",
-            "micLanguages" to "danh sách ngôn ngữ microphone",
-            "micLanguageIndex" to "ngôn ngữ microphone hiện tại",
+            "translatedVolume" to "âm lượng giọng dịch",
+            "micLanguages" to "danh sách ngôn ngữ",
+            "micLanguageIndex" to "ngôn ngữ đang dùng",
         )
     }
 }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Chưa phát hành
+
+### Cài đặt và khả năng tiếp cận
+
+- Bỏ các nút mở, gửi và xóa nhật ký khỏi màn hình Cài đặt.
+- Màn hình Cài đặt không còn hiển thị các công cụ dành cho nhà phát triển.
+- Bỏ các ghi chú kỹ thuật không cần thiết và viết lại nội dung bằng ngôn ngữ dễ hiểu.
+- Thêm tiêu đề, nhãn điều khiển, trạng thái mục đang chọn và giá trị thanh trượt cho trình đọc màn hình.
+- Thông báo khi chuyển mục cài đặt để người dùng trình đọc màn hình không bị mất vị trí.
+- Tăng vùng bấm tối thiểu và dùng màu chữ phù hợp với giao diện sáng hoặc tối.
+- Sửa thao tác xóa bản ghi để xóa đúng tệp trong thư mục công khai `Music/GeminiLiveTranslate`.
+
 ## 1.2.2
 
 ### Âm thanh và tệp người dùng

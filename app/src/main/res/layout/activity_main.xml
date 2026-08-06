@@ -25,14 +25,16 @@
             android:id="@+id/apiKeyButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="API Key" />
+            android:minHeight="48dp"
+            android:text="Khóa truy cập" />
 
         <Button
             android:id="@+id/testConnectionButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:contentDescription="Kiểm tra API Key, model và kết nối Gemini"
-            android:text="Kiểm tra API và kết nối" />
+            android:contentDescription="Kiểm tra khóa truy cập và kết nối dịch"
+            android:minHeight="48dp"
+            android:text="Kiểm tra kết nối dịch" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -41,8 +43,10 @@
             android:orientation="horizontal">
 
             <TextView
+                android:id="@+id/audioSourceLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:labelFor="@id/audioSourceSpinner"
                 android:text="Nguồn âm thanh:"
                 android:textSize="16sp" />
 
@@ -50,7 +54,9 @@
                 android:id="@+id/audioSourceSpinner"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="1" />
+                android:layout_weight="1"
+                android:contentDescription="Chọn nguồn âm thanh"
+                android:minHeight="48dp" />
         </LinearLayout>
 
         <LinearLayout
@@ -61,26 +67,32 @@
             android:visibility="gone">
 
             <TextView
+                android:id="@+id/micLanguageLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Ngôn ngữ dịch Microphone:"
+                android:labelFor="@id/micLanguageSpinner"
+                android:text="Ngôn ngữ cần dịch sang:"
                 android:textSize="16sp" />
 
             <Spinner
                 android:id="@+id/micLanguageSpinner"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"
+                android:contentDescription="Chọn ngôn ngữ cần dịch sang"
+                android:minHeight="48dp" />
 
             <Button
                 android:id="@+id/manageLanguagesButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:minHeight="48dp"
                 android:text="Thêm hoặc xóa ngôn ngữ" />
 
             <Button
                 android:id="@+id/nextLanguageButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:minHeight="48dp"
                 android:text="Chuyển ngôn ngữ"
                 android:visibility="gone" />
         </LinearLayout>
@@ -89,27 +101,32 @@
             android:id="@+id/selectFileButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Chọn tệp trong bộ nhớ" />
+            android:minHeight="48dp"
+            android:text="Chọn tệp âm thanh hoặc video" />
 
         <Button
             android:id="@+id/miniBrowserButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Trình duyệt mini" />
+            android:minHeight="48dp"
+            android:text="Mở trang phát âm thanh hoặc video" />
 
         <Button
             android:id="@+id/startButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
             android:text="Bắt đầu" />
 
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="polite"
             android:focusable="true"
-            android:padding="4dp"
-            android:text="Trạng thái: Sẵn sàng" />
+            android:padding="8dp"
+            android:text="Trạng thái: Sẵn sàng"
+            android:textSize="16sp" />
 
         <LinearLayout
             android:id="@+id/fileControls"
@@ -123,13 +140,15 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Tua lùi 10 giây" />
+                android:minHeight="48dp"
+                android:text="Lùi 10 giây" />
 
             <Button
                 android:id="@+id/playPauseButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:minHeight="48dp"
                 android:text="Phát" />
 
             <Button
@@ -137,30 +156,42 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Tua tiến 10 giây" />
+                android:minHeight="48dp"
+                android:text="Tiến 10 giây" />
         </LinearLayout>
 
         <SeekBar
             android:id="@+id/progressSeekBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:contentDescription="Tiến trình phát: 0%"
-            android:max="100" />
+            android:contentDescription="Vị trí đang phát: 0%"
+            android:max="100"
+            android:minHeight="48dp" />
 
         <SeekBar
             android:id="@+id/originalVolumeSeekBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:contentDescription="Âm lượng gốc: 50%"
+            android:contentDescription="Âm lượng âm thanh gốc: 50%"
             android:max="100"
+            android:minHeight="48dp"
             android:progress="50" />
+
+        <TextView
+            android:id="@+id/translatedVolumeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@id/translatedVolumeSeekBar"
+            android:text="Âm lượng giọng dịch"
+            android:textSize="15sp" />
 
         <SeekBar
             android:id="@+id/translatedVolumeSeekBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:contentDescription="Âm lượng dịch: 100%"
+            android:contentDescription="Âm lượng giọng dịch: 100%"
             android:max="100"
+            android:minHeight="48dp"
             android:progress="100" />
 
         <Switch
@@ -168,7 +199,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:checked="true"
-            android:text="Giọng AI" />
+            android:minHeight="48dp"
+            android:text="Phát giọng dịch" />
 
         <LinearLayout
             android:id="@+id/aiAudioStreamLayout"
@@ -177,34 +209,40 @@
             android:orientation="vertical">
 
             <TextView
+                android:id="@+id/aiAudioStreamLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Luồng phát giọng AI (aiAudioStreamType):"
+                android:labelFor="@id/aiAudioStreamSpinner"
+                android:text="Cách phát giọng dịch"
                 android:textSize="15sp" />
 
             <Spinner
                 android:id="@+id/aiAudioStreamSpinner"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content" />
+                android:layout_height="wrap_content"
+                android:contentDescription="Chọn cách phát giọng dịch"
+                android:minHeight="48dp" />
         </LinearLayout>
 
         <Switch
             android:id="@+id/autoDuckingSwitch"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Tự động giảm âm nền" />
+            android:minHeight="48dp"
+            android:text="Tự giảm âm gốc khi giọng dịch phát" />
 
         <ScrollView
             android:id="@+id/subtitleScroll"
             android:layout_width="match_parent"
             android:layout_height="200dp"
-            android:contentDescription="Phụ đề"
+            android:contentDescription="Nội dung dịch"
             android:focusable="true">
 
             <TextView
                 android:id="@+id/subtitleText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:padding="4dp"
                 android:text="Chưa có nội dung dịch"
                 android:textIsSelectable="true"
                 android:textSize="16sp" />
@@ -214,18 +252,21 @@
             android:id="@+id/exportButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Xuất phụ đề (.srt)" />
+            android:minHeight="48dp"
+            android:text="Xuất phụ đề" />
 
         <Button
             android:id="@+id/settingsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Cài đặt nâng cao" />
+            android:minHeight="48dp"
+            android:text="Cài đặt" />
 
         <Button
             android:id="@+id/logButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Xem nhật ký lỗi" />
+            android:minHeight="48dp"
+            android:text="Xem thông tin lỗi" />
     </LinearLayout>
 </ScrollView>

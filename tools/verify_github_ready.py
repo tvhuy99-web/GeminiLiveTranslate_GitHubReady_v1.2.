@@ -83,11 +83,16 @@ def main() -> None:
         "lintDebug",
         "assembleDebug",
         "tools/verify_apk.py",
-        "actions/upload-artifact@v7",
+        "gh release create",
+        "gh release upload",
+        "debug-latest",
     ]
     for token in required_ci:
         if token not in ci:
             fail(f"Android CI is missing token: {token}")
+    if "actions/upload-artifact" in ci:
+        fail("Android CI still depends on Actions artifact storage")
+
     required_release = [
         "ANDROID_KEYSTORE_BASE64",
         "./gradlew --version",
@@ -111,6 +116,7 @@ def main() -> None:
     print("[OK] Gradle 8.10.2 distribution is pinned with SHA-256")
     print("[OK] Direct Kotlin/Gradle source is present")
     print("[OK] CI builds, tests, lints and verifies a debug APK")
+    print("[OK] Verified debug APK is published through GitHub Releases")
     print("[OK] Signed APK/AAB release workflow is configured")
     print("[OK] Secret scanning, dependency automation and support templates are present")
     print("GITHUB_READY_OK")

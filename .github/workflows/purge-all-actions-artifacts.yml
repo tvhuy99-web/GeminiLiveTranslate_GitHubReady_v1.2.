@@ -1,4 +1,4 @@
-name: Purge All Actions Artifacts
+name: Purge All GitHub Actions Data
 
 on:
   push:
@@ -10,23 +10,42 @@ permissions:
   actions: write
   contents: read
 
+concurrency:
+  group: purge-all-actions-data
+  cancel-in-progress: false
+
 jobs:
   purge:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete every Actions artifact
+      - name: Delete all artifacts, caches, logs and old workflow runs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          set -Eeuo pipefail
-          mapfile -t IDS < <(gh api --paginate -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/${REPOSITORY}/actions/artifacts?per_page=100" --jq '.artifacts[].id')
-          echo "Found ${#IDS[@]} artifact(s)."
-          deleted=0
-          for id in "${IDS[@]}"; do
-            gh api --method DELETE -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2026-03-10' "repos/${REPOSITORY}/actions/artifacts/${id}"
-            deleted=$((deleted + 1))
+          set -u
+          API_VERSION='2026-03-10'
+          api() { gh api -H 'Accept: application/vnd.github+json' -H "X-GitHub-Api-Version: ${API_VERSION}" "$@"; }
+          deleted_artifacts=0; failed_artifacts=0; deleted_caches=0; failed_caches=0; deleted_runs=0; failed_runs=0
+          mapfile -t ARTIFACT_IDS < <(api --paginate "repos/${REPOSITORY}/actions/artifacts?per_page=100" --jq '.artifacts[].id')
+          for id in "${ARTIFACT_IDS[@]}"; do if api --method DELETE "repos/${REPOSITORY}/actions/artifacts/${id}"; then deleted_artifacts=$((deleted_artifacts + 1)); else failed_artifacts=$((failed_artifacts + 1)); fi; done
+          mapfile -t CACHE_IDS < <(api --paginate "repos/${REPOSITORY}/actions/caches?per_page=100" --jq '.actions_caches[].id')
+          for id in "${CACHE_IDS[@]}"; do if api --method DELETE "repos/${REPOSITORY}/actions/caches/${id}"; then deleted_caches=$((deleted_caches + 1)); else failed_caches=$((failed_caches + 1)); fi; done
+          mapfile -t RUN_ROWS < <(api --paginate "repos/${REPOSITORY}/actions/runs?per_page=100" --jq '.workflow_runs[] | [.id, .status] | @tsv')
+          for row in "${RUN_ROWS[@]}"; do
+            IFS=$'\t' read -r run_id status <<< "$row"
+            [[ "$run_id" == "$CURRENT_RUN_ID" ]] && continue
+            api --method DELETE "repos/${REPOSITORY}/actions/runs/${run_id}/logs" >/dev/null 2>&1 || true
+            if api --method DELETE "repos/${REPOSITORY}/actions/runs/${run_id}"; then deleted_runs=$((deleted_runs + 1)); continue; fi
+            if [[ "$status" != 'completed' ]]; then
+              api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+              removed=false
+              for attempt in {1..12}; do sleep 5; if api --method DELETE "repos/${REPOSITORY}/actions/runs/${run_id}"; then deleted_runs=$((deleted_runs + 1)); removed=true; break; fi; done
+              [[ "$removed" == 'false' ]] && failed_runs=$((failed_runs + 1))
+            else failed_runs=$((failed_runs + 1)); fi
           done
-          echo "Deleted ${deleted} artifact(s)."
-          printf '## Artifact purge\n\n- Found: **%s**\n- Deleted: **%s**\n' "${#IDS[@]}" "$deleted" >> "$GITHUB_STEP_SUMMARY"
+          { echo '## Full GitHub Actions purge'; echo; echo "- Artifacts deleted: **${deleted_artifacts}**"; echo "- Artifact failures: **${failed_artifacts}**"; echo "- Caches deleted: **${deleted_caches}**"; echo "- Cache failures: **${failed_caches}**"; echo "- Old workflow runs deleted: **${deleted_runs}**"; echo "- Run failures: **${failed_runs}**"; echo '- The currently executing cleanup run is intentionally retained.'; } >> "$GITHUB_STEP_SUMMARY"
+          failures=$((failed_artifacts + failed_caches + failed_runs)); (( failures > 0 )) && { echo "Purge completed with ${failures} failure(s)."; exit 1; }
+          echo 'Purge completed successfully.'

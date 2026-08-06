@@ -653,8 +653,8 @@ class TranslationService : LifecycleService() {
                 leadMs = settings.pacingTargetLatencyMs,
                 logger = logger,
             )
-            SourceMode.MICROPHONE -> MicAudioSource(logger)
-            SourceMode.INTERNAL -> InternalAudioSource(mediaProjection ?: return, logger)
+            SourceMode.MICROPHONE -> MicAudioSource(this, logger)
+            SourceMode.INTERNAL -> InternalAudioSource(this, mediaProjection ?: return, logger)
         }
         source = created
         sourceStarted = true

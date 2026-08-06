@@ -1,14 +1,22 @@
 package com.oai.geminilivetranslate.audio
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import androidx.core.content.ContextCompat
 import com.oai.geminilivetranslate.core.SessionLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
-class MicAudioSource(private val logger: SessionLogger? = null) : AudioSource {
+class MicAudioSource(
+    private val context: Context,
+    private val logger: SessionLogger? = null,
+) : AudioSource {
     private data class CaptureConfig(val sampleRate: Int, val channelMask: Int, val channels: Int)
 
     private val stopped = AtomicBoolean(false)
@@ -18,8 +26,10 @@ class MicAudioSource(private val logger: SessionLogger? = null) : AudioSource {
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
 
+    @SuppressLint("MissingPermission") // Permission is checked immediately below.
     override suspend fun run(listener: AudioSource.Listener) {
         try {
+            requireRecordAudioPermission()
             val (audioRecord, config) = createRecorder()
             recorder = audioRecord
             logger?.log(2, "Microphone", "Khởi tạo AudioRecord sampleRate=${config.sampleRate} channels=${config.channels} bufferBytes=${audioRecord.bufferSizeInFrames * config.channels * 2}")
@@ -75,6 +85,13 @@ class MicAudioSource(private val logger: SessionLogger? = null) : AudioSource {
         release()
     }
 
+    private fun requireRecordAudioPermission() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            throw SecurityException("Chưa cấp quyền microphone.")
+        }
+    }
+
+    @SuppressLint("MissingPermission") // run() verifies RECORD_AUDIO before calling this helper.
     private fun createRecorder(): Pair<AudioRecord, CaptureConfig> {
         val candidates = listOf(
             CaptureConfig(16_000, AudioFormat.CHANNEL_IN_MONO, 1),

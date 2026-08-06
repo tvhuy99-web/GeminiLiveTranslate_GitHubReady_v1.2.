@@ -1,5 +1,9 @@
 package com.oai.geminilivetranslate.audio
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
@@ -9,11 +13,13 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import com.oai.geminilivetranslate.core.SessionLogger
 import java.util.concurrent.atomic.AtomicBoolean
 
 @RequiresApi(Build.VERSION_CODES.Q)
 class InternalAudioSource(
+    private val context: Context,
     private val mediaProjection: MediaProjection,
     private val logger: SessionLogger? = null,
 ) : AudioSource {
@@ -26,7 +32,9 @@ class InternalAudioSource(
     private val discardBufferedOnResume = AtomicBoolean(false)
     @Volatile private var recorder: AudioRecord? = null
 
+    @SuppressLint("MissingPermission") // Permission is checked immediately below.
     override suspend fun run(listener: AudioSource.Listener) {
+        requireRecordAudioPermission()
         val projectionCallback = object : MediaProjection.Callback() {
             override fun onStop() {
                 if (!userRequestedStop.get()) {
@@ -116,6 +124,13 @@ class InternalAudioSource(
         runCatching { mediaProjection.stop() }
     }
 
+    private fun requireRecordAudioPermission() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            throw SecurityException("Chưa cấp quyền microphone cần thiết để thu âm thanh nội bộ.")
+        }
+    }
+
+    @SuppressLint("MissingPermission") // run() verifies RECORD_AUDIO before calling this helper.
     private fun createRecorder(capture: AudioPlaybackCaptureConfiguration): Pair<AudioRecord, CaptureConfig> {
         val candidates = listOf(
             CaptureConfig(48_000, AudioFormat.CHANNEL_IN_STEREO, 2),

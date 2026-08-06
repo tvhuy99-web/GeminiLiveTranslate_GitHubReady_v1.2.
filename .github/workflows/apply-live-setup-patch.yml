@@ -22,8 +22,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .ci-patch/patch121.part* | base64 --decode > /tmp/patch121.tar.gz
-          tar -xzf /tmp/patch121.tar.gz -C .
+          cat .ci-patch/final.part* | base64 --decode > /tmp/patch121-final.tar.gz
+          tar -xzf /tmp/patch121-final.tar.gz -C .
           rm -rf .ci-patch
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com

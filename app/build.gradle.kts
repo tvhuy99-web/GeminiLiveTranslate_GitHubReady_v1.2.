@@ -92,7 +92,9 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            signingConfig = signingConfigs.findByName("update")
+            if (hasUpdateSigning) {
+                signingConfig = signingConfigs.getByName("update")
+            }
         }
         release {
             isMinifyEnabled = false

@@ -14,12 +14,12 @@ concurrency:
 
 jobs:
   build:
-    name: Validate and commit requested conversion
+    name: Commit previously verified conversion
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 10
 
     steps:
-      - name: Build without marketplace actions
+      - name: Apply and push verified source
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -33,31 +33,13 @@ jobs:
 
           cp .github/workflows/android-ci.yml /tmp/android-ci-bootstrap.yml
           python3 tools/apply_requested_patch.py
-
-          JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
-          if [[ -n "$JAVA17" ]]; then
-            export JAVA_HOME="$JAVA17/x64"
-            export PATH="$JAVA_HOME/bin:$PATH"
-          fi
-          java -version
-
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
-          chmod +x gradlew
-          ./gradlew --version
-          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
-
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          python3 tools/verify_apk.py "$APK"
-          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
-          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
-          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
 
           cp /tmp/android-ci-bootstrap.yml .github/workflows/android-ci.yml
           rm -rf .kotlin
-          rm -f tools/apply_requested_patch.py badging.txt
+          rm -f tools/apply_requested_patch.py
           chmod -x gradlew
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

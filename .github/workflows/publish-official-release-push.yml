@@ -1,0 +1,148 @@
+name: Direct Official APK Release
+
+on:
+  push:
+    branches: [official-release-push]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Publish verified APK as latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RESULT=failure
+          STAGE=bootstrap
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          API_URL="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          TAG="v1.2.2-debug"
+          APK_NAME="GeminiLiveTranslate-1.2.2-debug.apk"
+
+          publish_status() {
+            code=$?
+            trap - EXIT
+            set +e
+            tmp="$(mktemp -d)"
+            cd "$tmp"
+            git init -q
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            printf '%s\n' "result=$RESULT" "stage=$STAGE" "updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > STATUS.txt
+            git add STATUS.txt
+            git commit -qm "Official release status: $RESULT at $STAGE"
+            git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+              push --force "$REPO_URL" HEAD:official-release-status >/dev/null 2>&1
+            exit "$code"
+          }
+          trap publish_status EXIT
+
+          STAGE=download-verified-apk
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+            clone --branch apk-delivery --single-branch "$REPO_URL" delivery-repo
+          cd delivery-repo/delivery
+
+          STAGE=verify-apk
+          grep -q '^versionName=1.2.2-debug$' VERSION.txt
+          grep -q '^versionCode=10202$' VERSION.txt
+          grep -q '^applicationId=com.oai.geminilivetranslate.debug$' VERSION.txt
+          sha256sum -c "$APK_NAME.sha256"
+          SOURCE_COMMIT="$(sed -n 's/^sourceCommit=//p' VERSION.txt)"
+          test -n "$SOURCE_COMMIT"
+
+          STAGE=create-release
+          BODY='Gemini Live Translate 1.2.2 Debug
+
+- Bổ sung aiAudioStreamType.
+- Chọn audio/video bằng ACTION_GET_CONTENT.
+- WAV được lưu công khai tại Music/GeminiLiveTranslate qua MediaStore.
+- APK đã qua unit test, Android Lint, kiểm tra package, version và SHA-256.
+
+Lưu ý: APK dùng chữ ký Android debug và package com.oai.geminilivetranslate.debug.'
+
+          jq -n \
+            --arg tag "$TAG" \
+            --arg target "$SOURCE_COMMIT" \
+            --arg name "Gemini Live Translate v1.2.2 Debug" \
+            --arg body "$BODY" \
+            '{tag_name:$tag,target_commitish:$target,name:$name,body:$body,draft:false,prerelease:false,make_latest:"true"}' \
+            > /tmp/release-payload.json
+
+          STATUS="$(curl -sS -o /tmp/release.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$API_URL/releases/tags/$TAG")"
+
+          if [[ "$STATUS" == "404" ]]; then
+            curl -fsS -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/json' \
+              --data-binary @/tmp/release-payload.json \
+              "$API_URL/releases" > /tmp/release.json
+          elif [[ "$STATUS" == "200" ]]; then
+            RELEASE_ID="$(jq -r .id /tmp/release.json)"
+            curl -fsS -X PATCH \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/json' \
+              --data-binary @/tmp/release-payload.json \
+              "$API_URL/releases/$RELEASE_ID" > /tmp/release.json
+          else
+            cat /tmp/release.json >&2
+            exit 1
+          fi
+
+          RELEASE_ID="$(jq -r .id /tmp/release.json)"
+          UPLOAD_URL="$(jq -r '.upload_url | split("{")[0]' /tmp/release.json)"
+
+          STAGE=replace-assets
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$API_URL/releases/$RELEASE_ID/assets?per_page=100" > /tmp/assets.json
+
+          for asset_id in $(jq -r --arg apk "$APK_NAME" '.[] | select(.name == $apk or .name == ($apk + ".sha256") or .name == "VERSION.txt") | .id' /tmp/assets.json); do
+            curl -fsS -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$API_URL/releases/assets/$asset_id"
+          done
+
+          STAGE=upload-apk
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: application/vnd.android.package-archive' \
+            --data-binary @"$APK_NAME" \
+            "$UPLOAD_URL?name=$APK_NAME" > /tmp/apk-asset.json
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: text/plain' \
+            --data-binary @"$APK_NAME.sha256" \
+            "$UPLOAD_URL?name=$APK_NAME.sha256" > /tmp/sha-asset.json
+
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Content-Type: text/plain' \
+            --data-binary @VERSION.txt \
+            "$UPLOAD_URL?name=VERSION.txt" > /tmp/version-asset.json
+
+          test "$(jq -r .name /tmp/apk-asset.json)" = "$APK_NAME"
+          RESULT=success
+          STAGE=complete
+          echo "Release: $(jq -r .html_url /tmp/release.json)"
+          echo "APK: $(jq -r .browser_download_url /tmp/apk-asset.json)"

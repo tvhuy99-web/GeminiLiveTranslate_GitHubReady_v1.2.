@@ -160,14 +160,6 @@
                 android:text="Tiến 10 giây" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/progressLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:labelFor="@id/progressSeekBar"
-            android:text="Vị trí đang phát"
-            android:textSize="15sp" />
-
         <SeekBar
             android:id="@+id/progressSeekBar"
             android:layout_width="match_parent"
@@ -175,14 +167,6 @@
             android:contentDescription="Vị trí đang phát: 0%"
             android:max="100"
             android:minHeight="48dp" />
-
-        <TextView
-            android:id="@+id/originalVolumeLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:labelFor="@id/originalVolumeSeekBar"
-            android:text="Âm lượng âm thanh gốc"
-            android:textSize="15sp" />
 
         <SeekBar
             android:id="@+id/originalVolumeSeekBar"

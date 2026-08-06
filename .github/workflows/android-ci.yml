@@ -30,9 +30,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle cache
+      - name: Install Gradle 8.10.2 and configure cache
         uses: gradle/actions/setup-gradle@v6
         with:
+          gradle-version: '8.10.2'
           cache-provider: basic
           validate-wrappers: false
 
@@ -43,9 +44,7 @@ jobs:
           python3 tools/verify_github_ready.py
 
       - name: Unit test, lint and assemble
-        run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest lintDebug assembleDebug
+        run: gradle --no-daemon --stacktrace clean testDebugUnitTest lintDebug assembleDebug
 
       - name: Verify APK integrity and signature
         run: |

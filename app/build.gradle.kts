@@ -11,8 +11,8 @@ android {
         applicationId = "com.oai.geminilivetranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10200
-        versionName = "1.2.0"
+        versionCode = 10201
+        versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -46,6 +46,21 @@ android {
         releaseKeyPassword,
     ).all { !it.isNullOrBlank() }
 
+    val updateStoreFile = providers.gradleProperty("updateStoreFile").orNull
+        ?: System.getenv("UPDATE_STORE_FILE")
+    val updateStorePassword = providers.gradleProperty("updateStorePassword").orNull
+        ?: System.getenv("UPDATE_STORE_PASSWORD")
+    val updateKeyAlias = providers.gradleProperty("updateKeyAlias").orNull
+        ?: System.getenv("UPDATE_KEY_ALIAS")
+    val updateKeyPassword = providers.gradleProperty("updateKeyPassword").orNull
+        ?: System.getenv("UPDATE_KEY_PASSWORD")
+    val hasUpdateSigning = listOf(
+        updateStoreFile,
+        updateStorePassword,
+        updateKeyAlias,
+        updateKeyPassword,
+    ).all { !it.isNullOrBlank() }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -59,12 +74,25 @@ android {
                 enableV4Signing = true
             }
         }
+        if (hasUpdateSigning) {
+            create("update") {
+                storeFile = file(requireNotNull(updateStoreFile))
+                storePassword = updateStorePassword
+                keyAlias = updateKeyAlias
+                keyPassword = updateKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.findByName("update")
         }
         release {
             isMinifyEnabled = false
@@ -102,4 +130,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

@@ -1,15 +1,16 @@
 name: Verified APK Delivery
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened]
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   deliver:
-    if: github.event.pull_request.head.ref == 'apk-build-trigger-2'
+    if: github.head_ref == 'apk-build-trigger-3'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -38,7 +39,6 @@ jobs:
               "result=$RESULT" \
               "stage=$STAGE" \
               'signingMode=android-debug' \
-              "sourceCommit=${GITHUB_SHA}" \
               "updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > STATUS.txt
             git add STATUS.txt
             git commit -qm "APK delivery status: $RESULT at $STAGE"
@@ -52,6 +52,7 @@ jobs:
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             clone --branch main --single-branch "$REPO_URL" source
           cd source
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
 
           STAGE=toolchain
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
@@ -86,10 +87,10 @@ jobs:
             'versionCode=10202' \
             'applicationId=com.oai.geminilivetranslate.debug' \
             'signingMode=android-debug' \
-            "certificateSha256=$CERT_SHA256" > /tmp/apk-delivery/VERSION.txt
+            "certificateSha256=$CERT_SHA256" \
+            "sourceCommit=$SOURCE_COMMIT" > /tmp/apk-delivery/VERSION.txt
 
           STAGE=push-delivery
-          SOURCE_COMMIT="$(git rev-parse HEAD)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan apk-delivery-build

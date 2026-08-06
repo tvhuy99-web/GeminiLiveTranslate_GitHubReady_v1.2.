@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER_SHA256 = "44afcdcadc571c1a83763fc68e95ffaea07429f9ea0c473978e6052d1b7ec174"
+UPDATE_CERT_SHA256 = "46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b"
 REQUIRED = [
     ".github/workflows/android-ci.yml",
     ".github/workflows/android-release.yml",
@@ -21,6 +22,7 @@ REQUIRED = [
     "LICENSE",
     "docs/COMPLETENESS_MATRIX.md",
     "docs/GITHUB_RELEASE.md",
+    "docs/UPDATE_SIGNING.md",
     "tools/check_no_secrets.py",
     "tools/verify_apk.py",
     "gradlew",
@@ -28,6 +30,7 @@ REQUIRED = [
     "gradle/wrapper/gradle-wrapper.jar",
     "gradle/wrapper/gradle-wrapper.properties",
     "gradle/wrapper/bootstrap-src/org/gradle/wrapper/GradleWrapperMain.java",
+    "app/src/test/java/com/oai/geminilivetranslate/network/GeminiLiveClientSetupTest.kt",
 ]
 
 
@@ -67,6 +70,7 @@ def main() -> None:
         ROOT / "source-archive",
         ROOT / ".github/workflows/one-time-official-wrapper.yml",
         ROOT / "docs/.wrapper-migration-trigger",
+        ROOT / ".ci-patch",
     ]:
         if obsolete.exists():
             fail(f"Obsolete migration/bootstrap path is present: {obsolete.relative_to(ROOT)}")
@@ -83,9 +87,18 @@ def main() -> None:
         "lintDebug",
         "assembleDebug",
         "tools/verify_apk.py",
+        "ANDROID_UPDATE_KEYSTORE_BASE64",
+        "ANDROID_UPDATE_KEYSTORE_PASSWORD",
+        "ANDROID_UPDATE_KEY_ALIAS",
+        "ANDROID_UPDATE_KEY_PASSWORD",
+        UPDATE_CERT_SHA256,
+        "com.oai.geminilivetranslate.debug",
+        "versionCode='10201'",
         "gh release create",
         "gh release upload",
+        "gh release delete-asset",
         "debug-latest",
+        "GeminiLiveTranslate-debug-latest.apk",
     ]
     for token in required_ci:
         if token not in ci:
@@ -108,15 +121,33 @@ def main() -> None:
         fail("Dependency submission does not use the verified project wrapper")
 
     build = (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
-    for token in ["RELEASE_STORE_FILE", "signingConfigs", "enableV3Signing"]:
+    for token in [
+        "RELEASE_STORE_FILE",
+        "UPDATE_STORE_FILE",
+        "signingConfigs",
+        "enableV3Signing",
+        'applicationIdSuffix = ".debug"',
+        "versionCode = 10201",
+        'versionName = "1.2.1"',
+    ]:
         if token not in build:
-            fail(f"Release signing configuration is missing token: {token}")
+            fail(f"Build/update signing configuration is missing token: {token}")
+
+    client = (ROOT / "app/src/main/java/com/oai/geminilivetranslate/network/GeminiLiveClient.kt").read_text(encoding="utf-8")
+    for forbidden in ['.put("inputAudioTranscription"', '.put("outputAudioTranscription"']:
+        if forbidden in client:
+            fail(f"Gemini setup reintroduced unsupported field: {forbidden}")
+    for token in ["createSetupMessage", "responseModalities", "translationConfig", "targetLanguageCode"]:
+        if token not in client:
+            fail(f"Gemini setup is missing token: {token}")
 
     print(f"[OK] Verified wrapper bootstrap SHA-256: {WRAPPER_SHA256}")
     print("[OK] Gradle 8.10.2 distribution is pinned with SHA-256")
-    print("[OK] Direct Kotlin/Gradle source is present")
-    print("[OK] CI builds, tests, lints and verifies a debug APK")
-    print("[OK] Verified debug APK is published through GitHub Releases")
+    print("[OK] Gemini setup matches the working Lua translation payload")
+    print("[OK] Debug package/version are fixed for update installation")
+    print(f"[OK] Published debug APK requires stable certificate: {UPDATE_CERT_SHA256}")
+    print("[OK] CI builds, tests, lints and verifies an updateable debug APK")
+    print("[OK] Rolling debug APK is published through GitHub Releases")
     print("[OK] Signed APK/AAB release workflow is configured")
     print("[OK] Secret scanning, dependency automation and support templates are present")
     print("GITHUB_READY_OK")

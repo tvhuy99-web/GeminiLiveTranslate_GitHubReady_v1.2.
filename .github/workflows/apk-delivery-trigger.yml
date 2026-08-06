@@ -1,33 +1,27 @@
-name: Owner APK Delivery Trigger
+name: Verified APK Delivery
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   deliver:
-    if: github.event.pull_request.head.ref == 'apk-build-trigger' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.ref == 'apk-build-trigger-2'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
-      - name: Build verified APK from trusted main
+      - name: Build and deliver verified debug APK from main
         env:
           GH_TOKEN: ${{ github.token }}
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPDATE_KEYSTORE_BASE64 }}
-          UPDATE_STORE_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEYSTORE_PASSWORD }}
-          UPDATE_KEY_ALIAS: ${{ secrets.ANDROID_UPDATE_KEY_ALIAS }}
-          UPDATE_KEY_PASSWORD: ${{ secrets.ANDROID_UPDATE_KEY_PASSWORD }}
-          EXPECTED_CERT_SHA256: 46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
         shell: bash
         run: |
           set -Eeuo pipefail
           STAGE=bootstrap
           RESULT=failure
-          SIGNING_MODE=android-debug
           AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
 
@@ -43,7 +37,7 @@ jobs:
             printf '%s\n' \
               "result=$RESULT" \
               "stage=$STAGE" \
-              "signingMode=$SIGNING_MODE" \
+              'signingMode=android-debug' \
               "sourceCommit=${GITHUB_SHA}" \
               "updatedAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > STATUS.txt
             git add STATUS.txt
@@ -71,13 +65,6 @@ jobs:
           python3 tools/verify_github_ready.py
           chmod +x gradlew
 
-          STAGE=signing-setup
-          if [[ -n "$KEYSTORE_BASE64" && -n "$UPDATE_STORE_PASSWORD" && -n "$UPDATE_KEY_ALIAS" && -n "$UPDATE_KEY_PASSWORD" ]]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > update-keystore.jks
-            export UPDATE_STORE_FILE="$PWD/update-keystore.jks"
-            SIGNING_MODE=stable-update
-          fi
-
           STAGE=gradle-build
           ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 
@@ -88,10 +75,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
-          ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
-          if [[ "$SIGNING_MODE" == stable-update ]]; then
-            test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
-          fi
+          CERT_SHA256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
 
           STAGE=prepare-delivery
           mkdir -p /tmp/apk-delivery
@@ -101,11 +85,10 @@ jobs:
             'versionName=1.2.2-debug' \
             'versionCode=10202' \
             'applicationId=com.oai.geminilivetranslate.debug' \
-            "signingMode=$SIGNING_MODE" \
-            "certificateSha256=$ACTUAL_CERT" > /tmp/apk-delivery/VERSION.txt
+            'signingMode=android-debug' \
+            "certificateSha256=$CERT_SHA256" > /tmp/apk-delivery/VERSION.txt
 
           STAGE=push-delivery
-          rm -f update-keystore.jks apksigner.txt badging.txt
           SOURCE_COMMIT="$(git rev-parse HEAD)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -115,11 +98,11 @@ jobs:
           mkdir -p delivery
           cp /tmp/apk-delivery/* delivery/
           printf '%s\n' \
-            'Latest verified APK generated from trusted main.' \
+            'Verified debug APK generated from trusted main.' \
             "Source commit: $SOURCE_COMMIT" \
-            "Signing mode: $SIGNING_MODE" > delivery/README.txt
+            'Signing mode: android-debug' > delivery/README.txt
           git add -f delivery
-          git commit -m "Deliver Gemini Live Translate 1.2.2 APK"
+          git commit -m "Deliver Gemini Live Translate 1.2.2 debug APK"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             push --force origin HEAD:apk-delivery
 

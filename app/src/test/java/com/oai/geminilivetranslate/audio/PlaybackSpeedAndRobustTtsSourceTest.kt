@@ -6,9 +6,10 @@ import java.io.File
 
 class PlaybackSpeedAndRobustTtsSourceTest {
     @Test
-    fun filePlaybackSpeedIsCappedAtThreeAndDrivesPacingAndAudioTrack() {
+    fun filePlaybackSpeedIsCappedAtThreeAndKeepsGeminiPcmRealtime() {
         val fileSource = source("audio/FileAudioSource.kt")
         val player = source("audio/StreamingPcmPlayer.kt")
+        val service = source("service/TranslationService.kt")
         val activity = sourceRoot("MainActivity.kt")
         val layout = resource("layout/activity_main.xml")
 
@@ -17,8 +18,11 @@ class PlaybackSpeedAndRobustTtsSourceTest {
         assertTrue(fileSource.contains("fun setPlaybackSpeed(speed: Float)"))
         assertTrue(player.contains("PlaybackParams()"))
         assertTrue(player.contains(".setSpeed(safe)"))
+        assertTrue(player.contains("diagnosticName.startsWith(\"TranslatedPlayer-\")"))
+        assertTrue(player.contains("Giữ PCM Gemini realtime speed=1.0x"))
         assertTrue(activity.contains("1f + value / 10f"))
         assertTrue(activity.contains("setFilePlaybackSpeed(selectedFilePlaybackSpeed)"))
+        assertTrue(service.contains("val rate = if (currentMode == SourceMode.FILE) filePlaybackSpeed else 1f"))
         assertTrue(layout.contains("android:id=\"@+id/fileSpeedSeekBar\""))
         assertTrue(layout.contains("android:max=\"20\""))
     }

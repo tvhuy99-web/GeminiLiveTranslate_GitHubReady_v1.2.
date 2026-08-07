@@ -283,11 +283,12 @@ class GeminiLiveClient(
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
 
         /**
-         * Builds the raw WebSocket setup message used by the working Lua tool.
+         * Builds the raw WebSocket setup message used by the working translation payload.
          *
-         * The translation model only needs responseModalities and translationConfig inside
-         * generationConfig. Transcription objects are intentionally omitted: the server may
-         * still return input/output transcription, and parseMessage handles those opportunistically.
+         * The translation model keeps responseModalities and translationConfig inside
+         * generationConfig. Transcription objects remain intentionally omitted. Context-window
+         * compression belongs directly under setup, alongside sessionResumption, according to
+         * BidiGenerateContentSetup; putting it inside generationConfig would be an invalid schema.
          */
         internal fun createSetupMessage(
             model: String,
@@ -304,6 +305,10 @@ class GeminiLiveClient(
             val setup = JSONObject()
                 .put("model", "models/${model.trim().removePrefix("models/")}")
                 .put("generationConfig", generationConfig)
+                .put(
+                    "contextWindowCompression",
+                    JSONObject().put("slidingWindow", JSONObject()),
+                )
             resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { handle ->
                 setup.put("sessionResumption", JSONObject().put("handle", handle))
             }

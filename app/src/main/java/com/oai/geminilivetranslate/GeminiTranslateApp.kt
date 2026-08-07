@@ -5,11 +5,14 @@ import android.os.Build
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.DiagnosticContext
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.ui.SettingsAccessibilityBridge
 import java.util.Locale
 
 class GeminiTranslateApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        SettingsAccessibilityBridge.install(this)
+
         val logger = SessionLogger(this, AppPreferences(this))
         DiagnosticContext.updateAll(mapOf(
             "app.versionName" to BuildConfig.VERSION_NAME,

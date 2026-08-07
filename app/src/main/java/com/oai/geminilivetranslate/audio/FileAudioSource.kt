@@ -8,6 +8,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.SystemClock
 import com.oai.geminilivetranslate.core.SessionLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -138,7 +139,9 @@ class FileAudioSource(
                 listener.onCompleted()
             }
         } catch (error: Throwable) {
-            if (!stopped.get()) {
+            if (error is CancellationException) {
+                logger?.log(3, "FileAudio", "Dừng coroutine giải mã theo yêu cầu")
+            } else if (!stopped.get()) {
                 logger?.log(0, "FileAudio", "Giải mã tệp thất bại", error)
                 listener.onError(error)
             }
@@ -157,7 +160,11 @@ class FileAudioSource(
         paused.set(false)
         logger?.log(2, "FileAudio", "Tiếp tục giải mã")
     }
-    override fun seekBy(deltaMs: Long) { pendingSeekMs.set(currentPositionMs.get() + deltaMs) }
+    override fun seekBy(deltaMs: Long) {
+        val pending = pendingSeekMs.get()
+        val base = if (pending == NO_SEEK) currentPositionMs.get() else pending
+        pendingSeekMs.set(base + deltaMs)
+    }
     override fun seekToPercent(percent: Int) {
         if (durationMs > 0) pendingSeekMs.set(durationMs * percent.coerceIn(0, 100) / 100L)
     }

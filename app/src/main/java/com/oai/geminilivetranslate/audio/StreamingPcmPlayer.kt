@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import com.oai.geminilivetranslate.core.SessionLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -87,7 +88,9 @@ class StreamingPcmPlayer(
                     writeBlocking(data)
                 }
             }.onFailure { error ->
-                if (worker?.isCancelled != true) logger?.log(0, diagnosticName, "Worker phát PCM dừng do lỗi", error)
+                if (error !is CancellationException && worker?.isCancelled != true) {
+                    logger?.log(0, diagnosticName, "Worker phát PCM dừng do lỗi", error)
+                }
             }
         }
     }

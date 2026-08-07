@@ -114,8 +114,12 @@ class GeminiLiveClient(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 setupComplete.set(false)
+                if (explicitlyClosed.get()) {
+                    logger.log(3, "GeminiWS", "WebSocket đã dừng theo yêu cầu")
+                    return
+                }
                 logger.log(0, "GeminiWS", "Kết nối thất bại HTTP=${response?.code}", t)
-                if (!explicitlyClosed.get()) deliverError(normalizeError(t, response))
+                deliverError(normalizeError(t, response))
             }
         })
     }

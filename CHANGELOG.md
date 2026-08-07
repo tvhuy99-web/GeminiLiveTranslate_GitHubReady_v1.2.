@@ -2,6 +2,12 @@
 
 ## Chưa phát hành
 
+### Nhật ký và tua tệp
+
+- Không còn ghi lỗi đỏ khi WebSocket, decoder hoặc AudioTrack bị hủy chủ động do tua hoặc dừng phiên.
+- Hai lần tua liên tiếp được cộng dồn đúng khoảng thời gian thay vì lần sau ghi đè lần trước.
+- Chỉ khởi tạo TextToSpeech hệ thống khi người dùng dùng giọng đọc của điện thoại; có thể thử lại khi chuyển sang chế độ này.
+
 ### Cài đặt và khả năng tiếp cận
 
 - Bỏ các nút mở, gửi và xóa nhật ký khỏi màn hình Cài đặt.

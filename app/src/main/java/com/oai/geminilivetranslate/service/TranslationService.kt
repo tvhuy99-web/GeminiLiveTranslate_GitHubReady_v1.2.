@@ -98,6 +98,7 @@ class TranslationService : LifecycleService() {
     private var mediaProjection: MediaProjection? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var ttsInitializing = false
     private val ttsBuffer = StringBuilder()
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -149,10 +150,7 @@ class TranslationService : LifecycleService() {
                 sourceMode = currentMode
             )
         }
-        tts = TextToSpeech(applicationContext) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (!ttsReady) logger.log(1, "TTS", "Không khởi tạo được TextToSpeech, mã=$status")
-        }
+        if (!settings.aiVoice) ensureTtsInitialized()
     }
 
     override fun onBind(intent: Intent): IBinder {
@@ -287,8 +285,8 @@ class TranslationService : LifecycleService() {
         reconnectJob?.cancel(); reconnectJob = null
         fileFinishFallbackJob?.cancel(); fileFinishFallbackJob = null
         healthJob?.cancel(); healthJob = null
-        sourceJob?.cancel(); sourceJob = null
         source?.stop(); source = null
+        sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
         runCatching { mediaProjection?.stop() }
         mediaProjection = null
@@ -401,6 +399,7 @@ class TranslationService : LifecycleService() {
                 aiPlayer?.stop(); aiPlayer = null
             }
         }
+        if (!enabled) ensureTtsInitialized()
         updateState { it.copy(aiVoice = enabled) }
     }
 
@@ -421,6 +420,7 @@ class TranslationService : LifecycleService() {
             persistedAfter
         }
         settings = activeAfter
+        if (!activeAfter.aiVoice) ensureTtsInitialized()
         DiagnosticContext.updateAll(mapOf(
             "settings.model" to activeAfter.model,
             "settings.targetLanguage" to activeAfter.targetLanguage,
@@ -1021,6 +1021,22 @@ class TranslationService : LifecycleService() {
         mixedRecording = null
     }
 
+    private fun ensureTtsInitialized() {
+        if (ttsReady || ttsInitializing) return
+        ttsInitializing = true
+        runCatching { tts?.shutdown() }
+        tts = null
+        tts = TextToSpeech(applicationContext) { status ->
+            ttsInitializing = false
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                logger.log(2, "TTS", "TextToSpeech đã sẵn sàng")
+            } else {
+                logger.log(1, "TTS", "Không khởi tạo được TextToSpeech, mã=$status")
+            }
+        }
+    }
+
     private fun queueTts(text: String) {
         if (!ttsReady) return
         var flushNow = false
@@ -1172,6 +1188,8 @@ class TranslationService : LifecycleService() {
         if (_state.value.running) stopTranslation("Dịch vụ đã dừng")
         runCatching { tts?.shutdown() }
         tts = null
+        ttsReady = false
+        ttsInitializing = false
         serviceScope.cancel()
         super.onDestroy()
     }

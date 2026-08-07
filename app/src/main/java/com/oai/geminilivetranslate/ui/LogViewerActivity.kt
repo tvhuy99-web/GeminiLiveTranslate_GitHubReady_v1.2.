@@ -114,7 +114,7 @@ class LogViewerActivity : AppCompatActivity() {
         statusText = TextView(this).apply {
             textSize = 12f
             setPadding(dp(4), dp(4), dp(4), dp(6))
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_NONE
         }
         root.addView(statusText)
 

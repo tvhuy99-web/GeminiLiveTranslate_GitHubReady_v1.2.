@@ -110,6 +110,9 @@ class TranslationService : LifecycleService() {
     private val goAwayCount = AtomicLong(0L)
     private val droppedInputChunks = AtomicLong(0L)
     private val lastLoggedDroppedInputChunks = AtomicLong(0L)
+    private val subtitleCallbackEvents = AtomicLong(0L)
+    private val subtitleAppliedEvents = AtomicLong(0L)
+    private val subtitleFilteredEvents = AtomicLong(0L)
     private var activeInputQueueCapacity = 0
     private var lastBackpressureEvents = 0L
     private var setupStartedAt = 0L
@@ -330,7 +333,7 @@ class TranslationService : LifecycleService() {
             "session.goAwayCount" to goAwayCount.get(),
         ))
         if (hadActiveSession) {
-            logger.log(2, "Session", "$message; session=$sessionId durationMs=$durationMs inputBytes=$totalInputBytes outputBytes=$totalOutputBytes drop=${droppedInputChunks.get()} resume=${resumedConnections.get()} goAway=${goAwayCount.get()}")
+            logger.log(2, "Session", "$message; session=$sessionId durationMs=$durationMs inputBytes=$totalInputBytes outputBytes=$totalOutputBytes drop=${droppedInputChunks.get()} resume=${resumedConnections.get()} goAway=${goAwayCount.get()} subtitleCallbacks=${subtitleCallbackEvents.get()} subtitleApplied=${subtitleAppliedEvents.get()} subtitleFiltered=${subtitleFilteredEvents.get()} transcriptChars=${_state.value.transcript.length}")
         } else {
             logger.log(2, "Service", "$message khi không có phiên đang chạy")
         }
@@ -518,6 +521,9 @@ class TranslationService : LifecycleService() {
         goAwayCount.set(0L)
         droppedInputChunks.set(0L)
         lastLoggedDroppedInputChunks.set(0L)
+        subtitleCallbackEvents.set(0L)
+        subtitleAppliedEvents.set(0L)
+        subtitleFilteredEvents.set(0L)
         lastBackpressureEvents = 0L
         activeInputQueueCapacity = 0
         setupStartedAt = 0L
@@ -586,7 +592,20 @@ class TranslationService : LifecycleService() {
                 }
 
                 override fun onText(text: String) {
-                    if (generation == connectionGeneration) appendTranslation(text)
+                    val event = subtitleCallbackEvents.incrementAndGet()
+                    val currentGeneration = connectionGeneration
+                    val currentState = _state.value
+                    logger.log(
+                        2,
+                        "SubtitlePipe",
+                        "onText event=$event chars=${text.length} callbackGeneration=$generation currentGeneration=$currentGeneration running=${currentState.running} setup=${currentState.setupComplete} transcriptChars=${currentState.transcript.length}",
+                    )
+                    if (generation != currentGeneration) {
+                        subtitleFilteredEvents.incrementAndGet()
+                        logger.log(1, "SubtitlePipe", "Bỏ onText event=$event do generation cũ callback=$generation current=$currentGeneration")
+                        return
+                    }
+                    appendTranslation(text, event)
                 }
 
                 override fun onAudio(pcm24kMono: ByteArray) {
@@ -846,23 +865,59 @@ class TranslationService : LifecycleService() {
         return (seconds * 1_000.0 - 1_000.0).toLong().coerceIn(250L, 3_000L)
     }
 
-    private fun appendTranslation(raw: String) {
+    private fun appendTranslation(raw: String, callbackEvent: Long) {
         val cleaned = raw.trim()
-        if (cleaned.isBlank()) return
+        if (cleaned.isBlank()) {
+            subtitleFilteredEvents.incrementAndGet()
+            logger.log(1, "SubtitlePipe", "Lọc callback=$callbackEvent reason=blank rawChars=${raw.length}")
+            return
+        }
+        val previousRaw = lastRawTranscript
+        val deltaKind: String
         val delta = when {
-            lastRawTranscript.isBlank() -> cleaned
-            cleaned.startsWith(lastRawTranscript) -> cleaned.removePrefix(lastRawTranscript).trim()
-            lastRawTranscript.startsWith(cleaned) -> ""
-            else -> cleaned
+            previousRaw.isBlank() -> {
+                deltaKind = "first"
+                cleaned
+            }
+            cleaned.startsWith(previousRaw) -> {
+                deltaKind = "cumulative"
+                cleaned.removePrefix(previousRaw).trim()
+            }
+            previousRaw.startsWith(cleaned) -> {
+                deltaKind = "older-prefix"
+                ""
+            }
+            else -> {
+                deltaKind = "independent"
+                cleaned
+            }
         }
         lastRawTranscript = cleaned
-        if (delta.isBlank()) return
+        if (delta.isBlank()) {
+            subtitleFilteredEvents.incrementAndGet()
+            logger.log(2, "SubtitlePipe", "Lọc callback=$callbackEvent reason=$deltaKind cleanedChars=${cleaned.length} previousRawChars=${previousRaw.length}")
+            return
+        }
+        val beforeChars = _state.value.transcript.length
         subtitles.append(delta)
         updateState { current ->
             val combined = (current.transcript + if (current.transcript.isBlank()) "" else " " + delta)
                 .takeLast(MAX_TRANSCRIPT_CHARS)
             current.copy(transcript = combined, status = "Đang dịch")
         }
+        val applied = subtitleAppliedEvents.incrementAndGet()
+        val afterState = _state.value
+        logger.log(
+            2,
+            "SubtitlePipe",
+            "Áp dụng callback=$callbackEvent applied=$applied kind=$deltaKind deltaChars=${delta.length} beforeChars=$beforeChars afterChars=${afterState.transcript.length} running=${afterState.running} paused=${afterState.paused}",
+        )
+        DiagnosticContext.updateAll(mapOf(
+            "session.subtitleCallbacks" to subtitleCallbackEvents.get(),
+            "session.subtitleApplied" to applied,
+            "session.subtitleFiltered" to subtitleFilteredEvents.get(),
+            "session.transcriptChars" to afterState.transcript.length,
+        ))
         if (!settings.aiVoice) queueTts(delta)
     }
 
@@ -1148,10 +1203,14 @@ class TranslationService : LifecycleService() {
                     "session.droppedInputChunks" to droppedInputChunks.get(),
                     "session.resumedConnections" to resumedConnections.get(),
                     "session.goAwayCount" to goAwayCount.get(),
+                    "session.subtitleCallbacks" to subtitleCallbackEvents.get(),
+                    "session.subtitleApplied" to subtitleAppliedEvents.get(),
+                    "session.subtitleFiltered" to subtitleFilteredEvents.get(),
+                    "session.transcriptChars" to _state.value.transcript.length,
                 ))
                 updateState {
                     it.copy(
-                        health = "Vào: %.1f kb/s | Ra: %.1f kb/s | Gửi: %d/%d | WS: %d KB | Drop: %d | Resume: %d | GoAway: %d | %s".format(
+                        health = "Vào: %.1f kb/s | Ra: %.1f kb/s | Gửi: %d/%d | WS: %d KB | Drop: %d | Resume: %d | GoAway: %d | Sub: %d | %s".format(
                             Locale.US,
                             inputKbps,
                             outputKbps,
@@ -1161,6 +1220,7 @@ class TranslationService : LifecycleService() {
                             droppedInputChunks.get(),
                             resumedConnections.get(),
                             goAwayCount.get(),
+                            it.transcript.length,
                             if (it.setupComplete) "OK" else "đang nối"
                         ) + if (pressureEvents > 0) " | BP: $pressureEvents" else ""
                     )

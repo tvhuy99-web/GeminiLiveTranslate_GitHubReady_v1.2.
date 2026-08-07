@@ -11,8 +11,8 @@ android {
         applicationId = "com.oai.geminilivetranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10203
-        versionName = "1.2.3"
+        versionCode = 10202
+        versionName = "1.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -114,10 +114,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            signingConfig = when {
-                hasUpdateSigning -> signingConfigs.getByName("update")
-                hasBundledDebugSigning -> signingConfigs.getByName("stableDebug")
-                else -> signingConfig
+            if (hasUpdateSigning) {
+                signingConfig = signingConfigs.getByName("update")
+            } else if (hasBundledDebugSigning) {
+                signingConfig = signingConfigs.getByName("stableDebug")
             }
         }
         release {

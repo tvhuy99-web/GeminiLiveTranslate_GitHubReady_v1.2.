@@ -30,6 +30,12 @@ class GeminiLiveClientSetupTest {
         assertFalse(generationConfig.has("outputAudioTranscription"))
         assertFalse(setup.has("inputAudioTranscription"))
         assertFalse(setup.has("outputAudioTranscription"))
+
+        assertFalse(generationConfig.has("contextWindowCompression"))
+        val compression = setup.getJSONObject("contextWindowCompression")
+        assertTrue(compression.has("slidingWindow"))
+        assertEquals(0, compression.getJSONObject("slidingWindow").length())
+
         assertTrue(setup.has("sessionResumption"))
         assertEquals("resume-token", setup.getJSONObject("sessionResumption").getString("handle"))
     }
@@ -46,5 +52,6 @@ class GeminiLiveClientSetupTest {
         ).getJSONObject("setup")
 
         assertFalse(setup.has("sessionResumption"))
+        assertTrue(setup.getJSONObject("contextWindowCompression").has("slidingWindow"))
     }
 }

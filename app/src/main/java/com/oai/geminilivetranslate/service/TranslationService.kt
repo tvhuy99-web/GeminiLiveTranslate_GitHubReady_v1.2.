@@ -420,6 +420,7 @@ class TranslationService : LifecycleService() {
             persistedAfter
         }
         settings = activeAfter
+        if (!activeAfter.aiVoice) ensureTtsInitialized()
         DiagnosticContext.updateAll(mapOf(
             "settings.model" to activeAfter.model,
             "settings.targetLanguage" to activeAfter.targetLanguage,

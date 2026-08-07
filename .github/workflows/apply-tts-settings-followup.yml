@@ -1,0 +1,40 @@
+name: Apply TTS settings follow-up
+
+on:
+  push:
+    branches: [agent/clean-cancellation-logs]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[tts-followup]') }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Patch source and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" clone --branch agent/clean-cancellation-logs --single-branch "$REPO_URL" source
+          cd source
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt")
+          text = p.read_text(encoding="utf-8")
+          old = '''        settings = activeAfter\n        DiagnosticContext.updateAll(mapOf('''
+          new = '''        settings = activeAfter\n        if (!activeAfter.aiVoice) ensureTtsInitialized()\n        DiagnosticContext.updateAll(mapOf('''
+          if text.count(old) != 1:
+              raise SystemExit(f"Expected one settings assignment, got {text.count(old)}")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          git rm .github/workflows/apply-tts-settings-followup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          git commit -m "Initialize TTS for Settings voice changes [tts-followup]"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" push origin HEAD:agent/clean-cancellation-logs

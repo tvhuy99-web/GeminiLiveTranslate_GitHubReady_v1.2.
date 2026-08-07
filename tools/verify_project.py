@@ -103,6 +103,8 @@ def main() -> None:
             "responseModalities",
             "translationConfig",
             "targetLanguageCode",
+            "contextWindowCompression",
+            "slidingWindow",
             "AudioPlaybackCaptureConfiguration",
             "AndroidKeyStore",
             "FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION",
@@ -120,6 +122,7 @@ def main() -> None:
             "LinkedBlockingDeque<InputFrame>",
             "settings.pacingMaxBuffer",
             "StreamingPcmConverter",
+            "PCM encoding không được hỗ trợ",
             "MediaProjectionStoppedException",
             "mediaProjection.registerCallback",
         ],
@@ -195,6 +198,8 @@ def main() -> None:
     require_tokens(
         build_file,
         [
+            "compileSdk = 36",
+            "targetSdk = 36",
             'versionName = "1.2.2"',
             "versionCode = 10202",
             'applicationIdSuffix = ".debug"',
@@ -217,14 +222,14 @@ def main() -> None:
     print("[OK] Required project, update-signing and diagnostics files")
     print("[OK] XML well-formed")
     print("[OK] ViewBinding IDs")
-    print("[OK] Lua-compatible Gemini translation setup")
+    print("[OK] Lua-compatible Gemini translation setup with top-level context compression")
     print("[OK] WebSocket backpressure, resumption and GoAway")
-    print("[OK] Streaming PCM conversion and MediaProjection lifecycle")
+    print("[OK] Streaming PCM conversion rejects unsupported encodings")
     print(f"[OK] Shared diagnostics coverage: {logger_calls} log points")
     print("[OK] Rotating buffered logs, redaction and diagnostic ZIP")
     print("[OK] Centralized settings validation and live/deferred application")
     print("[OK] Scoped reset paths and no obsolete apply buttons")
-    print("[OK] Version 1.2.2, public recordings and stable update-signing configuration")
+    print("[OK] Android API 36, version 1.2.2 and stable update-signing configuration")
     print("[OK] No Lua dependency or source")
     print(f"[OK] Gradle bootstrap SHA-256: {digest}")
     print("PROJECT_STRUCTURE_OK")

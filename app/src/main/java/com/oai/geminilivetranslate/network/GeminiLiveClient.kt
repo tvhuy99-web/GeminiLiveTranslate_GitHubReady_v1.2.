@@ -56,12 +56,36 @@ class GeminiLiveClient(
         val backpressureEvents: Long,
     )
 
+    data class ResponseStats(
+        val serverContentEvents: Long,
+        val inputTranscriptEvents: Long,
+        val outputTranscriptionObjects: Long,
+        val outputTextEvents: Long,
+        val modelTextEvents: Long,
+        val textDispatchEvents: Long,
+        val audioChunks: Long,
+        val audioBytes: Long,
+        val turnCompleteEvents: Long,
+    )
+
     private val explicitlyClosed = AtomicBoolean(false)
     private val terminalDelivered = AtomicBoolean(false)
     private val setupComplete = AtomicBoolean(false)
     private val maxObservedWireBytes = AtomicLong(0L)
     private val backpressureEvents = AtomicLong(0L)
     private val lastBackpressureLogElapsed = AtomicLong(0L)
+    private val serverContentEvents = AtomicLong(0L)
+    private val inputTranscriptEvents = AtomicLong(0L)
+    private val outputTranscriptionObjects = AtomicLong(0L)
+    private val outputTextEvents = AtomicLong(0L)
+    private val modelTextEvents = AtomicLong(0L)
+    private val textDispatchEvents = AtomicLong(0L)
+    private val audioChunks = AtomicLong(0L)
+    private val audioBytes = AtomicLong(0L)
+    private val turnCompleteEvents = AtomicLong(0L)
+
+    @Volatile private var lastServerContentShape = ""
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -148,12 +172,30 @@ class GeminiLiveClient(
         )
     }
 
+    fun responseStats(): ResponseStats = ResponseStats(
+        serverContentEvents = serverContentEvents.get(),
+        inputTranscriptEvents = inputTranscriptEvents.get(),
+        outputTranscriptionObjects = outputTranscriptionObjects.get(),
+        outputTextEvents = outputTextEvents.get(),
+        modelTextEvents = modelTextEvents.get(),
+        textDispatchEvents = textDispatchEvents.get(),
+        audioChunks = audioChunks.get(),
+        audioBytes = audioBytes.get(),
+        turnCompleteEvents = turnCompleteEvents.get(),
+    )
+
     fun close(graceful: Boolean = true) {
         if (!explicitlyClosed.compareAndSet(false, true)) return
         terminalDelivered.set(true)
         setupComplete.set(false)
         val current = socket
         socket = null
+        val stats = responseStats()
+        logger.log(
+            2,
+            "GeminiResponse",
+            "Đóng parser server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputObjects=${stats.outputTranscriptionObjects} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} dispatch=${stats.textDispatchEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents}",
+        )
         logger.log(2, "GeminiWS", "Đóng client graceful=$graceful queuedBytes=${current?.queueSize() ?: 0L}")
         if (graceful) current?.close(1000, "client stop") else current?.cancel()
         client.dispatcher.executorService.shutdown()
@@ -221,13 +263,38 @@ class GeminiLiveClient(
                 return@parse
             }
             val serverContent = root.optJSONObject("serverContent") ?: return@parse
-            if (serverContent.optBoolean("interrupted", false)) listener.onInterrupted()
-            serverContent.optJSONObject("inputTranscription")
-                ?.optString("text")?.takeIf(String::isNotBlank)?.let(listener::onInputTranscript)
+            serverContentEvents.incrementAndGet()
+            logServerContentShape(serverContent)
 
-            val outputText = serverContent.optJSONObject("outputTranscription")
+            if (serverContent.optBoolean("interrupted", false)) {
+                logger.log(2, "GeminiResponse", "serverContent interrupted=true")
+                listener.onInterrupted()
+            }
+
+            val inputObject = serverContent.optJSONObject("inputTranscription")
+            if (serverContent.has("inputTranscription") && inputObject == null) {
+                logger.log(1, "GeminiResponse", "inputTranscription không phải JSONObject type=${jsonType(serverContent.opt("inputTranscription"))}")
+            }
+            inputObject?.optString("text")?.takeIf(String::isNotBlank)?.let { inputText ->
+                val event = inputTranscriptEvents.incrementAndGet()
+                logger.log(3, "GeminiResponse", "inputTranscription event=$event chars=${inputText.length}")
+                listener.onInputTranscript(inputText)
+            }
+
+            val outputObject = serverContent.optJSONObject("outputTranscription")
+            if (serverContent.has("outputTranscription")) {
+                val objects = outputTranscriptionObjects.incrementAndGet()
+                if (outputObject == null) {
+                    logger.log(1, "GeminiResponse", "outputTranscription event=$objects không phải JSONObject type=${jsonType(serverContent.opt("outputTranscription"))}")
+                }
+            }
+            val outputText = outputObject
                 ?.optString("text")?.takeIf(String::isNotBlank)
-            outputText?.let(listener::onText)
+            if (outputText != null) {
+                val event = outputTextEvents.incrementAndGet()
+                logger.log(2, "GeminiResponse", "outputTranscription text event=$event chars=${outputText.length}")
+                dispatchText(outputText, "outputTranscription")
+            }
 
             val parts = serverContent.optJSONObject("modelTurn")?.optJSONArray("parts")
             if (parts != null) {
@@ -238,22 +305,83 @@ class GeminiLiveClient(
                         val data = inline.optString("data")
                         if (data.isNotBlank() && (mime.isBlank() || mime.startsWith("audio/"))) {
                             runCatching { Base64.decode(data, Base64.DEFAULT) }
-                                .onSuccess(listener::onAudio)
+                                .onSuccess { decoded ->
+                                    val chunk = audioChunks.incrementAndGet()
+                                    val bytes = audioBytes.addAndGet(decoded.size.toLong())
+                                    if (chunk == 1L || chunk % 25L == 0L) {
+                                        logger.log(3, "GeminiResponse", "audio chunk=$chunk bytes=${decoded.size} totalBytes=$bytes mime=${mime.ifBlank { "unknown" }}")
+                                    }
+                                    listener.onAudio(decoded)
+                                }
                                 .onFailure { logger.log(1, "GeminiWS", "Không giải mã được audio phản hồi", it) }
                         }
                     }
                     if (outputText == null) {
-                        part.optString("text").takeIf(String::isNotBlank)?.let(listener::onText)
+                        part.optString("text").takeIf(String::isNotBlank)?.let { modelText ->
+                            val event = modelTextEvents.incrementAndGet()
+                            logger.log(2, "GeminiResponse", "modelTurn text event=$event part=$index chars=${modelText.length}")
+                            dispatchText(modelText, "modelTurn.parts[$index].text")
+                        }
                     }
                 }
             }
             if (serverContent.optBoolean("turnComplete", false) ||
                 serverContent.optBoolean("generationComplete", false)
-            ) listener.onTurnComplete()
+            ) {
+                val turns = turnCompleteEvents.incrementAndGet()
+                val stats = responseStats()
+                logger.log(
+                    2,
+                    "GeminiResponse",
+                    "turnComplete event=$turns outputObjects=${stats.outputTranscriptionObjects} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} dispatch=${stats.textDispatchEvents} audioChunks=${stats.audioChunks}",
+                )
+                listener.onTurnComplete()
+            }
         }.onFailure {
             logger.log(0, "GeminiWS", "Không phân tích được thông điệp server length=${text.length}", it)
             deliverError(it)
         }
+    }
+
+    private fun dispatchText(text: String, source: String) {
+        val event = textDispatchEvents.incrementAndGet()
+        logger.log(2, "GeminiResponse", "onText dispatch event=$event source=$source chars=${text.length}")
+        listener.onText(text)
+    }
+
+    private fun logServerContentShape(serverContent: JSONObject) {
+        val keys = ArrayList<String>()
+        val keyIterator = serverContent.keys()
+        while (keyIterator.hasNext()) keys += keyIterator.next()
+        keys.sort()
+
+        val partShapes = ArrayList<String>()
+        val parts = serverContent.optJSONObject("modelTurn")?.optJSONArray("parts")
+        if (parts != null) {
+            for (index in 0 until parts.length()) {
+                val part = parts.optJSONObject(index) ?: continue
+                val partKeys = ArrayList<String>()
+                val partIterator = part.keys()
+                while (partIterator.hasNext()) partKeys += partIterator.next()
+                partKeys.sort()
+                partShapes += "$index:${partKeys.joinToString("+")}" 
+            }
+        }
+
+        val shape = buildString {
+            append("keys=").append(keys.joinToString(","))
+            if (partShapes.isNotEmpty()) append(" parts=").append(partShapes.joinToString(";"))
+        }
+        if (shape != lastServerContentShape) {
+            lastServerContentShape = shape
+            logger.log(3, "GeminiResponse", "serverContent shape $shape")
+        }
+    }
+
+    private fun jsonType(value: Any?): String = when (value) {
+        null -> "null"
+        JSONObject.NULL -> "JSONObject.NULL"
+        else -> value.javaClass.simpleName
     }
 
     private fun deliverError(error: Throwable) {
@@ -283,11 +411,12 @@ class GeminiLiveClient(
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
 
         /**
-         * Builds the raw WebSocket setup message used by the working Lua tool.
+         * Builds the raw WebSocket setup message used by the working translation payload.
          *
-         * The translation model only needs responseModalities and translationConfig inside
-         * generationConfig. Transcription objects are intentionally omitted: the server may
-         * still return input/output transcription, and parseMessage handles those opportunistically.
+         * The translation model keeps responseModalities and translationConfig inside
+         * generationConfig. Transcription objects remain intentionally omitted. Context-window
+         * compression belongs directly under setup, alongside sessionResumption, according to
+         * BidiGenerateContentSetup; putting it inside generationConfig would be an invalid schema.
          */
         internal fun createSetupMessage(
             model: String,
@@ -304,6 +433,10 @@ class GeminiLiveClient(
             val setup = JSONObject()
                 .put("model", "models/${model.trim().removePrefix("models/")}")
                 .put("generationConfig", generationConfig)
+                .put(
+                    "contextWindowCompression",
+                    JSONObject().put("slidingWindow", JSONObject()),
+                )
             resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { handle ->
                 setup.put("sessionResumption", JSONObject().put("handle", handle))
             }

@@ -31,6 +31,7 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.oai.geminilivetranslate.audio.FileAudioSource
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
@@ -47,6 +48,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -66,6 +69,9 @@ class MainActivity : AppCompatActivity() {
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
+    private var subtitleRenderEvents = 0L
+    private var lastRenderedTranscriptChars = -1
+    private var selectedFilePlaybackSpeed = 1f
     private val aiStreamValues = listOf("accessibility", "media", "voice_communication", "assistant")
     private val aiStreamLabels = listOf(
         "Trợ năng - ưu tiên nghe rõ",
@@ -145,6 +151,10 @@ class MainActivity : AppCompatActivity() {
             translationService = (binder as? TranslationService.LocalBinder)?.getService()
             bound = translationService != null
             logger.log(2, "Service", "Đã bind TranslationService success=$bound")
+            translationService?.let { service ->
+                selectedFilePlaybackSpeed = service.currentFilePlaybackSpeed()
+                syncFileSpeedUi(selectedFilePlaybackSpeed)
+            }
             pendingSelectedUri?.let { uri ->
                 translationService?.setSelectedFile(uri, pendingSelectedFileName)
                 pendingSelectedUri = null
@@ -240,6 +250,18 @@ class MainActivity : AppCompatActivity() {
         rewindButton.setOnClickListener { translationService?.seekBy(-10_000) }
         forwardButton.setOnClickListener { translationService?.seekBy(10_000) }
 
+        fileSpeedSeekBar.max = FILE_SPEED_STEPS
+        fileSpeedSeekBar.setOnSeekBarChangeListener(seekListener(onChange = { value ->
+            val speed = (1f + value / 10f).coerceIn(
+                FileAudioSource.MIN_PLAYBACK_SPEED,
+                FileAudioSource.MAX_PLAYBACK_SPEED,
+            )
+            selectedFilePlaybackSpeed = speed
+            syncFileSpeedUi(speed)
+            translationService?.setFilePlaybackSpeed(speed)
+        }))
+        syncFileSpeedUi(selectedFilePlaybackSpeed)
+
         progressSeekBar.setOnSeekBarChangeListener(seekListener(onStop = { value ->
             if (translationService?.state?.value?.running == true) translationService?.seekToPercent(value)
         }))
@@ -302,8 +324,12 @@ class MainActivity : AppCompatActivity() {
     private fun observeService() {
         val service = translationService ?: return
         stateJob?.cancel()
+        subtitleRenderEvents = 0L
+        lastRenderedTranscriptChars = -1
+        logger.log(2, "SubtitleUI", "Bắt đầu collect StateFlow lifecycle=${lifecycle.currentState} running=${service.state.value.running} transcriptChars=${service.state.value.transcript.length}")
         stateJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                logger.log(2, "SubtitleUI", "Collector ACTIVE lifecycle=${lifecycle.currentState}")
                 service.state.collect(::render)
             }
         }
@@ -315,7 +341,30 @@ class MainActivity : AppCompatActivity() {
             if (state.health.isNotBlank()) append('\n').append(state.health)
         }
         statusText.contentDescription = statusText.text
+
+        val transcriptChars = state.transcript.length
+        subtitleRenderEvents++
+        if (transcriptChars != lastRenderedTranscriptChars) {
+            logger.log(
+                2,
+                "SubtitleUI",
+                "render event=$subtitleRenderEvents transcriptChars=$transcriptChars previousChars=$lastRenderedTranscriptChars running=${state.running} paused=${state.paused} setup=${state.setupComplete} lifecycle=${lifecycle.currentState}",
+            )
+            lastRenderedTranscriptChars = transcriptChars
+        }
         subtitleText.text = state.transcript.ifBlank { "Chưa có nội dung dịch" }
+        val expectedChars = if (transcriptChars == 0) "Chưa có nội dung dịch".length else transcriptChars
+        val actualChars = subtitleText.text.length
+        if (actualChars != expectedChars) {
+            logger.log(1, "SubtitleUI", "TextView mismatch stateChars=$transcriptChars expectedChars=$expectedChars actualChars=$actualChars")
+        }
+        if (transcriptChars > 0) {
+            logger.log(
+                3,
+                "SubtitleUI",
+                "TextView committed stateChars=$transcriptChars viewChars=$actualChars shown=${subtitleText.isShown} visibility=${subtitleText.visibility} alpha=${subtitleText.alpha} width=${subtitleText.width} height=${subtitleText.height}",
+            )
+        }
         subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
         if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
         progressSeekBar.contentDescription = "Tiến trình phát: ${state.progressPercent}%"
@@ -355,6 +404,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         service.setSourceMode(mode)
+        if (mode == SourceMode.FILE) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         startService(Intent(this, TranslationService::class.java))
         when (mode) {
             SourceMode.FILE -> service.startTranslation(mode)
@@ -387,6 +437,7 @@ class MainActivity : AppCompatActivity() {
         val micMode = mode == SourceMode.MICROPHONE
         selectFileButton.isVisible = fileMode
         fileControls.isVisible = fileMode
+        fileSpeedLayout.isVisible = fileMode
         progressSeekBar.isVisible = fileMode
         originalVolumeSeekBar.isVisible = mode != SourceMode.MICROPHONE
         micLanguageLayout.isVisible = micMode
@@ -410,8 +461,18 @@ class MainActivity : AppCompatActivity() {
         autoDuckingSwitch.isChecked = settings.autoDucking
         exportButton.text = if (settings.exportFormat == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         settingsButton.text = if (settings.uiMode == "simple") "Cài đặt" else "Cài đặt nâng cao"
+        syncFileSpeedUi(selectedFilePlaybackSpeed)
         restoreMicLanguageSpinner()
         applyUiMode()
+    }
+
+    private fun syncFileSpeedUi(speed: Float) = with(binding) {
+        val safe = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        val progress = ((safe - 1f) * 10f).roundToInt().coerceIn(0, FILE_SPEED_STEPS)
+        if (fileSpeedSeekBar.progress != progress) fileSpeedSeekBar.progress = progress
+        val display = String.format(Locale.US, "%.1f", safe)
+        fileSpeedLabel.text = "Tốc độ phát tệp: ${display}×"
+        fileSpeedSeekBar.contentDescription = "Tốc độ phát tệp: $display lần"
     }
 
     private fun restoreMicLanguageSpinner() {
@@ -431,6 +492,7 @@ class MainActivity : AppCompatActivity() {
         autoDuckingSwitch.isVisible = !simple
         aiAudioStreamLayout.isVisible = !simple && aiVoiceSwitch.isChecked
         logButton.isVisible = !simple
+        fileSpeedLayout.isVisible = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
         if (simple && audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal) {
             rewindButton.isVisible = false
             forwardButton.isVisible = false
@@ -555,7 +617,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMicLanguageManager() {
-        val current = preferences.load()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 16, 24, 16) }
         val listContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val addSpinner = android.widget.Spinner(this).apply {
@@ -595,7 +656,7 @@ class MainActivity : AppCompatActivity() {
     private fun rebuildLanguageRows(container: LinearLayout) {
         container.removeAllViews()
         val loaded = preferences.load()
-        loaded.micLanguages.forEachIndexed { index, code ->
+        loaded.micLanguages.forEach { code ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             row.addView(TextView(this).apply {
                 text = LanguageCatalog.displayName(code)
@@ -666,5 +727,9 @@ class MainActivity : AppCompatActivity() {
         override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
             onStop(seekBar?.progress ?: 0)
         }
+    }
+
+    companion object {
+        private const val FILE_SPEED_STEPS = 20
     }
 }

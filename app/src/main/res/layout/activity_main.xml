@@ -161,6 +161,30 @@
                 android:text="Tiến 10 giây" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/fileSpeedLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/fileSpeedLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:labelFor="@id/fileSpeedSeekBar"
+                android:text="Tốc độ phát tệp: 1.0×"
+                android:textSize="15sp" />
+
+            <SeekBar
+                android:id="@+id/fileSpeedSeekBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:contentDescription="Tốc độ phát tệp: 1.0 lần"
+                android:max="20"
+                android:minHeight="48dp"
+                android:progress="0" />
+        </LinearLayout>
+
         <SeekBar
             android:id="@+id/progressSeekBar"
             android:layout_width="match_parent"

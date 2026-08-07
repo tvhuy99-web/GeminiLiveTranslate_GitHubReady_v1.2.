@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.oai.geminilivetranslate"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.oai.geminilivetranslate"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 10202
         versionName = "1.2.2"
 

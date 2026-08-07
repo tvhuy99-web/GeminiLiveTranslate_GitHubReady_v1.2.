@@ -2,6 +2,7 @@ package com.oai.geminilivetranslate.audio
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import kotlin.math.PI
 import kotlin.math.sin
@@ -45,6 +46,33 @@ class StreamingPcmConverterTest {
 
         assertEquals(160, samples.size)
         assertEquals(10_000, samples.first().toInt())
+    }
+
+    @Test
+    fun constructorRejectsUnsupportedEncoding() {
+        assertThrows(IllegalArgumentException::class.java) {
+            StreamingPcmConverter(
+                sourceRate = 48_000,
+                channels = 2,
+                encoding = 99_999,
+            )
+        }
+    }
+
+    @Test
+    fun reconfigureRejectsUnsupportedEncodingBeforeChangingPipeline() {
+        val converter = StreamingPcmConverter(sourceRate = 48_000, channels = 1)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            converter.reconfigure(
+                sourceRate = 44_100,
+                channels = 2,
+                encoding = 99_999,
+            )
+        }
+
+        val output = converter.process(monoRamp(480)) + converter.flush()
+        assertEquals(160, PcmTools.bytesToShorts(output).size)
     }
 
     private fun stereoSineWave(sampleRate: Int, seconds: Int): ByteArray {

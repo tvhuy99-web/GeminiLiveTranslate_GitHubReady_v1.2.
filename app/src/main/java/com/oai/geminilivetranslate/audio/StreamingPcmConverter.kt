@@ -21,17 +21,20 @@ class StreamingPcmConverter(
 ) {
     private var sourceRate = requirePositive(sourceRate, "sourceRate")
     private var channels = requirePositive(channels, "channels")
-    private var encoding = encoding
+    private var encoding = requireSupportedEncoding(encoding)
     private var rawRemainder = ByteArray(0)
     private var sampleBuffer = ShortArray(0)
     private var sourcePosition = 0.0
 
     @Synchronized
     fun reconfigure(sourceRate: Int, channels: Int, encoding: Int): ByteArray {
+        val nextSourceRate = requirePositive(sourceRate, "sourceRate")
+        val nextChannels = requirePositive(channels, "channels")
+        val nextEncoding = requireSupportedEncoding(encoding)
         val tail = flush()
-        this.sourceRate = requirePositive(sourceRate, "sourceRate")
-        this.channels = requirePositive(channels, "channels")
-        this.encoding = encoding
+        this.sourceRate = nextSourceRate
+        this.channels = nextChannels
+        this.encoding = nextEncoding
         resetInternal()
         return tail
     }
@@ -68,7 +71,8 @@ class StreamingPcmConverter(
         val bytesPerSample = when (encoding) {
             AudioFormat.ENCODING_PCM_FLOAT -> 4
             AudioFormat.ENCODING_PCM_8BIT -> 1
-            else -> 2
+            AudioFormat.ENCODING_PCM_16BIT -> 2
+            else -> error("PCM encoding không được hỗ trợ: $encoding")
         }
         val frameBytes = bytesPerSample * channels
         val safeLength = requestedLength.coerceIn(0, input.size)
@@ -112,7 +116,7 @@ class StreamingPcmConverter(
                         .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
                 }
             }
-            else -> {
+            AudioFormat.ENCODING_PCM_16BIT -> {
                 var index = 0
                 for (frame in 0 until frames) {
                     var sum = 0L
@@ -126,6 +130,7 @@ class StreamingPcmConverter(
                         .coerceIn(Short.MIN_VALUE.toLong(), Short.MAX_VALUE.toLong()).toShort()
                 }
             }
+            else -> error("PCM encoding không được hỗ trợ: $encoding")
         }
         return output
     }
@@ -183,6 +188,15 @@ class StreamingPcmConverter(
 
     private fun requirePositive(value: Int, name: String): Int {
         require(value > 0) { "$name phải lớn hơn 0" }
+        return value
+    }
+
+    private fun requireSupportedEncoding(value: Int): Int {
+        require(
+            value == AudioFormat.ENCODING_PCM_8BIT ||
+                value == AudioFormat.ENCODING_PCM_16BIT ||
+                value == AudioFormat.ENCODING_PCM_FLOAT
+        ) { "PCM encoding không được hỗ trợ: $value" }
         return value
     }
 }

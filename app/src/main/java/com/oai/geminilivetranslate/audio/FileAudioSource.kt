@@ -10,6 +10,7 @@ import android.os.SystemClock
 import com.oai.geminilivetranslate.core.SessionLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -18,6 +19,7 @@ class FileAudioSource(
     private val uri: Uri,
     private val pacingEnabled: Boolean,
     private val leadMs: Int,
+    initialPlaybackSpeed: Float = 1f,
     private val logger: SessionLogger? = null,
 ) : AudioSource {
     override val supportsSeek: Boolean = true
@@ -25,7 +27,9 @@ class FileAudioSource(
     private val paused = AtomicBoolean(false)
     private val pendingSeekMs = AtomicLong(NO_SEEK)
     private val currentPositionMs = AtomicLong(0)
+    private val pacingResetRequested = AtomicBoolean(false)
     @Volatile private var durationMs: Long = 0
+    @Volatile private var playbackSpeed: Float = initialPlaybackSpeed.coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
 
     override suspend fun run(listener: AudioSource.Listener) {
         var extractor: MediaExtractor? = null
@@ -39,7 +43,11 @@ class FileAudioSource(
             val inputFormat = extractor.getTrackFormat(trackIndex)
             val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: error("Không xác định codec âm thanh")
             durationMs = inputFormat.getLongOrDefault(MediaFormat.KEY_DURATION, 0L) / 1_000L
-            logger?.log(2, "FileAudio", "Mở tệp mime=$mime durationMs=$durationMs inputRate=${inputFormat.getIntOrDefault(MediaFormat.KEY_SAMPLE_RATE, 0)} channels=${inputFormat.getIntOrDefault(MediaFormat.KEY_CHANNEL_COUNT, 0)} pacing=$pacingEnabled leadMs=$leadMs")
+            logger?.log(
+                2,
+                "FileAudio",
+                "Mở tệp mime=$mime durationMs=$durationMs inputRate=${inputFormat.getIntOrDefault(MediaFormat.KEY_SAMPLE_RATE, 0)} channels=${inputFormat.getIntOrDefault(MediaFormat.KEY_CHANNEL_COUNT, 0)} pacing=$pacingEnabled leadMs=$leadMs speed=${formatSpeed(playbackSpeed)}x",
+            )
             runCatching { inputFormat.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT) }
             codec = MediaCodec.createDecoderByType(mime).apply {
                 configure(inputFormat, null, null, 0)
@@ -113,12 +121,15 @@ class FileAudioSource(
                             outputBuffer.limit(info.offset + info.size)
                             val raw = ByteArray(info.size)
                             outputBuffer.get(raw)
-                            if (basePtsUs < 0) {
+                            val now = SystemClock.elapsedRealtime()
+                            if (basePtsUs < 0 || pacingResetRequested.getAndSet(false)) {
                                 basePtsUs = info.presentationTimeUs
-                                baseWallMs = SystemClock.elapsedRealtime()
+                                baseWallMs = now
                             }
                             if (pacingEnabled) {
-                                val expected = baseWallMs + ((info.presentationTimeUs - basePtsUs) / 1_000L) - leadMs
+                                val speed = playbackSpeed.coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
+                                val mediaElapsedMs = (info.presentationTimeUs - basePtsUs).coerceAtLeast(0L) / 1_000.0
+                                val expected = baseWallMs + (mediaElapsedMs / speed).toLong() - leadMs
                                 val wait = expected - SystemClock.elapsedRealtime()
                                 if (wait > 0) delay(wait.coerceAtMost(250))
                             }
@@ -135,7 +146,7 @@ class FileAudioSource(
             }
             if (!stopped.get()) {
                 converter.flush().takeIf { it.isNotEmpty() }?.let(listener::onPcm16Mono16k)
-                logger?.log(2, "FileAudio", "Giải mã hoàn tất positionMs=${currentPositionMs.get()} durationMs=$durationMs")
+                logger?.log(2, "FileAudio", "Giải mã hoàn tất positionMs=${currentPositionMs.get()} durationMs=$durationMs speed=${formatSpeed(playbackSpeed)}x")
                 listener.onCompleted()
             }
         } catch (error: Throwable) {
@@ -152,13 +163,24 @@ class FileAudioSource(
         }
     }
 
+    fun setPlaybackSpeed(speed: Float) {
+        val safe = speed.coerceIn(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
+        if (kotlin.math.abs(playbackSpeed - safe) < 0.001f) return
+        playbackSpeed = safe
+        pacingResetRequested.set(true)
+        logger?.log(2, "FileAudio", "Đổi tốc độ phát speed=${formatSpeed(safe)}x")
+    }
+
+    fun currentPlaybackSpeed(): Float = playbackSpeed
+
     override fun pause() {
         paused.set(true)
         logger?.log(2, "FileAudio", "Tạm dừng giải mã")
     }
     override fun resume() {
+        pacingResetRequested.set(true)
         paused.set(false)
-        logger?.log(2, "FileAudio", "Tiếp tục giải mã")
+        logger?.log(2, "FileAudio", "Tiếp tục giải mã speed=${formatSpeed(playbackSpeed)}x")
     }
     override fun seekBy(deltaMs: Long) {
         val pending = pendingSeekMs.get()
@@ -182,5 +204,11 @@ class FileAudioSource(
     private fun MediaFormat.getLongOrDefault(key: String, default: Long): Long =
         runCatching { getLong(key) }.getOrDefault(default)
 
-    companion object { private const val NO_SEEK = Long.MIN_VALUE }
+    private fun formatSpeed(speed: Float): String = String.format(Locale.US, "%.1f", speed)
+
+    companion object {
+        private const val NO_SEEK = Long.MIN_VALUE
+        const val MIN_PLAYBACK_SPEED = 1f
+        const val MAX_PLAYBACK_SPEED = 3f
+    }
 }

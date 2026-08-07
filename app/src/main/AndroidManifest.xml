@@ -11,6 +11,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.tts.engine.CHECK_TTS_DATA" />
+        </intent>
+    </queries>
+
     <application
         android:name=".GeminiTranslateApp"
         android:allowBackup="false"
@@ -23,6 +32,9 @@
 
         <activity
             android:name=".ui.LogViewerActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.TtsSettingsActivity"
             android:exported="false" />
         <activity
             android:name=".ui.SettingsActivity"

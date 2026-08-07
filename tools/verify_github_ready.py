@@ -59,8 +59,8 @@ def verify_wrapper() -> None:
         fail(f"Invalid wrapper JAR: {error}")
     properties = (ROOT / "gradle/wrapper/gradle-wrapper.properties").read_text(encoding="utf-8")
     for token in [
-        "gradle-8.10.2-bin.zip",
-        "distributionSha256Sum=31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26",
+        "gradle-8.11.1-bin.zip",
+        "distributionSha256Sum=f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6",
     ]:
         if token not in properties:
             fail(f"Wrapper properties are missing token: {token}")
@@ -133,6 +133,10 @@ def main() -> None:
     if "./gradlew --no-daemon :app:dependencies" not in dependency:
         fail("Dependency submission does not use the verified project wrapper")
 
+    root_build = (ROOT / "build.gradle.kts").read_text(encoding="utf-8")
+    if 'id("com.android.application") version "8.10.1"' not in root_build:
+        fail("Android Gradle Plugin must stay pinned to 8.10.1 for API 36 builds")
+
     build = (ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
     for token in [
         "RELEASE_STORE_FILE",
@@ -140,6 +144,8 @@ def main() -> None:
         "signingConfigs",
         "enableV3Signing",
         'applicationIdSuffix = ".debug"',
+        "compileSdk = 36",
+        "targetSdk = 36",
         "versionCode = 10202",
         'versionName = "1.2.2"',
         ".github/signing/stable-debug.keystore.b64",
@@ -152,13 +158,21 @@ def main() -> None:
     for forbidden in ['.put("inputAudioTranscription"', '.put("outputAudioTranscription"']:
         if forbidden in client:
             fail(f"Gemini setup reintroduced unsupported field: {forbidden}")
-    for token in ["createSetupMessage", "responseModalities", "translationConfig", "targetLanguageCode"]:
+    for token in [
+        "createSetupMessage",
+        "responseModalities",
+        "translationConfig",
+        "targetLanguageCode",
+        "contextWindowCompression",
+        "slidingWindow",
+    ]:
         if token not in client:
             fail(f"Gemini setup is missing token: {token}")
 
     print(f"[OK] Verified wrapper bootstrap SHA-256: {WRAPPER_SHA256}")
-    print("[OK] Gradle 8.10.2 distribution is pinned with SHA-256")
-    print("[OK] Gemini setup matches the working Lua translation payload")
+    print("[OK] Gradle 8.11.1 distribution is pinned with SHA-256")
+    print("[OK] AGP 8.10.1 with compileSdk/targetSdk 36 is pinned")
+    print("[OK] Gemini setup keeps the working translation payload and enables top-level context compression")
     print("[OK] Debug package/version are fixed for update installation")
     print(f"[OK] Stable debug certificate is pinned: {STABLE_DEBUG_CERT_SHA256}")
     print(f"[OK] Stable debug keystore SHA-256: {STABLE_DEBUG_KEYSTORE_SHA256}")

@@ -11,8 +11,8 @@ android {
         applicationId = "com.oai.geminilivetranslate"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10202
-        versionName = "1.2.2"
+        versionCode = 10203
+        versionName = "1.2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -61,6 +61,16 @@ android {
         updateKeyPassword,
     ).all { !it.isNullOrBlank() }
 
+    val bundledDebugKey = rootProject.file(".github/signing/stable-debug.keystore.b64")
+    val bundledDebugStore = layout.buildDirectory.file("signing/stable-debug.keystore").get().asFile
+    val hasBundledDebugSigning = bundledDebugKey.isFile
+    if (hasBundledDebugSigning) {
+        bundledDebugStore.parentFile.mkdirs()
+        bundledDebugStore.writeBytes(
+            java.util.Base64.getMimeDecoder().decode(bundledDebugKey.readText().trim()),
+        )
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -86,14 +96,28 @@ android {
                 enableV4Signing = true
             }
         }
+        if (hasBundledDebugSigning) {
+            create("stableDebug") {
+                storeFile = bundledDebugStore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            if (hasUpdateSigning) {
-                signingConfig = signingConfigs.getByName("update")
+            signingConfig = when {
+                hasUpdateSigning -> signingConfigs.getByName("update")
+                hasBundledDebugSigning -> signingConfigs.getByName("stableDebug")
+                else -> signingConfig
             }
         }
         release {

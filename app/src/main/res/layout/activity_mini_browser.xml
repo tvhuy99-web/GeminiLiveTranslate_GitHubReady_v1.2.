@@ -8,6 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:accessibilityHeading="true"
         android:gravity="center"
         android:padding="6dp"
         android:text="Trình duyệt mini"
@@ -23,6 +24,7 @@
             android:id="@+id/browserBackButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
             android:text="Quay lại" />
 
         <EditText
@@ -30,14 +32,18 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:contentDescription="Địa chỉ web hoặc từ khóa tìm kiếm"
             android:hint="Dán liên kết hoặc tìm Google"
             android:inputType="textUri"
+            android:minHeight="48dp"
             android:singleLine="true" />
 
         <Button
             android:id="@+id/goButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:contentDescription="Mở địa chỉ web hoặc tìm kiếm"
+            android:minHeight="48dp"
             android:text="Đi" />
     </LinearLayout>
 
@@ -45,6 +51,7 @@
         android:id="@+id/browserStatusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:accessibilityLiveRegion="polite"
         android:paddingTop="8dp"
         android:paddingBottom="8dp"
         android:text="Chế độ hiện tại: Đang kiểm tra\nTrạng thái: Sẵn sàng"
@@ -66,6 +73,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:minHeight="48dp"
             android:text="Tua lùi 10 giây" />
 
         <Button
@@ -73,6 +81,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:minHeight="48dp"
             android:text="Phát" />
 
         <Button
@@ -80,6 +89,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:minHeight="48dp"
             android:text="Tua tiến 10 giây" />
     </LinearLayout>
 
@@ -87,24 +97,30 @@
         android:id="@+id/videoProgressSeekBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:max="100" />
+        android:contentDescription="Vị trí video"
+        android:max="100"
+        android:minHeight="48dp" />
 
     <SeekBar
         android:id="@+id/videoVolumeSeekBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:contentDescription="Âm lượng video"
         android:max="100"
+        android:minHeight="48dp"
         android:progress="100" />
 
     <Button
         android:id="@+id/browserTranslateButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:minHeight="48dp"
         android:text="Bắt đầu dịch" />
 
     <Button
         android:id="@+id/closeBrowserButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:minHeight="48dp"
         android:text="Đóng trình duyệt" />
 </LinearLayout>

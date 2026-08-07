@@ -124,7 +124,7 @@ object SettingsAccessibilityBridge : Application.ActivityLifecycleCallbacks {
         return result
     }
 
-    private inline fun walk(root: View, crossinline visitor: (View) -> Unit) {
+    private fun walk(root: View, visitor: (View) -> Unit) {
         visitor(root)
         if (root !is ViewGroup) return
         for (index in 0 until root.childCount) {

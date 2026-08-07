@@ -76,12 +76,6 @@ class TtsSettingsActivity : AppCompatActivity() {
             setPadding(0, dp(4), 0, dp(8))
             ViewCompat.setAccessibilityHeading(this, true)
         })
-        outer.addView(TextView(this).apply {
-            text = "Ba lựa chọn liên kết với nhau: bộ đọc quyết định ngôn ngữ có thể dùng, ngôn ngữ quyết định các giọng đọc có thể chọn. Mặc định ưu tiên Tiếng Việt (vi-VN)."
-            textSize = 14f
-            setTextColor(themeColor(android.R.attr.textColorSecondary))
-            setPadding(0, 0, 0, dp(12))
-        })
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -112,11 +106,6 @@ class TtsSettingsActivity : AppCompatActivity() {
         }
         sectionLabel("Bộ đọc", engineSpinner)
         content.addView(engineSpinner)
-        content.addView(TextView(this).apply {
-            text = "Chỉ hiển thị các bộ đọc TTS mà Android nhìn thấy trên thiết bị."
-            textSize = 13f
-            setTextColor(themeColor(android.R.attr.textColorSecondary))
-        })
 
         languageSpinner = Spinner(this).apply {
             id = View.generateViewId()
@@ -125,11 +114,6 @@ class TtsSettingsActivity : AppCompatActivity() {
         }
         sectionLabel("Ngôn ngữ", languageSpinner)
         content.addView(languageSpinner)
-        content.addView(TextView(this).apply {
-            text = "Danh sách này được lấy từ bộ đọc đang chọn. Tiếng Việt được ưu tiên làm mặc định khi bộ đọc hỗ trợ."
-            textSize = 13f
-            setTextColor(themeColor(android.R.attr.textColorSecondary))
-        })
 
         voiceSpinner = Spinner(this).apply {
             id = View.generateViewId()
@@ -138,14 +122,9 @@ class TtsSettingsActivity : AppCompatActivity() {
         }
         sectionLabel("Giọng đọc", voiceSpinner)
         content.addView(voiceSpinner)
-        content.addView(TextView(this).apply {
-            text = "Chỉ các giọng thuộc đúng ngôn ngữ đang chọn mới xuất hiện. Giọng cần mạng sẽ được ghi rõ."
-            textSize = 13f
-            setTextColor(themeColor(android.R.attr.textColorSecondary))
-        })
 
         statusText = TextView(this).apply {
-            text = "Đang tìm bộ đọc TTS..."
+            text = "Đang tải..."
             textSize = 14f
             setPadding(0, dp(18), 0, dp(10))
         }
@@ -189,7 +168,7 @@ class TtsSettingsActivity : AppCompatActivity() {
     private fun loadEngines() {
         engines = scanner.discoverEngines()
         if (engines.isEmpty()) {
-            status("Không tìm thấy bộ đọc TTS nào trên thiết bị.", error = true)
+            status("Không tìm thấy bộ đọc TTS.", error = true)
             return
         }
 
@@ -227,7 +206,7 @@ class TtsSettingsActivity : AppCompatActivity() {
         voiceSpinner.isEnabled = false
         previewButton.isEnabled = false
         saveButton.isEnabled = false
-        status("Đang đọc ngôn ngữ và giọng của ${engine.label}...")
+        status("Đang tải...")
 
         scanner.inspect(engine) { result ->
             if (generation != catalogGeneration || isFinishing || isDestroyed) return@inspect
@@ -237,14 +216,14 @@ class TtsSettingsActivity : AppCompatActivity() {
                 currentVoices = emptyList()
                 languageSpinner.adapter = adapter(listOf("Không có dữ liệu"))
                 voiceSpinner.adapter = adapter(listOf("Không có dữ liệu"))
-                status("Không đọc được dữ liệu của bộ đọc này: ${it.message ?: "lỗi không xác định"}", error = true)
+                status("Không đọc được bộ đọc này.", error = true)
             }.onSuccess { catalog ->
                 currentCatalog = catalog
                 currentLanguages = catalog.languages
                 if (currentLanguages.isEmpty()) {
-                    languageSpinner.adapter = adapter(listOf("Bộ đọc không báo ngôn ngữ hỗ trợ"))
+                    languageSpinner.adapter = adapter(listOf("Không có ngôn ngữ"))
                     voiceSpinner.adapter = adapter(listOf("Không có giọng đọc"))
-                    status("Bộ đọc đã mở nhưng không cung cấp danh sách ngôn ngữ.", error = true)
+                    status("Không có ngôn ngữ.", error = true)
                     return@onSuccess
                 }
 
@@ -261,9 +240,7 @@ class TtsSettingsActivity : AppCompatActivity() {
                 )
                 initialEngineLoad = false
                 bindLanguages(selectedLanguage.languageTag)
-                status(
-                    "Đã đọc ${catalog.languages.size} ngôn ngữ và ${catalog.voices.size} giọng từ ${catalog.resolvedEnginePackage.ifBlank { engine.label }}.",
-                )
+                status("Sẵn sàng")
                 saveButton.isEnabled = true
             }
         }
@@ -336,11 +313,11 @@ class TtsSettingsActivity : AppCompatActivity() {
     private fun previewSelection() {
         val safe = TtsPreferences.sanitize(draft)
         previewButton.isEnabled = false
-        status("Đang phát giọng thử ${safe.languageTag}...")
-        previewSpeaker.speak(safe) { success, message ->
+        status("Đang nghe thử...")
+        previewSpeaker.speak(safe) { success, _ ->
             if (isFinishing || isDestroyed) return@speak
             previewButton.isEnabled = currentCatalog != null
-            status(message, error = !success)
+            status(if (success) "Sẵn sàng" else "Nghe thử thất bại.", error = !success)
         }
     }
 
@@ -353,8 +330,8 @@ class TtsSettingsActivity : AppCompatActivity() {
             "TTSSettings",
             "Đã lưu TTS engine=${safe.enginePackage.ifBlank { "DEFAULT" }} language=${safe.languageTag} voice=${safe.voiceName.ifBlank { "DEFAULT" }}",
         )
-        toast("Đã lưu bộ đọc, ngôn ngữ và giọng TTS")
-        status("Đã lưu. TTS sẽ dùng lựa chọn này từ câu đọc tiếp theo.")
+        toast("Đã lưu TTS")
+        status("Đã lưu")
     }
 
     private fun status(message: String, error: Boolean = false) {

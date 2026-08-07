@@ -22,6 +22,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
+import com.oai.geminilivetranslate.audio.TtsPreferences
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -315,6 +316,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         title("Giọng đọc của điện thoại")
+        rowButton("Cài đặt TTS: bộ đọc, ngôn ngữ, giọng đọc") {
+            startActivity(Intent(this, TtsSettingsActivity::class.java))
+        }
+        description("Chọn bộ đọc TTS trên máy, sau đó chỉ chọn ngôn ngữ mà bộ đọc đó hỗ trợ và chỉ chọn giọng thuộc ngôn ngữ đã chọn. Mặc định ưu tiên Tiếng Việt. Có nút Nghe thử trong màn hình TTS.")
         check(
             label = "Ghép các câu ngắn trước khi đọc",
             checked = draft.ttsSmoothEnabled,
@@ -660,9 +665,10 @@ class SettingsActivity : AppCompatActivity() {
         positive = "Khôi phục",
     ) {
         val restored = preferences.restoreDefaultsPreservingKeys()
+        TtsPreferences(this).reset()
         draft = restored
         original = restored
-        logger.log(1, "Settings", "Đã khôi phục cài đặt mặc định")
+        logger.log(1, "Settings", "Đã khôi phục cài đặt mặc định, TTS trở về vi-VN")
         startService(
             Intent(this, TranslationService::class.java)
                 .setAction(TranslationService.ACTION_APPLY_SETTINGS),
@@ -720,6 +726,7 @@ class SettingsActivity : AppCompatActivity() {
         apiKeys.clear()
         logger.clear()
         preferences.clear()
+        TtsPreferences(this).clear()
         PublicRecordingStore(this, logger).deleteAll()
         File(cacheDir, "diagnostic-share").deleteRecursively()
         DiagnosticContext.clearAll()

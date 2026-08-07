@@ -15,7 +15,7 @@ import java.util.UUID
  * Defensive Android TTS wrapper for devices whose default TextToSpeech engine is unreliable.
  *
  * Strategy adapted from the project's chess/Xiangqi Android TTS plugin:
- * 1. Discover every visible TTS service through PackageManager.
+ * 1. Discover visible TTS services, with ACTION_CHECK_TTS_DATA as a second discovery route.
  * 2. Try the system default engine, then each explicit engine package.
  * 3. Add an init timeout because some Chinese ROMs never call OnInitListener.
  * 4. Set the requested locale with language-only fallback.
@@ -113,19 +113,41 @@ class RobustTtsEngine(
 
     private fun discoverEngineCandidates(): List<String?> {
         val packages = linkedSetOf<String>()
+        val packageManager = appContext.packageManager
+
         runCatching {
             val intent = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE)
-            val services = appContext.packageManager.queryIntentServices(intent, 0)
+            val services = packageManager.queryIntentServices(intent, 0)
+            logger.log(2, "TTS", "TTS_SERVICE discovery count=${services.size}")
             services.forEach { info ->
                 val packageName = info.serviceInfo?.packageName ?: return@forEach
-                if (packageName.isNotBlank()) {
-                    packages += packageName
-                    val label = runCatching { info.loadLabel(appContext.packageManager)?.toString() }.getOrNull()
-                    logger.log(2, "TTS", "Phát hiện engine package=$packageName label=${label ?: packageName}")
+                if (packageName.isNotBlank() && packages.add(packageName)) {
+                    val label = runCatching { info.loadLabel(packageManager)?.toString() }.getOrNull()
+                    logger.log(2, "TTS", "Phát hiện engine service package=$packageName label=${label ?: packageName}")
                 }
             }
         }.onFailure {
             logger.log(1, "TTS", "Không quét được TTS_SERVICE qua PackageManager", it)
+        }
+
+        // Some vendor ROMs expose only a CHECK_TTS_DATA activity, not a queryable service.
+        runCatching {
+            val checkIntent = Intent(TextToSpeech.Engine.ACTION_CHECK_TTS_DATA)
+            val activities = packageManager.queryIntentActivities(checkIntent, 0)
+            logger.log(2, "TTS", "CHECK_TTS_DATA discovery count=${activities.size}")
+            activities.forEach { info ->
+                val packageName = info.activityInfo?.packageName ?: return@forEach
+                if (packageName.isNotBlank() && packages.add(packageName)) {
+                    val label = runCatching { info.loadLabel(packageManager)?.toString() }.getOrNull()
+                    logger.log(2, "TTS", "Phát hiện engine check-data package=$packageName label=${label ?: packageName}")
+                }
+            }
+        }.onFailure {
+            logger.log(1, "TTS", "Không quét được ACTION_CHECK_TTS_DATA", it)
+        }
+
+        if (packages.isEmpty()) {
+            logger.log(1, "TTS", "PackageManager không thấy engine TTS nào; vẫn thử engine mặc định của hệ thống")
         }
 
         return buildList {

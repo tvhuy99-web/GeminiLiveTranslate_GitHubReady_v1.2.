@@ -64,7 +64,7 @@ android {
     ).all { !it.isNullOrBlank() }
 
     val bundledDebugKey = rootProject.file(".github/signing/stable-debug.keystore.b64")
-    val bundledDebugStore = layout.buildDirectory.file("signing/stable-debug.keystore").get().asFile
+    val bundledDebugStore = rootProject.file(".gradle/stable-debug.keystore")
     val hasBundledDebugSigning = bundledDebugKey.isFile
     if (hasBundledDebugSigning) {
         bundledDebugStore.parentFile.mkdirs()

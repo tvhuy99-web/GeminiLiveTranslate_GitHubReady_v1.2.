@@ -3,42 +3,58 @@
 Android chỉ cho phép APK mới cập nhật APK cũ khi đồng thời thỏa mãn:
 
 1. cùng `applicationId`;
-2. `versionCode` mới lớn hơn bản đang cài;
+2. `versionCode` mới không thấp hơn yêu cầu cập nhật của Android;
 3. cùng chứng thư ký.
 
-Bản debug dùng package cố định `com.oai.geminilivetranslate.debug`. CI không dùng debug key ngẫu nhiên của runner cho APK phát hành nữa. Keystore cập nhật phải được lưu bằng bốn GitHub Actions Secrets:
-
-- `ANDROID_UPDATE_KEYSTORE_BASE64`
-- `ANDROID_UPDATE_KEYSTORE_PASSWORD`
-- `ANDROID_UPDATE_KEY_ALIAS`
-- `ANDROID_UPDATE_KEY_PASSWORD`
-
-Fingerprint được CI khóa tại:
+Bản debug dùng package cố định:
 
 ```text
-46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b
+com.oai.geminilivetranslate.debug
 ```
 
-## Thiết lập
+## Khóa ổn định cho bản debug
 
-1. Mở repository trên GitHub.
-2. Chọn **Settings > Secrets and variables > Actions**.
-3. Tạo bốn repository secrets bằng dữ liệu trong gói ký được cung cấp riêng.
-4. Chạy workflow **Android CI** trên nhánh `main`.
-5. Tải `GeminiLiveTranslate-debug-latest.apk` trong prerelease `debug-latest`.
+Các máy GitHub-hosted runner không còn tự tạo debug key ngẫu nhiên. Mọi bản debug mặc định dùng khóa kiểm thử cố định tại:
 
-Không commit keystore hoặc file chứa secret vào repository.
+```text
+.github/signing/stable-debug.keystore.b64
+```
 
-## Lần chuyển đổi đầu tiên
+Fingerprint SHA-256 bắt buộc:
 
-Các APK 1.2.0 trước đây được GitHub-hosted runner ký bằng debug key tạm thời. Fingerprint thực tế đã thay đổi giữa các lần chạy, nên khóa đã ký bản đang cài không thể được tái tạo. Vì thế cần gỡ bản 1.2.0 cũ đúng một lần trước khi cài 1.2.1 dùng khóa ổn định. Từ 1.2.1 trở đi, APK mới có thể cài đè trực tiếp miễn là giữ nguyên keystore này và tăng `versionCode`.
+```text
+85e27156c4557de4f35b6ebe771dd426f108182894219ff3b6dbed607a230c95
+```
 
-## Asset trên GitHub Release
+`app/build.gradle.kts`, `tools/verify_github_ready.py` và workflow `Android CI` cùng khóa fingerprint này. Build sẽ thất bại nếu tệp ký hoặc chứng thư APK bị thay đổi ngoài ý muốn.
 
-Workflow dùng một tên cố định:
+Khóa này chỉ dành cho package debug trong repository riêng tư. Bất kỳ ai có quyền đọc repository đều có thể dùng nó để ký bản debug, vì vậy tuyệt đối không dùng nó cho package phát hành chính thức. Bản release tiếp tục dùng keystore bảo mật riêng qua GitHub Actions Secrets.
+
+## Lần chuyển đổi duy nhất
+
+APK đang có trên thiết bị được ký bằng một debug key tạm thời trước đây. Khóa bí mật đó không thể được khôi phục từ APK, nên Android không cho bản dùng khóa mới cài đè lên bản cũ.
+
+Cần thực hiện đúng một lần:
+
+1. ghi lại API key hoặc cài đặt quan trọng;
+2. gỡ bản `com.oai.geminilivetranslate.debug` đang có;
+3. cài APK chuyển đổi được ký bằng fingerprint cố định ở trên.
+
+Sau lần này, không thay đổi hoặc tạo lại `stable-debug.keystore.b64`. Mỗi bản mới chỉ cần tăng `versionCode` và có thể cài đè trực tiếp.
+
+## Kiểm tra trước khi phát hành
+
+Workflow `Android CI` thực hiện:
+
+- unit test;
+- Android Lint;
+- kiểm tra cấu trúc APK;
+- kiểm tra package và phiên bản;
+- xác minh chữ ký bằng `apksigner`;
+- so sánh fingerprint thực tế với fingerprint cố định.
+
+APK mới nhất được cập nhật tại prerelease `debug-latest` với tên:
 
 ```text
 GeminiLiveTranslate-debug-latest.apk
 ```
-
-Mỗi lần phát hành, workflow xóa asset cũ trong prerelease `debug-latest` rồi tải asset mới lên. Vì vậy trang Release không tích lũy nhiều APK debug cũ.

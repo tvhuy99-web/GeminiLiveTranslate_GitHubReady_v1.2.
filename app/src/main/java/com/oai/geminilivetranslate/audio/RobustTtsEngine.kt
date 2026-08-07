@@ -16,9 +16,9 @@ import java.util.UUID
  *
  * Strategy adapted from the project's chess/Xiangqi Android TTS plugin:
  * 1. Discover visible TTS services, with ACTION_CHECK_TTS_DATA as a second discovery route.
- * 2. Try the system default engine, then each explicit engine package.
+ * 2. Prefer the engine selected in TTS settings, then try the system default and other engines.
  * 3. Add an init timeout because some Chinese ROMs never call OnInitListener.
- * 4. Set the requested locale with language-only fallback.
+ * 4. Apply the selected TTS language and selected voice, with language-only fallback.
  * 5. Retry speak without Bundle parameters when an engine rejects them.
  */
 class RobustTtsEngine(
@@ -27,10 +27,12 @@ class RobustTtsEngine(
 ) {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val ttsPreferences = TtsPreferences(appContext)
 
     @Volatile private var tts: TextToSpeech? = null
     @Volatile private var ready = false
     @Volatile private var activeEngine: String? = null
+    @Volatile private var configuredEnginePreference: String = ""
 
     private var initGeneration = 0L
     private var activeAttemptIndex = -1
@@ -41,11 +43,13 @@ class RobustTtsEngine(
             val generation = ++initGeneration
             ready = false
             activeEngine = null
-            val candidates = discoverEngineCandidates()
+            val selection = ttsPreferences.load()
+            configuredEnginePreference = selection.enginePackage
+            val candidates = discoverEngineCandidates(selection.enginePackage)
             logger.log(
                 2,
                 "TTS",
-                "Khởi tạo robust TTS candidates=${candidates.size} engines=${candidates.filterNotNull().joinToString()}",
+                "Khởi tạo robust TTS preferred=${selection.enginePackage.ifBlank { "DEFAULT" }} language=${selection.languageTag} voice=${selection.voiceName.ifBlank { "DEFAULT" }} candidates=${candidates.size} engines=${candidates.filterNotNull().joinToString()}",
             )
             tryCandidate(candidates, 0, generation, onReady)
         }
@@ -66,8 +70,24 @@ class RobustTtsEngine(
         val engine = tts ?: return false
         if (!ready || text.isBlank()) return false
 
+        val selection = ttsPreferences.load()
+        if (selection.enginePackage != configuredEnginePreference) {
+            logger.log(
+                2,
+                "TTS",
+                "Bộ đọc đã đổi từ ${configuredEnginePreference.ifBlank { "DEFAULT" }} sang ${selection.enginePackage.ifBlank { "DEFAULT" }}; yêu cầu khởi tạo lại trước khi đọc",
+            )
+            return false
+        }
+
         return runCatching {
-            setLocale(engine, languageTag)
+            val selectedLanguage = selection.languageTag.ifBlank { languageTag.ifBlank { TtsPreferences.DEFAULT_TTS_LANGUAGE } }
+            val localeApplied = setLocale(engine, selectedLanguage)
+            if (!localeApplied && !selectedLanguage.equals(languageTag, ignoreCase = true)) {
+                logger.log(1, "TTS", "Locale TTS đã chọn $selectedLanguage không dùng được; thử locale bản dịch $languageTag")
+                setLocale(engine, languageTag)
+            }
+            applySelectedVoice(engine, selection.voiceName, selectedLanguage)
             engine.setSpeechRate(rate.coerceIn(0.5f, 3f))
             engine.setPitch(pitch.coerceIn(0.5f, 2f))
             val queueMode = if (queue) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH
@@ -83,7 +103,11 @@ class RobustTtsEngine(
                 result = engine.speak(text, queueMode, null, utteranceId)
             }
             if (result == TextToSpeech.SUCCESS) {
-                logger.log(3, "TTS", "Đã xếp câu đọc chars=${text.length} rate=${"%.2f".format(Locale.US, rate)} engine=${activeEngine ?: "default"}")
+                logger.log(
+                    3,
+                    "TTS",
+                    "Đã xếp câu đọc chars=${text.length} rate=${"%.2f".format(Locale.US, rate)} engine=${activeEngine ?: "default"} language=$selectedLanguage voice=${selection.voiceName.ifBlank { "DEFAULT" }}",
+                )
                 true
             } else {
                 logger.log(1, "TTS", "Không xếp được câu đọc result=$result engine=${activeEngine ?: "default"}")
@@ -105,13 +129,14 @@ class RobustTtsEngine(
             cancelInitTimeout()
             ready = false
             activeEngine = null
+            configuredEnginePreference = ""
             runCatching { tts?.stop() }
             runCatching { tts?.shutdown() }
             tts = null
         }
     }
 
-    private fun discoverEngineCandidates(): List<String?> {
+    private fun discoverEngineCandidates(preferredEngine: String): List<String?> {
         val packages = linkedSetOf<String>()
         val packageManager = appContext.packageManager
 
@@ -151,9 +176,10 @@ class RobustTtsEngine(
         }
 
         return buildList {
-            add(null) // system default first
-            packages.forEach(::add)
-        }
+            if (preferredEngine.isNotBlank()) add(preferredEngine)
+            add(null) // system default is the first fallback
+            packages.filterNot { it == preferredEngine }.forEach(::add)
+        }.distinct()
     }
 
     private fun tryCandidate(
@@ -185,7 +211,7 @@ class RobustTtsEngine(
                 activeEngine = requestedEngine ?: runCatching { tts?.defaultEngine }.getOrNull()
                 val current = tts
                 if (current != null) {
-                    setLocale(current, "vi-VN")
+                    applyCurrentSelection(current)
                     installUtteranceListener(current)
                 }
                 logger.log(2, "TTS", "TTS sẵn sàng engine=${activeEngine ?: "DEFAULT"} attempt=${index + 1}")
@@ -221,7 +247,7 @@ class RobustTtsEngine(
                     logger.log(1, "TTS", "Không còn engine khác; force-probe instance sau timeout")
                     ready = true
                     activeEngine = requestedEngine ?: runCatching { current.defaultEngine }.getOrNull()
-                    setLocale(current, "vi-VN")
+                    applyCurrentSelection(current)
                     installUtteranceListener(current)
                     onReady(true)
                 } else {
@@ -231,8 +257,39 @@ class RobustTtsEngine(
         }.also { mainHandler.postDelayed(it, INIT_TIMEOUT_MS) }
     }
 
+    private fun applyCurrentSelection(engine: TextToSpeech) {
+        val selection = ttsPreferences.load()
+        val language = selection.languageTag.ifBlank { TtsPreferences.DEFAULT_TTS_LANGUAGE }
+        setLocale(engine, language)
+        applySelectedVoice(engine, selection.voiceName, language)
+    }
+
+    private fun applySelectedVoice(engine: TextToSpeech, voiceName: String, languageTag: String): Boolean {
+        if (voiceName.isBlank()) return true
+        val wantedTag = TtsPreferences.normalizeLanguageTag(languageTag) ?: return false
+        val voice = runCatching { engine.voices.orEmpty() }
+            .onFailure { logger.log(1, "TTS", "Không đọc được danh sách voice khi áp dụng voice=$voiceName", it) }
+            .getOrDefault(emptySet())
+            .firstOrNull {
+                it.name == voiceName &&
+                    TtsPreferences.normalizeLanguageTag(it.locale?.toLanguageTag().orEmpty())
+                        ?.equals(wantedTag, ignoreCase = true) == true
+            }
+        if (voice == null) {
+            logger.log(1, "TTS", "Voice đã chọn không còn khả dụng voice=$voiceName language=$wantedTag; dùng voice mặc định của locale")
+            return false
+        }
+        return runCatching {
+            engine.voice = voice
+            logger.log(2, "TTS", "Áp dụng voice=${voice.name} language=$wantedTag network=${voice.isNetworkConnectionRequired}")
+            true
+        }.onFailure {
+            logger.log(1, "TTS", "Không áp dụng được voice=$voiceName", it)
+        }.getOrDefault(false)
+    }
+
     private fun setLocale(engine: TextToSpeech, languageTag: String): Boolean {
-        val requested = Locale.forLanguageTag(languageTag.ifBlank { "vi-VN" })
+        val requested = Locale.forLanguageTag(languageTag.ifBlank { TtsPreferences.DEFAULT_TTS_LANGUAGE })
         val primary = runCatching { engine.isLanguageAvailable(requested) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
         if (primary >= TextToSpeech.LANG_AVAILABLE) {
             val result = runCatching { engine.setLanguage(requested) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)

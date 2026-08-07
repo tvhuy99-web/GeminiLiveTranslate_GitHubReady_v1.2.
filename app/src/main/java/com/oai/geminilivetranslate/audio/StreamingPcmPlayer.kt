@@ -12,9 +12,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -27,8 +29,17 @@ class StreamingPcmPlayer(
     private val logger: SessionLogger? = null,
     private val diagnosticName: String = "PcmPlayer",
 ) {
+    data class PlaybackStats(
+        val droppedChunks: Long,
+        val pausedBacklogDroppedChunks: Long,
+        val pausedBacklogChunks: Int,
+        val pausedBacklogBytes: Long,
+        val writtenBytes: Long,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val droppedChunks = AtomicLong(0L)
+    private val pausedBacklogDroppedChunks = AtomicLong(0L)
     private val writtenBytes = AtomicLong(0L)
     private val queue = Channel<ByteArray>(
         capacity = queueCapacity.coerceAtLeast(2),
@@ -41,6 +52,10 @@ class StreamingPcmPlayer(
         },
     )
     private val paused = AtomicBoolean(false)
+    private val pauseLock = Any()
+    private val pausedBacklog = ArrayDeque<ByteArray>()
+    private var pausedBacklogBytes = 0L
+
     @Volatile private var volume = 1f
     @Volatile private var track: AudioTrack? = null
     private var worker: Job? = null
@@ -76,15 +91,15 @@ class StreamingPcmPlayer(
         worker = scope.launch {
             runCatching {
                 val prebuffer = ArrayList<ByteArray>()
-                val first = queue.receiveCatching().getOrNull() ?: return@runCatching
+                val first = receiveNextChunk() ?: return@runCatching
                 prebuffer.add(first)
                 repeat((initialJitterChunks - 1).coerceAtLeast(0)) {
-                    withTimeoutOrNull(750) { queue.receive() }?.let(prebuffer::add)
+                    withTimeoutOrNull(750) { receiveNextChunk() }?.let(prebuffer::add)
                 }
                 logger?.log(3, diagnosticName, "Bắt đầu phát sau prebuffer chunks=${prebuffer.size}")
                 prebuffer.forEach(::writeBlocking)
                 while (isActive) {
-                    val data = queue.receiveCatching().getOrNull() ?: break
+                    val data = receiveNextChunk() ?: break
                     writeBlocking(data)
                 }
             }.onFailure { error ->
@@ -97,9 +112,16 @@ class StreamingPcmPlayer(
 
     fun enqueue(data: ByteArray) {
         if (data.isEmpty()) return
-        val result = queue.trySend(data.copyOf())
-        if (result.isFailure) {
-            logger?.log(1, diagnosticName, "Không enqueue được audio output bytes=${data.size}")
+        val copy = data.copyOf()
+        synchronized(pauseLock) {
+            if (paused.get()) {
+                bufferPausedLocked(copy)
+                return
+            }
+            val result = queue.trySend(copy)
+            if (result.isFailure) {
+                logger?.log(1, diagnosticName, "Không enqueue được audio output bytes=${data.size}")
+            }
         }
     }
 
@@ -109,37 +131,126 @@ class StreamingPcmPlayer(
     }
 
     fun pause() {
-        paused.set(true)
+        var moved = 0
+        synchronized(pauseLock) {
+            if (!paused.compareAndSet(false, true)) return
+            while (true) {
+                val pending = queue.tryReceive().getOrNull() ?: break
+                bufferPausedLocked(pending)
+                moved++
+            }
+        }
         runCatching { track?.pause() }
-        logger?.log(2, diagnosticName, "Tạm dừng phát")
+        val stats = stats()
+        logger?.log(
+            2,
+            diagnosticName,
+            "Tạm dừng phát; preservedQueue=$moved backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes}",
+        )
     }
 
     fun resume() {
-        paused.set(false)
+        if (!paused.compareAndSet(true, false)) return
         runCatching { track?.play() }
-        logger?.log(2, diagnosticName, "Tiếp tục phát")
+        val stats = stats()
+        logger?.log(
+            2,
+            diagnosticName,
+            "Tiếp tục phát; backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes}",
+        )
     }
 
     fun flush() {
         var removed = 0
         while (queue.tryReceive().isSuccess) removed++
+        var pausedRemoved = 0
+        synchronized(pauseLock) {
+            pausedRemoved = pausedBacklog.size
+            pausedBacklog.clear()
+            pausedBacklogBytes = 0L
+        }
         runCatching { track?.flush() }
-        logger?.log(2, diagnosticName, "Xả output queue removed=$removed")
+        logger?.log(2, diagnosticName, "Xả output queue removed=$removed pausedRemoved=$pausedRemoved")
+    }
+
+    fun stats(): PlaybackStats = synchronized(pauseLock) {
+        PlaybackStats(
+            droppedChunks = droppedChunks.get(),
+            pausedBacklogDroppedChunks = pausedBacklogDroppedChunks.get(),
+            pausedBacklogChunks = pausedBacklog.size,
+            pausedBacklogBytes = pausedBacklogBytes,
+            writtenBytes = writtenBytes.get(),
+        )
     }
 
     fun stop() {
         val current = track
         val underruns = current?.underrunCount ?: 0
-        logger?.log(2, diagnosticName, "Dừng AudioTrack writtenBytes=${writtenBytes.get()} dropped=${droppedChunks.get()} underruns=$underruns")
+        val stats = stats()
+        logger?.log(
+            2,
+            diagnosticName,
+            "Dừng AudioTrack writtenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks} pausedDropped=${stats.pausedBacklogDroppedChunks} pausedBuffered=${stats.pausedBacklogChunks} underruns=$underruns",
+        )
         worker?.cancel()
         worker = null
         queue.close()
+        synchronized(pauseLock) {
+            pausedBacklog.clear()
+            pausedBacklogBytes = 0L
+        }
         runCatching { current?.pause() }
         runCatching { current?.flush() }
         runCatching { current?.stop() }
         runCatching { current?.release() }
         track = null
         scope.cancel()
+    }
+
+    private suspend fun receiveNextChunk(): ByteArray? {
+        while (scope.isActive) {
+            if (paused.get()) {
+                delay(25)
+                continue
+            }
+            pollPausedBacklog()?.let { return it }
+            val received = withTimeoutOrNull(100) { queue.receiveCatching() }
+            if (received != null) {
+                received.getOrNull()?.let { return it }
+                if (received.isClosed) return null
+            }
+        }
+        return null
+    }
+
+    private fun pollPausedBacklog(): ByteArray? = synchronized(pauseLock) {
+        if (paused.get() || pausedBacklog.isEmpty()) return@synchronized null
+        pausedBacklog.removeFirst().also { pausedBacklogBytes -= it.size.toLong() }
+    }
+
+    private fun bufferPausedLocked(data: ByteArray) {
+        if (data.size.toLong() > MAX_PAUSED_BACKLOG_BYTES) {
+            recordPausedDrop(data.size)
+            return
+        }
+        while (pausedBacklogBytes + data.size > MAX_PAUSED_BACKLOG_BYTES && pausedBacklog.isNotEmpty()) {
+            val removed = pausedBacklog.removeFirst()
+            pausedBacklogBytes -= removed.size.toLong()
+            recordPausedDrop(removed.size)
+        }
+        pausedBacklog.addLast(data)
+        pausedBacklogBytes += data.size.toLong()
+    }
+
+    private fun recordPausedDrop(bytes: Int) {
+        val dropped = pausedBacklogDroppedChunks.incrementAndGet()
+        if (dropped == 1L || dropped % 25L == 0L) {
+            logger?.log(
+                1,
+                diagnosticName,
+                "Paused backlog đạt giới hạn; bỏ chunk cũ dropped=$dropped bytes=$bytes limitBytes=$MAX_PAUSED_BACKLOG_BYTES",
+            )
+        }
     }
 
     private fun writeBlocking(data: ByteArray) {
@@ -155,5 +266,9 @@ class StreamingPcmPlayer(
             offset += written
             writtenBytes.addAndGet(written.toLong())
         }
+    }
+
+    companion object {
+        private const val MAX_PAUSED_BACKLOG_BYTES = 16L * 1024L * 1024L
     }
 }

@@ -5,8 +5,8 @@
 ## Tính năng chính
 
 - Dịch từ tệp âm thanh/video, microphone và âm thanh nội bộ.
-- Gemini Live WebSocket có backpressure hai tầng, session resumption và GoAway.
-- Streaming PCM converter giữ trạng thái qua các chunk.
+- Gemini Live WebSocket có backpressure hai tầng, session resumption, GoAway và context-window compression cho phiên dài.
+- Streaming PCM converter giữ trạng thái qua các chunk và từ chối rõ ràng PCM encoding không được hỗ trợ.
 - Phụ đề trực tiếp, xuất SRT/TXT và ghi WAV gốc, dịch hoặc trộn.
 - AI voice, Android TTS dự phòng, auto-ducking và điều khiển âm lượng.
 - Chọn luồng phát giọng AI (`aiAudioStreamType`) và lưu WAV công khai trong `Music/GeminiLiveTranslate`.
@@ -17,7 +17,7 @@
 ## Yêu cầu
 
 - JDK 17.
-- Android SDK 35.
+- Android SDK 36.
 - Android 8.0 trở lên, `minSdk 26`.
 - Playback Capture yêu cầu Android 10 trở lên.
 - Gemini API Key có quyền truy cập model được cấu hình.
@@ -39,10 +39,10 @@ Trên Windows dùng `gradlew.bat`.
 
 ## Gradle bootstrap đã xác minh
 
-Repository dùng bootstrap JAR có mã nguồn tại `gradle/wrapper/bootstrap-src`. Bootstrap tải đúng Gradle **8.10.2**, bắt buộc xác minh SHA-256 của distribution và chống Zip Slip trước khi chạy Gradle.
+Repository dùng bootstrap JAR có mã nguồn tại `gradle/wrapper/bootstrap-src`. Bootstrap tải đúng Gradle **8.11.1**, bắt buộc xác minh SHA-256 của distribution và chống Zip Slip trước khi chạy Gradle. Android Gradle Plugin được ghim ở **8.10.1** để hỗ trợ `compileSdk 36` / `targetSdk 36`.
 
 - SHA-256 của `gradle-wrapper.jar`: `44afcdcadc571c1a83763fc68e95ffaea07429f9ea0c473978e6052d1b7ec174`
-- SHA-256 của Gradle 8.10.2 distribution: `31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26`
+- SHA-256 của Gradle 8.11.1 distribution: `f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`
 
 `tools/verify_github_ready.py` kiểm tra byte-for-byte bootstrap JAR, class `GradleWrapperMain`, URL và checksum distribution trước mỗi build CI.
 

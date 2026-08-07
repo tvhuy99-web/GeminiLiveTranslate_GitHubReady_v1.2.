@@ -1,0 +1,4 @@
+Build requested: 2026-08-07T08:02:00+07:00
+Source main: a476cc88659e75614175a9d2f0ab52f26ba55321
+Purpose: package the stable-signed migration APK for direct device installation.
+Expected certificate: 85e27156c4557de4f35b6ebe771dd426f108182894219ff3b6dbed607a230c95

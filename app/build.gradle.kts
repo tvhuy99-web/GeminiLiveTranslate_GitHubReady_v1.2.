@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -61,6 +63,16 @@ android {
         updateKeyPassword,
     ).all { !it.isNullOrBlank() }
 
+    val bundledDebugKey = rootProject.file(".github/signing/stable-debug.keystore.b64")
+    val bundledDebugStore = rootProject.file(".gradle/stable-debug.keystore")
+    val hasBundledDebugSigning = bundledDebugKey.isFile
+    if (hasBundledDebugSigning) {
+        bundledDebugStore.parentFile.mkdirs()
+        bundledDebugStore.writeBytes(
+            Base64.getMimeDecoder().decode(bundledDebugKey.readText().trim()),
+        )
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -86,6 +98,18 @@ android {
                 enableV4Signing = true
             }
         }
+        if (hasBundledDebugSigning) {
+            create("stableDebug") {
+                storeFile = bundledDebugStore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -94,6 +118,8 @@ android {
             versionNameSuffix = "-debug"
             if (hasUpdateSigning) {
                 signingConfig = signingConfigs.getByName("update")
+            } else if (hasBundledDebugSigning) {
+                signingConfig = signingConfigs.getByName("stableDebug")
             }
         }
         release {

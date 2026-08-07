@@ -2,6 +2,7 @@
 """Validate the repository layer required for reproducible GitHub builds."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import sys
 import zipfile
@@ -9,7 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER_SHA256 = "44afcdcadc571c1a83763fc68e95ffaea07429f9ea0c473978e6052d1b7ec174"
-UPDATE_CERT_SHA256 = "46e4178b4f1b8ca9a0b480db261ed31ca53dbc2a0a62225d3a97a0ecf2cb034b"
+STABLE_DEBUG_CERT_SHA256 = "85e27156c4557de4f35b6ebe771dd426f108182894219ff3b6dbed607a230c95"
+STABLE_DEBUG_KEYSTORE_SHA256 = "cb0ac0e1e81d5e8a79a766a10737319fd14087b26574ec64493c62659cbf14fc"
 REQUIRED = [
     ".github/workflows/android-ci.yml",
     ".github/workflows/android-release.yml",
@@ -17,6 +19,8 @@ REQUIRED = [
     ".github/dependabot.yml",
     ".github/ISSUE_TEMPLATE/bug_report.yml",
     ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/signing/README.md",
+    ".github/signing/stable-debug.keystore.b64",
     "SECURITY.md",
     "PRIVACY.md",
     "LICENSE",
@@ -62,6 +66,17 @@ def verify_wrapper() -> None:
             fail(f"Wrapper properties are missing token: {token}")
 
 
+def verify_stable_debug_key() -> None:
+    encoded_path = ROOT / ".github/signing/stable-debug.keystore.b64"
+    try:
+        decoded = base64.b64decode(encoded_path.read_text(encoding="utf-8"), validate=True)
+    except (ValueError, OSError) as error:
+        fail(f"Stable debug keystore is not valid base64: {error}")
+    digest = hashlib.sha256(decoded).hexdigest()
+    if digest != STABLE_DEBUG_KEYSTORE_SHA256:
+        fail(f"Unexpected stable debug keystore SHA-256: {digest}")
+
+
 def main() -> None:
     for item in REQUIRED:
         if not (ROOT / item).is_file():
@@ -76,6 +91,7 @@ def main() -> None:
             fail(f"Obsolete migration/bootstrap path is present: {obsolete.relative_to(ROOT)}")
 
     verify_wrapper()
+    verify_stable_debug_key()
     ci = (ROOT / ".github/workflows/android-ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/android-release.yml").read_text(encoding="utf-8")
     dependency = (ROOT / ".github/workflows/dependency-submission.yml").read_text(encoding="utf-8")
@@ -87,11 +103,8 @@ def main() -> None:
         "lintDebug",
         "assembleDebug",
         "tools/verify_apk.py",
-        "ANDROID_UPDATE_KEYSTORE_BASE64",
-        "ANDROID_UPDATE_KEYSTORE_PASSWORD",
-        "ANDROID_UPDATE_KEY_ALIAS",
-        "ANDROID_UPDATE_KEY_PASSWORD",
-        UPDATE_CERT_SHA256,
+        ".github/signing/stable-debug.keystore.b64",
+        STABLE_DEBUG_CERT_SHA256,
         "com.oai.geminilivetranslate.debug",
         "versionCode='10202'",
         "gh release create",
@@ -129,6 +142,8 @@ def main() -> None:
         'applicationIdSuffix = ".debug"',
         "versionCode = 10202",
         'versionName = "1.2.2"',
+        ".github/signing/stable-debug.keystore.b64",
+        'create("stableDebug")',
     ]:
         if token not in build:
             fail(f"Build/update signing configuration is missing token: {token}")
@@ -145,10 +160,11 @@ def main() -> None:
     print("[OK] Gradle 8.10.2 distribution is pinned with SHA-256")
     print("[OK] Gemini setup matches the working Lua translation payload")
     print("[OK] Debug package/version are fixed for update installation")
-    print(f"[OK] Published debug APK requires stable certificate: {UPDATE_CERT_SHA256}")
+    print(f"[OK] Stable debug certificate is pinned: {STABLE_DEBUG_CERT_SHA256}")
+    print(f"[OK] Stable debug keystore SHA-256: {STABLE_DEBUG_KEYSTORE_SHA256}")
     print("[OK] CI builds, tests, lints and verifies an updateable debug APK")
     print("[OK] Rolling debug APK is published through GitHub Releases")
-    print("[OK] Signed APK/AAB release workflow is configured")
+    print("[OK] Signed APK/AAB release workflow is configured separately")
     print("[OK] Secret scanning, dependency automation and support templates are present")
     print("GITHUB_READY_OK")
 

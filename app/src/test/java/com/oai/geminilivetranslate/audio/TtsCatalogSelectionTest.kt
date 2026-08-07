@@ -1,6 +1,7 @@
 package com.oai.geminilivetranslate.audio
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,6 +43,6 @@ class TtsCatalogSelectionTest {
     @Test
     fun savedVoiceMustBelongToSelectedLanguage() {
         assertEquals("vi-two", catalog.preferredVoice("vi-VN", "vi-two")?.name)
-        assertEquals(null, catalog.preferredVoice("vi-VN", "en-one"))
+        assertNull(catalog.preferredVoice("vi-VN", "en-one"))
     }
 }

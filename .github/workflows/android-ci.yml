@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build signed updateable APK 1.2.3
+    name: Build signed updateable APK 1.2.2
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -53,7 +53,7 @@ jobs:
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
-          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10203' versionName='1.2.3-debug'" badging.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
           ACTUAL_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p; s/^V2 Signer: certificate SHA-256 digest: //p' apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
 
@@ -61,15 +61,15 @@ jobs:
           cp "$APK" out/GeminiLiveTranslate-debug-latest.apk
           (cd out && sha256sum GeminiLiveTranslate-debug-latest.apk > GeminiLiveTranslate-debug-latest.apk.sha256)
           printf '%s\n' \
-            'versionName=1.2.3-debug' \
-            'versionCode=10203' \
+            'versionName=1.2.2-debug' \
+            'versionCode=10202' \
             'applicationId=com.oai.geminilivetranslate.debug' \
             'signingMode=stable-debug' \
             "certificateSha256=$EXPECTED_CERT_SHA256" \
             "sourceCommit=$GITHUB_SHA" > out/VERSION.txt
 
           TAG="debug-latest"
-          TITLE="Gemini Live Translate 1.2.3 Debug (latest)"
+          TITLE="Gemini Live Translate 1.2.2 Debug (latest)"
           NOTES="Verified updateable debug build from commit ${GITHUB_SHA}. Uses the repository's stable debug certificate so future APKs can update in place. Unit tests, APK integrity, certificate verification and Android Lint passed. One uninstall is required only when migrating from an APK signed with an older conflicting certificate."
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --prerelease
@@ -100,6 +100,6 @@ jobs:
             "Source commit: $GITHUB_SHA" \
             "Certificate SHA-256: $EXPECTED_CERT_SHA256" > delivery/README.txt
           git add -f delivery
-          git commit -m "Deliver Gemini Live Translate 1.2.3 APK"
+          git commit -m "Deliver Gemini Live Translate 1.2.2 APK"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
             push --force origin HEAD:apk-delivery

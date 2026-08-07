@@ -514,8 +514,8 @@ class TranslationService : LifecycleService() {
         sourceStarted = false
         fileInputEnded = false
         lastRawTranscript = ""
-        totalInputBytes = 0
-        totalOutputBytes = 0
+        totalInputBytes = 0L
+        totalOutputBytes = 0L
         sessionResumptionHandle = null
         resumedConnections.set(0L)
         goAwayCount.set(0L)
@@ -679,12 +679,12 @@ class TranslationService : LifecycleService() {
             )
             SourceMode.MICROPHONE -> MicAudioSource(this, logger)
             SourceMode.INTERNAL -> {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-          stopTranslation("Thu âm thanh nội bộ yêu cầu Android 10 trở lên")
-          return
-      }
-      InternalAudioSource(this, mediaProjection ?: return, logger)
-  }
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    stopTranslation("Thu âm thanh nội bộ yêu cầu Android 10 trở lên")
+                    return
+                }
+                InternalAudioSource(this, mediaProjection ?: return, logger)
+            }
         }
         source = created
         sourceStarted = true
@@ -901,7 +901,8 @@ class TranslationService : LifecycleService() {
         val beforeChars = _state.value.transcript.length
         subtitles.append(delta)
         updateState { current ->
-            val combined = (current.transcript + if (current.transcript.isBlank()) "" else " " + delta)
+            val separator = if (current.transcript.isBlank()) "" else " "
+            val combined = (current.transcript + separator + delta)
                 .takeLast(MAX_TRANSCRIPT_CHARS)
             current.copy(transcript = combined, status = "Đang dịch")
         }

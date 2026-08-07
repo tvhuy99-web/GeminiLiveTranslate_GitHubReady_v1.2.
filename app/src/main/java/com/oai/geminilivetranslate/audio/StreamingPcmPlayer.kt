@@ -137,7 +137,19 @@ class StreamingPcmPlayer(
     }
 
     fun setPlaybackSpeed(speed: Float) {
-        val safe = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        val requested = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        val safe = if (diagnosticName.startsWith("TranslatedPlayer-")) {
+            if (kotlin.math.abs(requested - 1f) >= 0.001f) {
+                logger?.log(
+                    2,
+                    diagnosticName,
+                    "Giữ PCM Gemini realtime speed=1.0x requested=${formatSpeed(requested)}x để tránh thiếu buffer",
+                )
+            }
+            1f
+        } else {
+            requested
+        }
         playbackSpeed = safe
         track?.let { applyPlaybackSpeed(it, safe) }
     }

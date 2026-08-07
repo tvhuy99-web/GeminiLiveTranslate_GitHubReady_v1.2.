@@ -1,5 +1,6 @@
 package com.oai.geminilivetranslate.audio
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -22,8 +23,22 @@ class TtsSettingsSourceTest {
         assertTrue(activity.contains("Giọng đọc"))
         assertTrue(activity.contains("Nghe thử"))
         assertTrue(activity.contains("voicesForLanguage"))
+        assertTrue(settings.contains("rowButton(\"Chọn bộ đọc\")"))
         assertTrue(settings.contains("TtsSettingsActivity::class.java"))
         assertTrue(manifest.contains(".ui.TtsSettingsActivity"))
+    }
+
+    @Test
+    fun ttsSettingsKeepVisibleCopyConcise() {
+        val activity = source("ui/TtsSettingsActivity.kt")
+        val settings = source("ui/SettingsActivity.kt")
+
+        assertFalse(activity.contains("Ba lựa chọn liên kết với nhau"))
+        assertFalse(activity.contains("Chỉ hiển thị các bộ đọc TTS"))
+        assertFalse(activity.contains("Danh sách này được lấy từ bộ đọc đang chọn"))
+        assertFalse(activity.contains("Chỉ các giọng thuộc đúng ngôn ngữ"))
+        assertFalse(activity.contains("Đã đọc ${'$'}{catalog.languages.size} ngôn ngữ"))
+        assertFalse(settings.contains("Chọn bộ đọc TTS trên máy"))
     }
 
     @Test

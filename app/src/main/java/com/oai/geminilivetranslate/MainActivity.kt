@@ -66,6 +66,8 @@ class MainActivity : AppCompatActivity() {
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
+    private var subtitleRenderEvents = 0L
+    private var lastRenderedTranscriptChars = -1
     private val aiStreamValues = listOf("accessibility", "media", "voice_communication", "assistant")
     private val aiStreamLabels = listOf(
         "Trợ năng - ưu tiên nghe rõ",
@@ -302,8 +304,12 @@ class MainActivity : AppCompatActivity() {
     private fun observeService() {
         val service = translationService ?: return
         stateJob?.cancel()
+        subtitleRenderEvents = 0L
+        lastRenderedTranscriptChars = -1
+        logger.log(2, "SubtitleUI", "Bắt đầu collect StateFlow lifecycle=${lifecycle.currentState} running=${service.state.value.running} transcriptChars=${service.state.value.transcript.length}")
         stateJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                logger.log(2, "SubtitleUI", "Collector ACTIVE lifecycle=${lifecycle.currentState}")
                 service.state.collect(::render)
             }
         }
@@ -315,7 +321,30 @@ class MainActivity : AppCompatActivity() {
             if (state.health.isNotBlank()) append('\n').append(state.health)
         }
         statusText.contentDescription = statusText.text
+
+        val transcriptChars = state.transcript.length
+        subtitleRenderEvents++
+        if (transcriptChars != lastRenderedTranscriptChars) {
+            logger.log(
+                2,
+                "SubtitleUI",
+                "render event=$subtitleRenderEvents transcriptChars=$transcriptChars previousChars=$lastRenderedTranscriptChars running=${state.running} paused=${state.paused} setup=${state.setupComplete} lifecycle=${lifecycle.currentState}",
+            )
+            lastRenderedTranscriptChars = transcriptChars
+        }
         subtitleText.text = state.transcript.ifBlank { "Chưa có nội dung dịch" }
+        val expectedChars = if (transcriptChars == 0) "Chưa có nội dung dịch".length else transcriptChars
+        val actualChars = subtitleText.text.length
+        if (actualChars != expectedChars) {
+            logger.log(1, "SubtitleUI", "TextView mismatch stateChars=$transcriptChars expectedChars=$expectedChars actualChars=$actualChars")
+        }
+        if (transcriptChars > 0) {
+            logger.log(
+                3,
+                "SubtitleUI",
+                "TextView committed stateChars=$transcriptChars viewChars=$actualChars shown=${subtitleText.isShown} visibility=${subtitleText.visibility} alpha=${subtitleText.alpha} width=${subtitleText.width} height=${subtitleText.height}",
+            )
+        }
         subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
         if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
         progressSeekBar.contentDescription = "Tiến trình phát: ${state.progressPercent}%"

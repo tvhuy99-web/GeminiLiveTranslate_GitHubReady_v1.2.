@@ -6,6 +6,8 @@ import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -82,6 +84,7 @@ class SettingsActivity : AppCompatActivity() {
             textSize = 24f
             gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, dp(8))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             ViewCompat.setAccessibilityHeading(this, true)
         })
 
@@ -93,6 +96,8 @@ class SettingsActivity : AppCompatActivity() {
                 text = label
                 isAllCaps = false
                 minHeight = dp(48)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                contentDescription = label
                 setOnClickListener {
                     captureTextFields()
                     showTab(key, announce = true)
@@ -143,17 +148,21 @@ class SettingsActivity : AppCompatActivity() {
         return root
     }
 
-    private fun showTab(key: String, announce: Boolean) {
+    private fun showTab(
+        key: String,
+        announce: Boolean,
+        focusLabel: String? = null,
+    ) {
         activeTab = key
         tabButtons.forEach { (tab, button) ->
             val selected = tab == key
             button.isSelected = selected
             button.isActivated = selected
-            button.contentDescription = if (selected) {
-                "${TAB_LABELS.getValue(tab)}, đang chọn"
-            } else {
-                TAB_LABELS.getValue(tab)
-            }
+            button.contentDescription = TAB_LABELS.getValue(tab)
+            ViewCompat.setStateDescription(
+                button,
+                if (selected) "Đang chọn" else "Chưa chọn",
+            )
         }
 
         content.removeAllViews()
@@ -168,11 +177,24 @@ class SettingsActivity : AppCompatActivity() {
             else -> buildSystem()
         }
 
-        if (announce) {
+        if (announce || focusLabel != null) {
             content.post {
-                content.announceForAccessibility("Đã mở mục ${TAB_LABELS.getValue(key)}")
+                val target = focusLabel?.let { findAccessibilityTarget(content, it) }
+                    ?: content.getChildAt(0)
+                val focused = target?.performAccessibilityAction(
+                    AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
+                    null,
+                ) == true
+                if (announce && !focused) {
+                    content.announceForAccessibility("Đã mở mục ${TAB_LABELS.getValue(key)}")
+                }
             }
         }
+    }
+
+    private fun rebuildActiveTab(focusLabel: String) {
+        captureTextFields()
+        showTab(activeTab, announce = false, focusLabel = focusLabel)
     }
 
     private fun buildBasic() {
@@ -187,7 +209,6 @@ class SettingsActivity : AppCompatActivity() {
             captureTextFields()
             draft = SettingsPolicy.applyProfile(profiles[position], draft)
             toast("Đã chọn ${profileLabels[position]}")
-            showTab(activeTab, announce = false)
         }
         description("Phản hồi nhanh giảm thời gian chờ. Cân bằng phù hợp với đa số trường hợp. Ổn định hơn hữu ích khi mạng yếu.")
 
@@ -202,13 +223,11 @@ class SettingsActivity : AppCompatActivity() {
         description("Chế độ Đơn giản chỉ hiện các nút thường dùng.")
 
         title("Bộ máy dịch")
-        modelInput = EditText(this).apply {
-            setText(draft.model)
-            hint = "Giữ nguyên nếu không được hướng dẫn thay đổi"
-            isSingleLine = true
-            minHeight = dp(48)
-            textSize = 16f
-        }.also(content::addView)
+        modelInput = labeledEditText(
+            label = "Tên bộ máy dịch",
+            value = draft.model,
+            hint = "Giữ nguyên nếu không được hướng dẫn thay đổi",
+        )
         description("Giữ nguyên lựa chọn này nếu ứng dụng đang dịch bình thường.")
 
         title("Ngôn ngữ cần dịch sang")
@@ -222,13 +241,11 @@ class SettingsActivity : AppCompatActivity() {
             draft = draft.copy(targetLanguage = code)
             languageInput?.setText(code)
         }
-        languageInput = EditText(this).apply {
-            setText(draft.targetLanguage)
-            hint = "Ví dụ: vi, en-US"
-            isSingleLine = true
-            minHeight = dp(48)
-            textSize = 16f
-        }.also(content::addView)
+        languageInput = labeledEditText(
+            label = "Mã ngôn ngữ nhập thủ công",
+            value = draft.targetLanguage,
+            hint = "Ví dụ: vi, en-US",
+        )
         description("Chỉ nhập tay khi ngôn ngữ bạn cần chưa có trong danh sách.")
 
         title("Khi dịch")
@@ -304,7 +321,7 @@ class SettingsActivity : AppCompatActivity() {
             detail = "Giọng đọc sẽ chờ thêm một chút để câu nghe tự nhiên hơn.",
         ) {
             draft = draft.copy(ttsSmoothEnabled = it)
-            showTab(activeTab, announce = false)
+            rebuildActiveTab("Ghép các câu ngắn trước khi đọc")
         }
         if (draft.ttsSmoothEnabled) {
             slider(
@@ -351,7 +368,7 @@ class SettingsActivity : AppCompatActivity() {
                 qualityMode = it,
                 performanceProfile = "custom",
             )
-            showTab(activeTab, announce = false)
+            rebuildActiveTab("Ưu tiên âm thanh ổn định hơn")
         }
         if (draft.qualityMode) {
             slider(
@@ -405,7 +422,7 @@ class SettingsActivity : AppCompatActivity() {
                 pacingEnabled = it,
                 performanceProfile = "custom",
             )
-            showTab(activeTab, announce = false)
+            rebuildActiveTab("Gửi theo đúng tốc độ phát")
         }
         slider(
             label = "Số đoạn âm thanh chờ gửi",
@@ -445,7 +462,7 @@ class SettingsActivity : AppCompatActivity() {
             checked = draft.saveAudioEnabled,
         ) {
             draft = draft.copy(saveAudioEnabled = it)
-            showTab(activeTab, announce = false)
+            rebuildActiveTab("Lưu âm thanh sau mỗi lần dịch")
         }
         if (draft.saveAudioEnabled) {
             spinner(
@@ -483,7 +500,7 @@ class SettingsActivity : AppCompatActivity() {
             detail = "Ứng dụng sẽ tự thử lại khi mạng hoặc dịch vụ bị gián đoạn.",
         ) {
             draft = draft.copy(autoReconnect = it)
-            showTab(activeTab, announce = false)
+            rebuildActiveTab("Tự kết nối lại")
         }
         if (draft.autoReconnect) {
             slider(
@@ -650,7 +667,7 @@ class SettingsActivity : AppCompatActivity() {
             Intent(this, TranslationService::class.java)
                 .setAction(TranslationService.ACTION_APPLY_SETTINGS),
         )
-        showTab(activeTab, announce = false)
+        showTab(activeTab, announce = false, focusLabel = "Đưa cài đặt về mặc định")
         toast("Đã khôi phục cài đặt mặc định")
     }
 
@@ -729,6 +746,7 @@ class SettingsActivity : AppCompatActivity() {
             this.text = text
             textSize = 19f
             setPadding(0, dp(20), 0, dp(6))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             ViewCompat.setAccessibilityHeading(this, true)
         })
     }
@@ -740,6 +758,31 @@ class SettingsActivity : AppCompatActivity() {
             setTextColor(themeColor(android.R.attr.textColorSecondary))
             setPadding(0, dp(2), 0, dp(12))
         })
+    }
+
+    private fun labeledEditText(
+        label: String,
+        value: String,
+        hint: String,
+    ): EditText {
+        val input = EditText(this).apply {
+            id = View.generateViewId()
+            setText(value)
+            this.hint = hint
+            isSingleLine = true
+            minHeight = dp(48)
+            textSize = 16f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        }
+        content.addView(TextView(this).apply {
+            text = label
+            textSize = 14f
+            labelFor = input.id
+            setTextColor(themeColor(android.R.attr.textColorSecondary))
+            setPadding(0, dp(4), 0, 0)
+        })
+        content.addView(input)
+        return input
     }
 
     private fun check(
@@ -769,6 +812,7 @@ class SettingsActivity : AppCompatActivity() {
         val safeSelected = selected.coerceIn(0, labels.lastIndex.coerceAtLeast(0))
         val view = Spinner(this).apply {
             minimumHeight = dp(48)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             contentDescription = "$accessibilityLabel. Đang chọn ${labels.getOrElse(safeSelected) { "" }}"
         }
         view.adapter = ArrayAdapter(
@@ -881,6 +925,20 @@ class SettingsActivity : AppCompatActivity() {
         top.addView(valueView)
         wrapper.addView(top)
         content.addView(wrapper)
+    }
+
+    private fun findAccessibilityTarget(root: View, label: String): View? {
+        if (root !== content && root.visibility == View.VISIBLE) {
+            val text = (root as? TextView)?.text?.toString().orEmpty()
+            val description = root.contentDescription?.toString().orEmpty()
+            if (text == label || description.startsWith(label)) return root
+        }
+        if (root is ViewGroup) {
+            for (index in 0 until root.childCount) {
+                findAccessibilityTarget(root.getChildAt(index), label)?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun rowButton(label: String, action: () -> Unit) {

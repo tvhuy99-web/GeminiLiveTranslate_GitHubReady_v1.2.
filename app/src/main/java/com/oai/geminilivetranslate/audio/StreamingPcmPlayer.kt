@@ -3,6 +3,8 @@ package com.oai.geminilivetranslate.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.PlaybackParams
+import android.os.Build
 import com.oai.geminilivetranslate.core.SessionLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -17,8 +19,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.ArrayDeque
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.roundToInt
 
 class StreamingPcmPlayer(
     private val sampleRate: Int,
@@ -57,6 +61,7 @@ class StreamingPcmPlayer(
     private var pausedBacklogBytes = 0L
 
     @Volatile private var volume = 1f
+    @Volatile private var playbackSpeed = 1f
     @Volatile private var track: AudioTrack? = null
     private var worker: Job? = null
 
@@ -86,7 +91,8 @@ class StreamingPcmPlayer(
                 check(it.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack chưa initialized, state=${it.state}" }
                 it.setVolume(volume)
                 it.play()
-                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks")
+                applyPlaybackSpeed(it, playbackSpeed)
+                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks speed=${formatSpeed(playbackSpeed)}x")
             }
         worker = scope.launch {
             runCatching {
@@ -130,6 +136,14 @@ class StreamingPcmPlayer(
         track?.setVolume(volume)
     }
 
+    fun setPlaybackSpeed(speed: Float) {
+        val safe = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        playbackSpeed = safe
+        track?.let { applyPlaybackSpeed(it, safe) }
+    }
+
+    fun currentPlaybackSpeed(): Float = playbackSpeed
+
     fun pause() {
         var moved = 0
         synchronized(pauseLock) {
@@ -152,11 +166,12 @@ class StreamingPcmPlayer(
     fun resume() {
         if (!paused.compareAndSet(true, false)) return
         runCatching { track?.play() }
+        track?.let { applyPlaybackSpeed(it, playbackSpeed) }
         val stats = stats()
         logger?.log(
             2,
             diagnosticName,
-            "Tiếp tục phát; backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes}",
+            "Tiếp tục phát; backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes} speed=${formatSpeed(playbackSpeed)}x",
         )
     }
 
@@ -190,7 +205,7 @@ class StreamingPcmPlayer(
         logger?.log(
             2,
             diagnosticName,
-            "Dừng AudioTrack writtenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks} pausedDropped=${stats.pausedBacklogDroppedChunks} pausedBuffered=${stats.pausedBacklogChunks} underruns=$underruns",
+            "Dừng AudioTrack writtenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks} pausedDropped=${stats.pausedBacklogDroppedChunks} pausedBuffered=${stats.pausedBacklogChunks} underruns=$underruns speed=${formatSpeed(playbackSpeed)}x",
         )
         worker?.cancel()
         worker = null
@@ -267,6 +282,26 @@ class StreamingPcmPlayer(
             writtenBytes.addAndGet(written.toLong())
         }
     }
+
+    private fun applyPlaybackSpeed(audioTrack: AudioTrack, speed: Float) {
+        val safe = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioTrack.playbackParams = PlaybackParams()
+                    .allowDefaults()
+                    .setSpeed(safe)
+                    .setPitch(1f)
+            } else {
+                audioTrack.playbackRate = (sampleRate * safe).roundToInt()
+            }
+        }.onSuccess {
+            logger?.log(2, diagnosticName, "Áp dụng tốc độ phát speed=${formatSpeed(safe)}x")
+        }.onFailure {
+            logger?.log(1, diagnosticName, "Thiết bị từ chối tốc độ speed=${formatSpeed(safe)}x; giữ tốc độ hiện tại", it)
+        }
+    }
+
+    private fun formatSpeed(speed: Float): String = String.format(Locale.US, "%.1f", speed)
 
     companion object {
         private const val MAX_PAUSED_BACKLOG_BYTES = 16L * 1024L * 1024L

@@ -5,7 +5,7 @@ import java.util.Locale
 
 data class TtsSelection(
     val enginePackage: String = "",
-    val languageTag: String = DEFAULT_TTS_LANGUAGE,
+    val languageTag: String = TtsPreferences.DEFAULT_TTS_LANGUAGE,
     val voiceName: String = "",
 )
 

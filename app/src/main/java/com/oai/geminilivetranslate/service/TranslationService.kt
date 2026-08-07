@@ -13,12 +13,12 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import android.speech.tts.TextToSpeech
 import androidx.lifecycle.LifecycleService
 import com.oai.geminilivetranslate.audio.AudioSource
 import com.oai.geminilivetranslate.audio.FileAudioSource
 import com.oai.geminilivetranslate.audio.InternalAudioSource
 import com.oai.geminilivetranslate.audio.MicAudioSource
+import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
@@ -96,10 +96,11 @@ class TranslationService : LifecycleService() {
     private var aiPlayer: StreamingPcmPlayer? = null
     private var originalPlayer: StreamingPcmPlayer? = null
     private var mediaProjection: MediaProjection? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-    private var ttsInitializing = false
+    private var ttsEngine: RobustTtsEngine? = null
+    @Volatile private var ttsReady = false
+    @Volatile private var ttsInitializing = false
     private val ttsBuffer = StringBuilder()
+    @Volatile private var filePlaybackSpeed = 1f
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var connectionGeneration = 0L
@@ -226,6 +227,7 @@ class TranslationService : LifecycleService() {
             "session.source" to mode.name,
             "session.model" to settings.model,
             "session.targetLanguage" to settings.targetLanguage,
+            "session.filePlaybackSpeed" to filePlaybackSpeed,
             "session.startedAt" to Date().toString(),
         ))
         subtitles.reset()
@@ -275,7 +277,11 @@ class TranslationService : LifecycleService() {
             return
         }
         updateState { it.copy(status = "Đang kết nối Gemini Live API...") }
-        logger.log(2, "Session", "Bắt đầu session=$sessionId nguồn=$mode model=${settings.model} đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode}")
+        logger.log(
+            2,
+            "Session",
+            "Bắt đầu session=$sessionId nguồn=$mode model=${settings.model} đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
+        )
         startHealthMonitor()
         connectGemini(apiKey)
     }
@@ -303,7 +309,7 @@ class TranslationService : LifecycleService() {
         originalPlayer?.stop(); originalPlayer = null
         ttsFlushJob?.cancel(); ttsFlushJob = null
         synchronized(ttsBuffer) { ttsBuffer.clear() }
-        runCatching { tts?.stop() }
+        ttsEngine?.stop()
         duckRestoreJob?.cancel(); duckRestoreJob = null
         restoreSystemMediaVolume()
         closeRecorders()
@@ -331,9 +337,10 @@ class TranslationService : LifecycleService() {
             "session.droppedInputChunks" to droppedInputChunks.get(),
             "session.resumedConnections" to resumedConnections.get(),
             "session.goAwayCount" to goAwayCount.get(),
+            "session.filePlaybackSpeed" to filePlaybackSpeed,
         ))
         if (hadActiveSession) {
-            logger.log(2, "Session", "$message; session=$sessionId durationMs=$durationMs inputBytes=$totalInputBytes outputBytes=$totalOutputBytes drop=${droppedInputChunks.get()} resume=${resumedConnections.get()} goAway=${goAwayCount.get()} subtitleCallbacks=${subtitleCallbackEvents.get()} subtitleApplied=${subtitleAppliedEvents.get()} subtitleFiltered=${subtitleFilteredEvents.get()} transcriptChars=${_state.value.transcript.length}")
+            logger.log(2, "Session", "$message; session=$sessionId durationMs=$durationMs inputBytes=$totalInputBytes outputBytes=$totalOutputBytes drop=${droppedInputChunks.get()} resume=${resumedConnections.get()} goAway=${goAwayCount.get()} subtitleCallbacks=${subtitleCallbackEvents.get()} subtitleApplied=${subtitleAppliedEvents.get()} subtitleFiltered=${subtitleFilteredEvents.get()} transcriptChars=${_state.value.transcript.length} fileSpeed=${formatFileSpeed()}x")
         } else {
             logger.log(2, "Service", "$message khi không có phiên đang chạy")
         }
@@ -347,7 +354,7 @@ class TranslationService : LifecycleService() {
         source?.pause()
         aiPlayer?.pause()
         originalPlayer?.pause()
-        runCatching { tts?.stop() }
+        ttsEngine?.stop()
         updateState { it.copy(paused = true, status = "Đã tạm dừng") }
         logger.log(2, "Session", "Tạm dừng session=$sessionId source=$currentMode")
     }
@@ -362,7 +369,7 @@ class TranslationService : LifecycleService() {
         aiPlayer?.resume()
         originalPlayer?.resume()
         updateState { it.copy(paused = false, status = "Đang dịch") }
-        logger.log(2, "Session", "Tiếp tục session=$sessionId source=$currentMode")
+        logger.log(2, "Session", "Tiếp tục session=$sessionId source=$currentMode fileSpeed=${formatFileSpeed()}x")
     }
 
     fun togglePause() = if (_state.value.paused) resume() else pause()
@@ -392,17 +399,41 @@ class TranslationService : LifecycleService() {
         aiPlayer?.setVolume(settings.translatedVolume)
     }
 
+    fun setFilePlaybackSpeed(speed: Float) {
+        val safe = speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+        if (kotlin.math.abs(filePlaybackSpeed - safe) < 0.001f) return
+        filePlaybackSpeed = safe
+        (source as? FileAudioSource)?.setPlaybackSpeed(safe)
+        if (currentMode == SourceMode.FILE) {
+            originalPlayer?.setPlaybackSpeed(safe)
+            aiPlayer?.setPlaybackSpeed(safe)
+        }
+        DiagnosticContext.put("session.filePlaybackSpeed", safe)
+        logger.log(2, "PlaybackSpeed", "Đổi tốc độ File speed=${formatFileSpeed()}x running=${_state.value.running} mode=$currentMode")
+    }
+
+    fun currentFilePlaybackSpeed(): Float = filePlaybackSpeed
+
     fun setAiVoice(enabled: Boolean) {
         preferences.setAiVoice(enabled)
         settings = settings.copy(aiVoice = enabled)
         if (_state.value.running) {
             if (enabled && aiPlayer == null) {
-                aiPlayer = buildAiPlayer().also { it.start(); it.setVolume(settings.translatedVolume) }
+                aiPlayer = buildAiPlayer().also {
+                    it.start()
+                    it.setVolume(settings.translatedVolume)
+                    if (currentMode == SourceMode.FILE) it.setPlaybackSpeed(filePlaybackSpeed)
+                }
             } else if (!enabled) {
                 aiPlayer?.stop(); aiPlayer = null
             }
         }
-        if (!enabled) ensureTtsInitialized()
+        if (enabled) {
+            ttsEngine?.stop()
+            synchronized(ttsBuffer) { ttsBuffer.clear() }
+        } else {
+            ensureTtsInitialized()
+        }
         updateState { it.copy(aiVoice = enabled) }
     }
 
@@ -450,11 +481,17 @@ class TranslationService : LifecycleService() {
                     aiPlayer = buildAiPlayer().also { player ->
                         player.start()
                         player.setVolume(activeAfter.translatedVolume)
+                        if (currentMode == SourceMode.FILE) player.setPlaybackSpeed(filePlaybackSpeed)
                         if (_state.value.paused) player.pause()
                     }
                 }.onFailure { logger.log(0, "AudioPlayer", "Không tạo lại được bộ phát giọng dịch sau khi đổi cài đặt", it) }
             }
             logger.log(2, "AudioPlayer", "Đã tạo lại bộ phát aiVoice=${activeAfter.aiVoice} buffer=${activeAfter.translatedBufferBytes} queue=${activeAfter.translatedQueueMax} jitter=${activeAfter.outputJitterTarget}")
+        }
+
+        if (activeAfter.aiVoice) {
+            ttsEngine?.stop()
+            synchronized(ttsBuffer) { ttsBuffer.clear() }
         }
 
         updateState { state ->
@@ -675,6 +712,7 @@ class TranslationService : LifecycleService() {
                 uri = selectedUri ?: return,
                 pacingEnabled = settings.pacingEnabled,
                 leadMs = settings.pacingTargetLatencyMs,
+                initialPlaybackSpeed = filePlaybackSpeed,
                 logger = logger,
             )
             SourceMode.MICROPHONE -> MicAudioSource(this, logger)
@@ -726,7 +764,7 @@ class TranslationService : LifecycleService() {
         updateState {
             it.copy(
                 status = when (currentMode) {
-                    SourceMode.FILE -> "Đã sẵn sàng; nhấn Phát để tạm dừng/tiếp tục"
+                    SourceMode.FILE -> "Đã sẵn sàng; tốc độ ${formatFileSpeed()}×; nhấn Phát để tạm dừng/tiếp tục"
                     SourceMode.MICROPHONE -> "Đang thu microphone..."
                     SourceMode.INTERNAL -> "Đang thu âm thanh nội bộ..."
                 }
@@ -971,7 +1009,7 @@ class TranslationService : LifecycleService() {
         while (originalQueue?.tryReceive()?.isSuccess == true) Unit
         aiPlayer?.flush()
         originalPlayer?.flush()
-        runCatching { tts?.stop() }
+        ttsEngine?.stop()
         synchronized(ttsBuffer) { ttsBuffer.clear() }
         updateState { it.copy(transcript = "", status = "Đang tạo phiên Gemini mới sau khi tua...") }
         connectGemini(keyStore.load().selected.orEmpty())
@@ -979,7 +1017,9 @@ class TranslationService : LifecycleService() {
 
     private fun setupPlayers() {
         if (settings.aiVoice) aiPlayer = buildAiPlayer().also {
-            it.start(); it.setVolume(settings.translatedVolume)
+            it.start()
+            it.setVolume(settings.translatedVolume)
+            if (currentMode == SourceMode.FILE) it.setPlaybackSpeed(filePlaybackSpeed)
         }
         if (currentMode == SourceMode.FILE) {
             originalPlayer = StreamingPcmPlayer(
@@ -990,7 +1030,11 @@ class TranslationService : LifecycleService() {
                 usage = AudioAttributes.USAGE_MEDIA,
                 logger = logger,
                 diagnosticName = "OriginalPlayer",
-            ).also { it.start(); it.setVolume(settings.originalVolume) }
+            ).also {
+                it.start()
+                it.setVolume(settings.originalVolume)
+                it.setPlaybackSpeed(filePlaybackSpeed)
+            }
             originalQueue = Channel(100, BufferOverflow.DROP_OLDEST)
             originalQueueJob = serviceScope.launch(Dispatchers.IO) {
                 val queue = originalQueue ?: return@launch
@@ -1078,23 +1122,25 @@ class TranslationService : LifecycleService() {
     }
 
     private fun ensureTtsInitialized() {
-        if (ttsReady || ttsInitializing) return
+        if (ttsReady || ttsInitializing || settings.aiVoice) return
         ttsInitializing = true
-        runCatching { tts?.shutdown() }
-        tts = null
-        tts = TextToSpeech(applicationContext) { status ->
+        val engine = ttsEngine ?: RobustTtsEngine(applicationContext, logger).also { ttsEngine = it }
+        logger.log(2, "TTS", "Bắt đầu dò engine TTS robust cho thiết bị ${Build.MANUFACTURER}/${Build.MODEL}")
+        engine.initialize { success ->
             ttsInitializing = false
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                logger.log(2, "TTS", "TextToSpeech đã sẵn sàng")
+            ttsReady = success
+            if (success) {
+                logger.log(2, "TTS", "Robust TTS đã sẵn sàng engine=${engine.currentEngine() ?: "DEFAULT"}")
+                if (!settings.aiVoice) flushTtsBuffer()
             } else {
-                logger.log(1, "TTS", "Không khởi tạo được TextToSpeech, mã=$status")
+                logger.log(1, "TTS", "Không tìm được engine TTS hoạt động; giữ văn bản trong buffer để thử lại")
             }
         }
     }
 
     private fun queueTts(text: String) {
-        if (!ttsReady) return
+        if (text.isBlank() || settings.aiVoice) return
+        if (!ttsReady) ensureTtsInitialized()
         var flushNow = false
         synchronized(ttsBuffer) {
             if (ttsBuffer.isNotEmpty()) ttsBuffer.append(' ')
@@ -1113,15 +1159,38 @@ class TranslationService : LifecycleService() {
     }
 
     private fun flushTtsBuffer() {
+        if (settings.aiVoice) return
+        if (!ttsReady) {
+            ensureTtsInitialized()
+            return
+        }
         val text = synchronized(ttsBuffer) {
             ttsBuffer.toString().also { ttsBuffer.clear() }
         }.trim()
-        if (text.isBlank() || !ttsReady || settings.aiVoice) return
-        runCatching {
-            tts?.language = Locale.forLanguageTag(settings.targetLanguage)
-            tts?.speak(text, TextToSpeech.QUEUE_ADD, null, UUID.randomUUID().toString())
-            applyDucking((text.length * 65L).coerceIn(700L, 8_000L))
-        }.onFailure { logger.log(1, "TTS", "Không đọc được văn bản", it) }
+        if (text.isBlank()) return
+        val rate = if (currentMode == SourceMode.FILE) filePlaybackSpeed else 1f
+        val spoken = ttsEngine?.speak(
+            text = text,
+            languageTag = settings.targetLanguage,
+            rate = rate,
+            pitch = 1f,
+            volume = settings.translatedVolume.coerceIn(0, 100) / 100f,
+            queue = true,
+        ) == true
+        if (spoken) {
+            val estimatedMs = ((text.length * 65L) / rate.coerceAtLeast(0.5f)).toLong().coerceIn(500L, 8_000L)
+            applyDucking(estimatedMs)
+        } else {
+            synchronized(ttsBuffer) {
+                val pending = ttsBuffer.toString()
+                ttsBuffer.clear()
+                ttsBuffer.append(text)
+                if (pending.isNotBlank()) ttsBuffer.append(' ').append(pending)
+            }
+            ttsReady = false
+            logger.log(1, "TTS", "Engine từ chối speak; hoàn text chars=${text.length} về buffer và khởi tạo lại")
+            ensureTtsInitialized()
+        }
     }
 
     private fun applyDucking(durationMs: Long) {
@@ -1208,10 +1277,13 @@ class TranslationService : LifecycleService() {
                     "session.subtitleApplied" to subtitleAppliedEvents.get(),
                     "session.subtitleFiltered" to subtitleFilteredEvents.get(),
                     "session.transcriptChars" to _state.value.transcript.length,
+                    "session.filePlaybackSpeed" to filePlaybackSpeed,
+                    "session.ttsReady" to ttsReady,
+                    "session.ttsEngine" to (ttsEngine?.currentEngine() ?: ""),
                 ))
                 updateState {
                     it.copy(
-                        health = "Vào: %.1f kb/s | Ra: %.1f kb/s | Gửi: %d/%d | WS: %d KB | Drop: %d | Resume: %d | GoAway: %d | Sub: %d | %s".format(
+                        health = "Vào: %.1f kb/s | Ra: %.1f kb/s | Gửi: %d/%d | WS: %d KB | Drop: %d | Resume: %d | GoAway: %d | Sub: %d | Speed: %sx | %s".format(
                             Locale.US,
                             inputKbps,
                             outputKbps,
@@ -1222,6 +1294,7 @@ class TranslationService : LifecycleService() {
                             resumedConnections.get(),
                             goAwayCount.get(),
                             it.transcript.length,
+                            formatFileSpeed(),
                             if (it.setupComplete) "OK" else "đang nối"
                         ) + if (pressureEvents > 0) " | BP: $pressureEvents" else ""
                     )
@@ -1244,11 +1317,12 @@ class TranslationService : LifecycleService() {
     private fun elapsedMs(): Long = (SystemClock.elapsedRealtime() - sessionStartedAt).coerceAtLeast(0)
     private fun originalGain(): Float = settings.originalVolume.coerceIn(0, 100) / 100f
     private fun translatedGain(): Float = settings.translatedVolume.coerceIn(0, 100) / 100f
+    private fun formatFileSpeed(): String = String.format(Locale.US, "%.1f", filePlaybackSpeed)
 
     override fun onDestroy() {
         if (_state.value.running) stopTranslation("Dịch vụ đã dừng")
-        runCatching { tts?.shutdown() }
-        tts = null
+        ttsEngine?.shutdown()
+        ttsEngine = null
         ttsReady = false
         ttsInitializing = false
         serviceScope.cancel()

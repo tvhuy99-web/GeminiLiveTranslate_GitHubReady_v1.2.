@@ -1,3 +1,4 @@
-Build requested: 2026-08-07T07:24:00+07:00
-Source main: 236f9ab8d08de6999ceb45aea7a2b4736a18d784
-Purpose: rebuild APK after restoring log recording controls.
+Build requested: 2026-08-07T07:29:00+07:00
+Source main app commit: 236f9ab8d08de6999ceb45aea7a2b4736a18d784
+Actions workflow commit: 64976906257258f22f5c4d3687d5a86243e3ab5f
+Purpose: package a visible Actions artifact after restoring log recording controls.

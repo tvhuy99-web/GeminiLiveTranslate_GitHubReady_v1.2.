@@ -31,12 +31,14 @@ class PlaybackSpeedAndRobustTtsSourceTest {
 
         assertTrue(robust.contains("queryIntentServices"))
         assertTrue(robust.contains("INTENT_ACTION_TTS_SERVICE"))
+        assertTrue(robust.contains("ACTION_CHECK_TTS_DATA"))
         assertTrue(robust.contains("OnInit timeout"))
         assertTrue(robust.contains("retrying without params") || robust.contains("thử lại không params"))
         assertTrue(service.contains("giữ văn bản trong buffer để thử lại"))
         assertTrue(service.contains("hoàn text chars="))
         assertTrue(service.contains("rate = rate"))
         assertTrue(manifest.contains("android.intent.action.TTS_SERVICE"))
+        assertTrue(manifest.contains("android.speech.tts.engine.CHECK_TTS_DATA"))
     }
 
     private fun source(relative: String): String = firstExisting(
@@ -52,6 +54,7 @@ class PlaybackSpeedAndRobustTtsSourceTest {
     private fun resource(relative: String): String = firstExisting(
         "src/main/res/$relative",
         "app/src/main/res/$relative",
+        "src/main/$relative",
         relative,
         "app/src/main/$relative",
     )

@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.PlaybackParams
 import android.os.Build
+import android.os.SystemClock
 import com.oai.geminilivetranslate.core.SessionLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +46,8 @@ class StreamingPcmPlayer(
     private val droppedChunks = AtomicLong(0L)
     private val pausedBacklogDroppedChunks = AtomicLong(0L)
     private val writtenBytes = AtomicLong(0L)
+    private val usesOriginalDeadlineQueue = diagnosticName == "OriginalPlayer"
+    private val originalDeadlineQueue = if (usesOriginalDeadlineQueue) OriginalPcmDeadlineQueue(sampleRate) else null
     private val queue = Channel<ByteArray>(
         capacity = queueCapacity.coerceAtLeast(2),
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -92,21 +95,14 @@ class StreamingPcmPlayer(
                 it.setVolume(volume)
                 it.play()
                 applyPlaybackSpeed(it, playbackSpeed)
-                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks speed=${formatSpeed(playbackSpeed)}x")
+                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks speed=${formatSpeed(playbackSpeed)}x deadlineQueue=$usesOriginalDeadlineQueue")
             }
         worker = scope.launch {
             runCatching {
-                val prebuffer = ArrayList<ByteArray>()
-                val first = receiveNextChunk() ?: return@runCatching
-                prebuffer.add(first)
-                repeat((initialJitterChunks - 1).coerceAtLeast(0)) {
-                    withTimeoutOrNull(750) { receiveNextChunk() }?.let(prebuffer::add)
-                }
-                logger?.log(3, diagnosticName, "Bắt đầu phát sau prebuffer chunks=${prebuffer.size}")
-                prebuffer.forEach(::writeBlocking)
-                while (isActive) {
-                    val data = receiveNextChunk() ?: break
-                    writeBlocking(data)
+                if (usesOriginalDeadlineQueue) {
+                    runOriginalDeadlineWorker()
+                } else {
+                    runStandardWorker()
                 }
             }.onFailure { error ->
                 if (error !is CancellationException && worker?.isCancelled != true) {
@@ -118,6 +114,21 @@ class StreamingPcmPlayer(
 
     fun enqueue(data: ByteArray) {
         if (data.isEmpty()) return
+        if (usesOriginalDeadlineQueue) {
+            val planner = originalDeadlineQueue ?: return
+            val now = SystemClock.elapsedRealtime()
+            val dueAt = planner.enqueue(data, playbackSpeed, now)
+            val stats = planner.stats()
+            if (stats.queuedChunks == 1 || stats.queuedChunks % 50 == 0) {
+                logger?.log(
+                    3,
+                    diagnosticName,
+                    "Xếp PCM gốc theo deadline dueInMs=${(dueAt - now).coerceAtLeast(0L)} queued=${stats.queuedChunks} bytes=${stats.queuedBytes} generation=${stats.generation}",
+                )
+            }
+            return
+        }
+
         val copy = data.copyOf()
         synchronized(pauseLock) {
             if (paused.get()) {
@@ -151,12 +162,29 @@ class StreamingPcmPlayer(
             requested
         }
         playbackSpeed = safe
+        if (usesOriginalDeadlineQueue) {
+            originalDeadlineQueue?.retime(safe, SystemClock.elapsedRealtime())
+        }
         track?.let { applyPlaybackSpeed(it, safe) }
     }
 
     fun currentPlaybackSpeed(): Float = playbackSpeed
 
     fun pause() {
+        if (usesOriginalDeadlineQueue) {
+            if (!paused.compareAndSet(false, true)) return
+            val now = SystemClock.elapsedRealtime()
+            originalDeadlineQueue?.pause(now)
+            runCatching { track?.pause() }
+            val scheduled = originalDeadlineQueue?.stats()
+            logger?.log(
+                2,
+                diagnosticName,
+                "Tạm dừng phát; deadlineQueue=${scheduled?.queuedChunks ?: 0} deadlineBytes=${scheduled?.queuedBytes ?: 0}",
+            )
+            return
+        }
+
         var moved = 0
         synchronized(pauseLock) {
             if (!paused.compareAndSet(false, true)) return
@@ -177,17 +205,44 @@ class StreamingPcmPlayer(
 
     fun resume() {
         if (!paused.compareAndSet(true, false)) return
+        val pausedFor = if (usesOriginalDeadlineQueue) {
+            originalDeadlineQueue?.resume(SystemClock.elapsedRealtime()) ?: 0L
+        } else {
+            0L
+        }
         runCatching { track?.play() }
         track?.let { applyPlaybackSpeed(it, playbackSpeed) }
-        val stats = stats()
-        logger?.log(
-            2,
-            diagnosticName,
-            "Tiếp tục phát; backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes} speed=${formatSpeed(playbackSpeed)}x",
-        )
+        if (usesOriginalDeadlineQueue) {
+            val scheduled = originalDeadlineQueue?.stats()
+            logger?.log(
+                2,
+                diagnosticName,
+                "Tiếp tục phát; dời deadline thêm ${pausedFor}ms queued=${scheduled?.queuedChunks ?: 0} bytes=${scheduled?.queuedBytes ?: 0} speed=${formatSpeed(playbackSpeed)}x",
+            )
+        } else {
+            val stats = stats()
+            logger?.log(
+                2,
+                diagnosticName,
+                "Tiếp tục phát; backlogChunks=${stats.pausedBacklogChunks} backlogBytes=${stats.pausedBacklogBytes} speed=${formatSpeed(playbackSpeed)}x",
+            )
+        }
     }
 
     fun flush() {
+        if (usesOriginalDeadlineQueue) {
+            val planner = originalDeadlineQueue
+            val before = planner?.stats()
+            val removed = planner?.clear() ?: 0
+            runCatching { track?.flush() }
+            logger?.log(
+                2,
+                diagnosticName,
+                "Xả deadline queue removed=$removed bytes=${before?.queuedBytes ?: 0} newGeneration=${planner?.stats()?.generation ?: 0}",
+            )
+            return
+        }
+
         var removed = 0
         while (queue.tryReceive().isSuccess) removed++
         var pausedRemoved = 0
@@ -214,14 +269,16 @@ class StreamingPcmPlayer(
         val current = track
         val underruns = current?.underrunCount ?: 0
         val stats = stats()
+        val scheduled = originalDeadlineQueue?.stats()
         logger?.log(
             2,
             diagnosticName,
-            "Dừng AudioTrack writtenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks} pausedDropped=${stats.pausedBacklogDroppedChunks} pausedBuffered=${stats.pausedBacklogChunks} underruns=$underruns speed=${formatSpeed(playbackSpeed)}x",
+            "Dừng AudioTrack writtenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks} pausedDropped=${stats.pausedBacklogDroppedChunks} pausedBuffered=${stats.pausedBacklogChunks} scheduled=${scheduled?.queuedChunks ?: 0} scheduledBytes=${scheduled?.queuedBytes ?: 0} underruns=$underruns speed=${formatSpeed(playbackSpeed)}x",
         )
         worker?.cancel()
         worker = null
         queue.close()
+        originalDeadlineQueue?.clear()
         synchronized(pauseLock) {
             pausedBacklog.clear()
             pausedBacklogBytes = 0L
@@ -232,6 +289,49 @@ class StreamingPcmPlayer(
         runCatching { current?.release() }
         track = null
         scope.cancel()
+    }
+
+    private suspend fun runStandardWorker() {
+        val prebuffer = ArrayList<ByteArray>()
+        val first = receiveNextChunk() ?: return
+        prebuffer.add(first)
+        repeat((initialJitterChunks - 1).coerceAtLeast(0)) {
+            withTimeoutOrNull(750) { receiveNextChunk() }?.let(prebuffer::add)
+        }
+        logger?.log(3, diagnosticName, "Bắt đầu phát sau prebuffer chunks=${prebuffer.size}")
+        prebuffer.forEach(::writeBlocking)
+        while (scope.isActive) {
+            val data = receiveNextChunk() ?: break
+            writeBlocking(data)
+        }
+    }
+
+    private suspend fun runOriginalDeadlineWorker() {
+        val planner = originalDeadlineQueue ?: return
+        var started = false
+        while (scope.isActive) {
+            if (paused.get()) {
+                delay(DEADLINE_POLL_MS)
+                continue
+            }
+            val now = SystemClock.elapsedRealtime()
+            val ready = planner.pollReady(now)
+            if (ready != null) {
+                if (!planner.isGenerationCurrent(ready.generation)) continue
+                if (!started) {
+                    started = true
+                    logger?.log(
+                        3,
+                        diagnosticName,
+                        "Bắt đầu phát PCM gốc theo deadline generation=${ready.generation} dueLagMs=${(now - ready.dueAtMs).coerceAtLeast(0L)}",
+                    )
+                }
+                writeBlocking(ready.data)
+                continue
+            }
+            val waitMs = planner.millisUntilNext(now)
+            delay((waitMs ?: DEADLINE_POLL_MS).coerceIn(1L, DEADLINE_POLL_MS))
+        }
     }
 
     private suspend fun receiveNextChunk(): ByteArray? {
@@ -317,5 +417,6 @@ class StreamingPcmPlayer(
 
     companion object {
         private const val MAX_PAUSED_BACKLOG_BYTES = 16L * 1024L * 1024L
+        private const val DEADLINE_POLL_MS = 20L
     }
 }

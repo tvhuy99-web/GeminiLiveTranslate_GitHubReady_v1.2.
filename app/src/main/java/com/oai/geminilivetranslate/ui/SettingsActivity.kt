@@ -316,10 +316,9 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         title("Giọng đọc của điện thoại")
-        rowButton("Cài đặt TTS: bộ đọc, ngôn ngữ, giọng đọc") {
+        rowButton("Chọn bộ đọc") {
             startActivity(Intent(this, TtsSettingsActivity::class.java))
         }
-        description("Chọn bộ đọc TTS trên máy, sau đó chỉ chọn ngôn ngữ mà bộ đọc đó hỗ trợ và chỉ chọn giọng thuộc ngôn ngữ đã chọn. Mặc định ưu tiên Tiếng Việt. Có nút Nghe thử trong màn hình TTS.")
         check(
             label = "Ghép các câu ngắn trước khi đọc",
             checked = draft.ttsSmoothEnabled,

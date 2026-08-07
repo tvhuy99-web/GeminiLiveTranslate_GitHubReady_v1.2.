@@ -1,0 +1,99 @@
+name: Package APK for Device Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-apk-device-test
+  cancel-in-progress: true
+
+jobs:
+  package:
+    if: github.head_ref == 'release-build-trigger'
+    name: Build verified APK with restored log controls
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Clone trusted main source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+            clone --no-checkout "$REPO_URL" source
+          cd source
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" \
+            fetch --depth=1 origin "$BASE_SHA"
+          git checkout --detach "$BASE_SHA"
+          printf '%s\n' "$BASE_SHA" > ../SOURCE_COMMIT.txt
+
+      - name: Confirm restored log controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="source/app/src/main/java/com/oai/geminilivetranslate/ui/LogViewerActivity.kt"
+          grep -Fq 'Mức thông tin được ghi' "$FILE"
+          grep -Fq 'Giữ nhật ký sau khi đóng ứng dụng' "$FILE"
+          grep -Fq 'Ghi nội dung hội thoại vào nhật ký' "$FILE"
+          grep -Fq 'actionButton("Cách ghi")' "$FILE"
+
+      - name: Test, lint and build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
+          if [[ -n "$JAVA17" ]]; then
+            export JAVA_HOME="$JAVA17/x64"
+            export PATH="$JAVA_HOME/bin:$PATH"
+          fi
+          java -version
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          python3 tools/verify_github_ready.py
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify and prepare package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee ../apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee ../badging.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" ../badging.txt
+          mkdir -p ../device-test-apk
+          cp "$APK" ../device-test-apk/GeminiLiveTranslate-1.2.2-debug-log-controls.apk
+          cd ../device-test-apk
+          sha256sum GeminiLiveTranslate-1.2.2-debug-log-controls.apk > GeminiLiveTranslate-1.2.2-debug-log-controls.apk.sha256
+          {
+            echo 'versionName=1.2.2-debug'
+            echo 'versionCode=10202'
+            echo 'applicationId=com.oai.geminilivetranslate.debug'
+            echo 'signingMode=android-debug'
+            printf 'sourceCommit='
+            cat ../SOURCE_COMMIT.txt
+            echo 'verifiedControls=logLevel,logToFile,logIncludeTranscript'
+          } > BUILD_INFO.txt
+
+      - name: Upload APK to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-1.2.2-debug-log-controls
+          path: device-test-apk/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

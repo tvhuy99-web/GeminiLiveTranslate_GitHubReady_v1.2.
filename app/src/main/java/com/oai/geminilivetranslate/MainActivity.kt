@@ -72,10 +72,28 @@ class MainActivity : AppCompatActivity() {
     private var subtitleRenderEvents = 0L
     private var lastRenderedTranscriptChars = -1
     private var selectedFilePlaybackSpeed = 1f
-    private val aiStreamValues = listOf("accessibility", "media", "voice_communication", "assistant")
+    private val uiPrefs by lazy { getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE) }
+    private val aiStreamValues = listOf(
+        "media",
+        "accessibility",
+        "alarm",
+        "notification",
+        "ring",
+        "system",
+        "voice_call",
+        "dtmf",
+        "voice_communication",
+        "assistant",
+    )
     private val aiStreamLabels = listOf(
-        "Trợ năng - ưu tiên nghe rõ",
-        "Đa phương tiện / nhạc",
+        "Phương tiện / nhạc (Music)",
+        "Trợ năng (Accessibility)",
+        "Báo thức (Alarm)",
+        "Thông báo (Notification)",
+        "Nhạc chuông (Ring)",
+        "Hệ thống (System)",
+        "Cuộc gọi (Voice Call)",
+        "DTMF",
         "Giao tiếp bằng giọng nói",
         "Trợ lý Android",
     )
@@ -152,7 +170,10 @@ class MainActivity : AppCompatActivity() {
             bound = translationService != null
             logger.log(2, "Service", "Đã bind TranslationService success=$bound")
             translationService?.let { service ->
-                selectedFilePlaybackSpeed = service.currentFilePlaybackSpeed()
+                val restoredMode = loadSourceMode()
+                service.setSourceMode(restoredMode)
+                selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
+                service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
                 syncFileSpeedUi(selectedFilePlaybackSpeed)
             }
             pendingSelectedUri?.let { uri ->
@@ -193,7 +214,8 @@ class MainActivity : AppCompatActivity() {
         preferences = AppPreferences(this)
         apiKeyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
-        logger.log(2, "UI", "MainActivity onCreate")
+        selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
+        logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x")
         setupUi()
         requestNotificationPermissionIfNeeded()
     }
@@ -229,9 +251,11 @@ class MainActivity : AppCompatActivity() {
             val mode = SourceMode.entries.getOrElse(position) { SourceMode.FILE }
             if (mode == SourceMode.INTERNAL && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 toast("Yêu cầu Android 10 trở lên")
-                audioSourceSpinner.setSelection(0)
+                saveSourceMode(SourceMode.FILE)
+                audioSourceSpinner.setSelection(SourceMode.FILE.ordinal)
                 return@simpleSelection
             }
+            saveSourceMode(mode)
             translationService?.setSourceMode(mode)
             updateModeUi(mode, translationService?.state?.value?.running == true)
         }
@@ -257,6 +281,7 @@ class MainActivity : AppCompatActivity() {
                 FileAudioSource.MAX_PLAYBACK_SPEED,
             )
             selectedFilePlaybackSpeed = speed
+            saveFilePlaybackSpeed(speed)
             syncFileSpeedUi(speed)
             translationService?.setFilePlaybackSpeed(speed)
         }))
@@ -387,6 +412,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMode(mode: SourceMode) {
+        saveSourceMode(mode)
         logger.log(2, "UI", "Yêu cầu bắt đầu source=$mode serviceBound=${translationService != null}")
         if (
             Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
@@ -419,6 +445,7 @@ class MainActivity : AppCompatActivity() {
             SourceMode.INTERNAL -> {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                     toast("Thu âm nội bộ yêu cầu Android 10 trở lên")
+                    saveSourceMode(SourceMode.FILE)
                     return
                 }
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -452,6 +479,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun restorePreferencesUi() = with(binding) {
         val settings = preferences.load()
+        val restoredMode = loadSourceMode()
+        selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
+        spinnerReady = false
+        audioSourceSpinner.setSelection(restoredMode.ordinal)
+        audioSourceSpinner.post { spinnerReady = true }
+        translationService?.setSourceMode(restoredMode)
+        translationService?.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         originalVolumeSeekBar.progress = settings.originalVolume
         translatedVolumeSeekBar.progress = settings.translatedVolume
         aiVoiceSwitch.isChecked = settings.aiVoice
@@ -463,6 +497,7 @@ class MainActivity : AppCompatActivity() {
         settingsButton.text = if (settings.uiMode == "simple") "Cài đặt" else "Cài đặt nâng cao"
         syncFileSpeedUi(selectedFilePlaybackSpeed)
         restoreMicLanguageSpinner()
+        updateModeUi(restoredMode, translationService?.state?.value?.running == true)
         applyUiMode()
     }
 
@@ -685,6 +720,30 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Đóng", null).show()
     }
 
+    private fun loadSourceMode(): SourceMode {
+        val saved = uiPrefs.getString(KEY_SOURCE_MODE, SourceMode.FILE.name).orEmpty()
+        val mode = runCatching { SourceMode.valueOf(saved) }.getOrDefault(SourceMode.FILE)
+        return if (mode == SourceMode.INTERNAL && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) SourceMode.FILE else mode
+    }
+
+    private fun saveSourceMode(mode: SourceMode) {
+        val safe = if (mode == SourceMode.INTERNAL && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) SourceMode.FILE else mode
+        uiPrefs.edit().putString(KEY_SOURCE_MODE, safe.name).apply()
+    }
+
+    private fun loadFilePlaybackSpeed(): Float = uiPrefs
+        .getFloat(KEY_FILE_PLAYBACK_SPEED, 1f)
+        .coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED)
+
+    private fun saveFilePlaybackSpeed(speed: Float) {
+        uiPrefs.edit()
+            .putFloat(
+                KEY_FILE_PLAYBACK_SPEED,
+                speed.coerceIn(FileAudioSource.MIN_PLAYBACK_SPEED, FileAudioSource.MAX_PLAYBACK_SPEED),
+            )
+            .apply()
+    }
+
     private fun ensureServiceStarted() {
         startService(Intent(this, TranslationService::class.java))
     }
@@ -731,5 +790,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val FILE_SPEED_STEPS = 20
+        private const val KEY_SOURCE_MODE = "lastSourceMode"
+        private const val KEY_FILE_PLAYBACK_SPEED = "filePlaybackSpeed"
     }
 }

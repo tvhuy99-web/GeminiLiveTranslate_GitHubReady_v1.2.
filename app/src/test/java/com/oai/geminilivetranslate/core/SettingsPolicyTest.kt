@@ -40,6 +40,25 @@ class SettingsPolicyTest {
     }
 
     @Test
+    fun expandedAudioStreamTypesSurviveSanitization() {
+        val values = listOf(
+            "accessibility",
+            "media",
+            "voice_communication",
+            "assistant",
+            "alarm",
+            "notification",
+            "ring",
+            "system",
+            "voice_call",
+            "dtmf",
+        )
+        values.forEach { value ->
+            assertEquals(value, SettingsPolicy.sanitize(AppSettings(aiAudioStreamType = value)).aiAudioStreamType)
+        }
+    }
+
+    @Test
     fun diffSeparatesLiveReconnectPlaybackAndNextSessionChanges() {
         val old = AppSettings()
         val changed = old.copy(

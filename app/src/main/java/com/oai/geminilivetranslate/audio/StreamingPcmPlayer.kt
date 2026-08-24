@@ -74,10 +74,11 @@ class StreamingPcmPlayer(
         val minimum = AudioTrack.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         require(minimum > 0) { "AudioTrack không hỗ trợ sampleRate=$sampleRate, minBuffer=$minimum" }
         val chosenBuffer = maxOf(minimum, bufferBytes).coerceAtLeast(sampleRate / 2)
+        val resolvedUsage = resolveUsage()
         track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(usage)
+                    .setUsage(resolvedUsage)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -95,7 +96,7 @@ class StreamingPcmPlayer(
                 it.setVolume(volume)
                 it.play()
                 applyPlaybackSpeed(it, playbackSpeed)
-                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks speed=${formatSpeed(playbackSpeed)}x deadlineQueue=$usesOriginalDeadlineQueue")
+                logger?.log(2, diagnosticName, "Khởi tạo AudioTrack sampleRate=$sampleRate bufferBytes=$chosenBuffer sessionId=${it.audioSessionId} jitter=$initialJitterChunks speed=${formatSpeed(playbackSpeed)}x usage=$resolvedUsage deadlineQueue=$usesOriginalDeadlineQueue")
             }
         worker = scope.launch {
             runCatching {
@@ -410,6 +411,22 @@ class StreamingPcmPlayer(
             logger?.log(2, diagnosticName, "Áp dụng tốc độ phát speed=${formatSpeed(safe)}x")
         }.onFailure {
             logger?.log(1, diagnosticName, "Thiết bị từ chối tốc độ speed=${formatSpeed(safe)}x; giữ tốc độ hiện tại", it)
+        }
+    }
+
+    private fun resolveUsage(): Int {
+        if (!diagnosticName.startsWith("TranslatedPlayer-")) return usage
+        return when (diagnosticName.removePrefix("TranslatedPlayer-")) {
+            "media" -> AudioAttributes.USAGE_MEDIA
+            "accessibility" -> AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
+            "alarm" -> AudioAttributes.USAGE_ALARM
+            "notification" -> AudioAttributes.USAGE_NOTIFICATION
+            "ring" -> AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+            "system" -> AudioAttributes.USAGE_ASSISTANCE_SONIFICATION
+            "voice_call", "voice_communication" -> AudioAttributes.USAGE_VOICE_COMMUNICATION
+            "dtmf" -> AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING
+            "assistant" -> AudioAttributes.USAGE_ASSISTANT
+            else -> usage
         }
     }
 

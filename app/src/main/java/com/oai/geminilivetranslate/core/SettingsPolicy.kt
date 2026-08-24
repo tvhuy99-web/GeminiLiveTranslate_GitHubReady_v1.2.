@@ -6,7 +6,18 @@ object SettingsPolicy {
     val validProfiles = setOf("realtime", "balanced", "stable", "custom")
     val validSaveModes = setOf("translated", "original", "mixed")
     val validExportFormats = setOf("srt", "txt")
-    val validAiAudioStreamTypes = setOf("accessibility", "media", "voice_communication", "assistant")
+    val validAiAudioStreamTypes = setOf(
+        "accessibility",
+        "media",
+        "voice_communication",
+        "assistant",
+        "alarm",
+        "notification",
+        "ring",
+        "system",
+        "voice_call",
+        "dtmf",
+    )
 
     fun sanitize(input: AppSettings): AppSettings {
         val languages = input.micLanguages.mapNotNull(LanguageCatalog::normalize).distinct().ifEmpty { listOf("vi") }

@@ -51,7 +51,7 @@
                 android:text="Nguồn âm thanh:"
                 android:textSize="16sp" />
 
-            <Spinner
+            <com.oai.geminilivetranslate.ui.AccessibleSpinner
                 android:id="@+id/audioSourceSpinner"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -75,7 +75,7 @@
                 android:text="Ngôn ngữ cần dịch sang:"
                 android:textSize="16sp" />
 
-            <Spinner
+            <com.oai.geminilivetranslate.ui.AccessibleSpinner
                 android:id="@+id/micLanguageSpinner"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -241,7 +241,7 @@
                 android:text="Cách phát giọng dịch"
                 android:textSize="15sp" />
 
-            <Spinner
+            <com.oai.geminilivetranslate.ui.AccessibleSpinner
                 android:id="@+id/aiAudioStreamSpinner"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

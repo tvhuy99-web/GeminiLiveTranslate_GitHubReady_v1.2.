@@ -304,13 +304,12 @@ object VideoAudioExtractor {
         }
     }
 
-    companion object {
-        private const val ADTS_HEADER_BYTES = 7
-        private const val AAC_MAX_ADTS_FRAME_BYTES = 8_191
-        private const val AAC_MAX_SAMPLE_BYTES = AAC_MAX_ADTS_FRAME_BYTES - ADTS_HEADER_BYTES
-        private const val AAC_BATCH_BYTES = 2 * 1_024 * 1_024
-        private const val PROGRESS_SAMPLE_INTERVAL = 256L
-        private val AAC_SAMPLE_RATES = intArrayOf(
+    private const val ADTS_HEADER_BYTES = 7
+    private const val AAC_MAX_ADTS_FRAME_BYTES = 8_191
+    private const val AAC_MAX_SAMPLE_BYTES = AAC_MAX_ADTS_FRAME_BYTES - ADTS_HEADER_BYTES
+    private const val AAC_BATCH_BYTES = 2 * 1_024 * 1_024
+    private const val PROGRESS_SAMPLE_INTERVAL = 256L
+    private val AAC_SAMPLE_RATES = intArrayOf(
             96_000,
             88_200,
             64_000,
@@ -324,6 +323,5 @@ object VideoAudioExtractor {
             11_025,
             8_000,
             7_350,
-        )
-    }
+    )
 }

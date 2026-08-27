@@ -174,7 +174,7 @@ def main() -> None:
         fail("Unsupported outputAudioTranscription field is present in Gemini setup")
     require_tokens(
         client,
-        ['OperationMode.TRANSCRIBE', '.put("inputAudioTranscription"', 'JSONArray().put("TEXT")'],
+        ['OperationMode.TRANSCRIBE', '"inputAudioTranscription"', 'JSONArray().put("TEXT")'],
         "Gemini live transcription",
     )
 

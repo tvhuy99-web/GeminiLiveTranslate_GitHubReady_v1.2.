@@ -172,6 +172,8 @@ class MainActivity : AppCompatActivity() {
             translationService?.let { service ->
                 val restoredMode = loadSourceMode()
                 service.setSourceMode(restoredMode)
+                service.setProcessingMode(preferences.loadProcessingMode())
+                service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
                 selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
                 syncFileSpeedUi(selectedFilePlaybackSpeed)
@@ -241,6 +243,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUi() = with(binding) {
         titleText.text = "Gemini Live Translate v${BuildConfig.VERSION_NAME}"
+        processingModeButton.setOnClickListener {
+            if (translationService?.state?.value?.running == true) return@setOnClickListener
+            val next = if (isTranscribeSelected()) {
+                AppPreferences.PROCESSING_MODE_TRANSLATE
+            } else {
+                AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            }
+            preferences.setProcessingMode(next)
+            translationService?.setProcessingMode(next)
+            restoreProcessingModeUi()
+        }
+        speakerDiarizationSwitch.setOnCheckedChangeListener { _, checked ->
+            if (speakerDiarizationSwitch.isPressed) {
+                preferences.setSpeakerDiarization(checked)
+                translationService?.setSpeakerDiarization(checked)
+            }
+        }
         audioSourceSpinner.adapter = ArrayAdapter(
             this@MainActivity,
             android.R.layout.simple_spinner_item,
@@ -257,6 +276,7 @@ class MainActivity : AppCompatActivity() {
             }
             saveSourceMode(mode)
             translationService?.setSourceMode(mode)
+            translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
             updateModeUi(mode, translationService?.state?.value?.running == true)
         }
         audioSourceSpinner.post { spinnerReady = true }
@@ -430,7 +450,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         service.setSourceMode(mode)
-        if (mode == SourceMode.FILE) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        service.setProcessingMode(preferences.loadProcessingMode())
+        service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
+        if (mode == SourceMode.FILE && !isTranscribeSelected()) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         startService(Intent(this, TranslationService::class.java))
         when (mode) {
             SourceMode.FILE -> service.startTranslation(mode)

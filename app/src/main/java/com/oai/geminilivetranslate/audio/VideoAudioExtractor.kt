@@ -13,48 +13,57 @@ object VideoAudioExtractor {
     data class Result(
         val file: File,
         val mimeType: String,
+        val trackMimeType: String,
         val durationMs: Long,
+        val outputBytes: Long,
+        val sampleCount: Long,
     )
 
     fun extract(
         context: Context,
         uri: Uri,
         output: File,
+        maxDurationMs: Long? = null,
         onProgress: (Int) -> Unit,
     ): Result {
         output.parentFile?.mkdirs()
         output.delete()
 
+        val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
+            ?: error("Không mở được video")
         val extractor = MediaExtractor()
-        extractor.setDataSource(context, uri, null)
-        var audioTrack = -1
-        var audioFormat: MediaFormat? = null
-        for (index in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(index)
-            val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
-            if (mime.startsWith("audio/")) {
-                audioTrack = index
-                audioFormat = format
-                break
-            }
-        }
-        if (audioTrack < 0 || audioFormat == null) {
-            extractor.release()
-            error("Video không có track âm thanh")
-        }
-
-        val format = requireNotNull(audioFormat)
-        val mimeType = format.getString(MediaFormat.KEY_MIME).orEmpty()
-        val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
-            format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
-        } else {
-            0L
-        }
-
-        extractor.selectTrack(audioTrack)
-        val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        var muxer: MediaMuxer? = null
         var started = false
         try {
+            extractor.setDataSource(descriptor.fileDescriptor)
+            var audioTrack = -1
+            var audioFormat: MediaFormat? = null
+            for (index in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(index)
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("audio/")) {
+                    audioTrack = index
+                    audioFormat = format
+                    break
+                }
+            }
+            if (audioTrack < 0 || audioFormat == null) error("Video không có track âm thanh")
+
+            val format = requireNotNull(audioFormat)
+            val trackMime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            val durationMs = durationUs / 1_000L
+            if (durationMs <= 0L) error("Không đọc được thời lượng audio trong video")
+            if (maxDurationMs != null && durationMs > maxDurationMs) {
+                error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
+            }
+
+            extractor.selectTrack(audioTrack)
+            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             val muxerTrack = muxer.addTrack(format)
             muxer.start()
             started = true
@@ -66,6 +75,9 @@ object VideoAudioExtractor {
             }
             val buffer = ByteBuffer.allocateDirect(maxInputSize)
             val info = MediaCodec.BufferInfo()
+            var sampleCount = 0L
+            var bytesWritten = 0L
+            var lastProgress = -1
 
             while (true) {
                 buffer.clear()
@@ -80,25 +92,39 @@ object VideoAudioExtractor {
                     0
                 }
                 muxer.writeSampleData(muxerTrack, buffer, info)
+                sampleCount++
+                bytesWritten += size
                 if (durationUs > 0L) {
-                    onProgress(((info.presentationTimeUs * 100L) / durationUs).toInt().coerceIn(0, 99))
+                    val progress = ((info.presentationTimeUs * 100L) / durationUs).toInt().coerceIn(0, 99)
+                    if (progress != lastProgress) {
+                        lastProgress = progress
+                        onProgress(progress)
+                    }
                 }
                 extractor.advance()
             }
             onProgress(100)
+            if (started) {
+                muxer.stop()
+                started = false
+            }
+            muxer.release()
+            muxer = null
+
+            if (!output.isFile || output.length() <= 0L) error("Không tách được âm thanh từ video")
+            return Result(
+                file = output,
+                mimeType = "audio/mp4",
+                trackMimeType = trackMime,
+                durationMs = durationMs,
+                outputBytes = output.length().takeIf { it > 0L } ?: bytesWritten,
+                sampleCount = sampleCount,
+            )
         } finally {
             extractor.release()
-            if (started) runCatching { muxer.stop() }
-            muxer.release()
+            if (started) runCatching { muxer?.stop() }
+            runCatching { muxer?.release() }
+            descriptor.close()
         }
-
-        if (!output.isFile || output.length() <= 0L) {
-            error("Không tách được âm thanh từ video")
-        }
-        return Result(
-            file = output,
-            mimeType = "audio/mp4",
-            durationMs = durationUs / 1_000L,
-        )
     }
 }

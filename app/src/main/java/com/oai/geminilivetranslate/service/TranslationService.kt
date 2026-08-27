@@ -609,14 +609,16 @@ class TranslationService : LifecycleService() {
         reconnectJob?.cancel()
         reconnectJob = null
         val generation = ++connectionGeneration
-        val handleForThisConnection = sessionResumptionHandle
+        val handleForThisConnection = if (isTranscribeMode()) null else sessionResumptionHandle
         setupStartedAt = SystemClock.elapsedRealtime()
         logger.log(2, "GeminiWS", "Mở kết nối generation=$generation resume=${!handleForThisConnection.isNullOrBlank()} maxWireBytes=${calculateMaxQueuedWireBytes()}")
         client?.close(false)
         updateState {
             it.copy(
                 setupComplete = false,
-                status = if (handleForThisConnection.isNullOrBlank()) {
+                status = if (isTranscribeMode()) {
+                    "Đang kết nối chép lời..."
+                } else if (handleForThisConnection.isNullOrBlank()) {
                     "Đang kết nối Gemini Live API..."
                 } else {
                     "Đang khôi phục phiên Gemini..."
@@ -625,12 +627,17 @@ class TranslationService : LifecycleService() {
         }
         val liveClient = GeminiLiveClient(
             apiKey = apiKey,
-            model = settings.model,
+            model = activeModelName(),
             targetLanguage = settings.targetLanguage,
             echoTargetLanguage = settings.echoTargetLanguage,
             logger = logger,
             resumeHandle = handleForThisConnection,
             maxQueuedWireBytes = calculateMaxQueuedWireBytes(),
+            operationMode = if (isTranscribeMode()) {
+                GeminiLiveClient.OperationMode.TRANSCRIBE
+            } else {
+                GeminiLiveClient.OperationMode.TRANSLATE
+            },
             listener = object : GeminiLiveClient.Listener {
                 override fun onSetupComplete() {
                     if (generation != connectionGeneration || !_state.value.running) return
@@ -646,13 +653,16 @@ class TranslationService : LifecycleService() {
                     updateState {
                         it.copy(
                             setupComplete = true,
-                            status = if (handleForThisConnection.isNullOrBlank()) {
+                            status = if (isTranscribeMode()) {
+                                "Đang chép lời..."
+                            } else if (handleForThisConnection.isNullOrBlank()) {
                                 "Setup hoàn tất! Bắt đầu truyền audio..."
                             } else {
                                 "Đã khôi phục phiên; tiếp tục truyền audio..."
                             }
                         )
                     }
+                    if (isTranscribeMode()) scheduleTranscribeRotation(apiKey)
                     if (sourceStarted) {
                         if (!_state.value.paused) {
                             source?.resume()
@@ -678,11 +688,11 @@ class TranslationService : LifecycleService() {
                         logger.log(1, "SubtitlePipe", "Bỏ onText event=$event do generation cũ callback=$generation current=$currentGeneration")
                         return
                     }
-                    appendTranslation(text, event)
+                    if (!isTranscribeMode()) appendTranslation(text, event)
                 }
 
                 override fun onAudio(pcm24kMono: ByteArray) {
-                    if (generation != connectionGeneration || !_state.value.running) return
+                    if (generation != connectionGeneration || !_state.value.running || isTranscribeMode()) return
                     totalOutputBytes += pcm24kMono.size
                     if (settings.aiVoice) aiPlayer?.enqueue(pcm24kMono)
                     translatedWriter?.write(pcm24kMono)
@@ -691,7 +701,17 @@ class TranslationService : LifecycleService() {
                 }
 
                 override fun onInputTranscript(text: String) {
-                    logger.log(3, "GeminiInput", text)
+                    if (generation != connectionGeneration || !_state.value.running) return
+                    if (isTranscribeMode()) {
+                        appendTranscriptionSegment(text)
+                    } else {
+                        logger.log(3, "GeminiInput", text)
+                    }
+                }
+
+                override fun onInterimTranscript(text: String) {
+                    if (generation != connectionGeneration || !_state.value.running || !isTranscribeMode()) return
+                    logger.log(3, "TranscribeLive", "interim chars=${text.length}")
                 }
 
                 override fun onTurnComplete() {
@@ -939,6 +959,20 @@ class TranslationService : LifecycleService() {
         return (seconds * 1_000.0 - 1_000.0).toLong().coerceIn(250L, 3_000L)
     }
 
+    private fun appendTranscriptionSegment(raw: String) {
+        val cleaned = raw.trim()
+        if (cleaned.isBlank()) return
+        subtitles.append(cleaned)
+        updateState { current ->
+            val separator = if (current.transcript.isBlank()) "" else " "
+            current.copy(
+                transcript = (current.transcript + separator + cleaned).takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đang chép lời...",
+            )
+        }
+        DiagnosticContext.put("session.transcriptChars", _state.value.transcript.length)
+    }
+
     private fun appendTranslation(raw: String, callbackEvent: Long) {
         val cleaned = raw.trim()
         if (cleaned.isBlank()) {
@@ -1001,9 +1035,21 @@ class TranslationService : LifecycleService() {
         val apiError = error as? GeminiLiveClient.GeminiApiException
         when (apiError?.code) {
             400, 401, 403 -> stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key và cấu hình")
-            404 -> stopTranslation("Không tìm thấy model ${settings.model}")
+            404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
             429 -> scheduleReconnect(60_000L, true, "Gemini đang giới hạn lưu lượng")
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
+        }
+    }
+
+    private fun scheduleTranscribeRotation(apiKey: String) {
+        transcribeRotationJob?.cancel()
+        transcribeRotationJob = serviceScope.launch {
+            delay(TRANSCRIBE_LIVE_ROTATE_MS)
+            if (!_state.value.running || !isTranscribeMode() || currentMode == SourceMode.FILE) return@launch
+            logger.log(2, "TranscribeLive", "Xoay phiên trước giới hạn Live")
+            source?.pause()
+            clearPendingInputForFreshSession()
+            connectGemini(apiKey)
         }
     }
 

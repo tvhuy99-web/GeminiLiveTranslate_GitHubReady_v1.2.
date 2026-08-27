@@ -1,14 +1,19 @@
 package com.oai.geminilivetranslate.network
 
+import android.content.ContentResolver
+import android.net.Uri
 import com.oai.geminilivetranslate.core.SessionLogger
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 class GeminiFileTranscribeClient(
@@ -27,6 +32,19 @@ class GeminiFileTranscribeClient(
         val words: List<WordInfo>,
     )
 
+    private data class UploadSource(
+        val displayName: String,
+        val mimeType: String,
+        val contentLength: Long,
+        val open: () -> InputStream,
+    )
+
+    private data class UploadedFile(
+        val name: String?,
+        val uri: String,
+        val mimeType: String,
+    )
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -35,17 +53,60 @@ class GeminiFileTranscribeClient(
         .build()
 
     fun transcribe(
+        resolver: ContentResolver,
+        uri: Uri,
+        displayName: String,
+        mimeType: String,
+        speakerDiarization: Boolean,
+        onProgress: (String, Int) -> Unit,
+    ): Result {
+        val length = runCatching {
+            resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                descriptor.length.takeIf { it >= 0L }
+                    ?: descriptor.parcelFileDescriptor.statSize.takeIf { it >= 0L }
+            }
+        }.getOrNull() ?: -1L
+        return transcribe(
+            UploadSource(
+                displayName = displayName,
+                mimeType = mimeType,
+                contentLength = length,
+                open = { resolver.openInputStream(uri) ?: error("Không mở được tệp đã chọn") },
+            ),
+            speakerDiarization,
+            onProgress,
+        )
+    }
+
+    fun transcribe(
         file: File,
+        mimeType: String,
+        speakerDiarization: Boolean,
+        onProgress: (String, Int) -> Unit,
+    ): Result {
+        require(file.isFile && file.length() > 0L) { "Tệp âm thanh không hợp lệ" }
+        return transcribe(
+            UploadSource(
+                displayName = file.name,
+                mimeType = mimeType,
+                contentLength = file.length(),
+                open = { file.inputStream() },
+            ),
+            speakerDiarization,
+            onProgress,
+        )
+    }
+
+    private fun transcribe(
+        source: UploadSource,
         speakerDiarization: Boolean,
         onProgress: (String, Int) -> Unit,
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
-        require(file.isFile && file.length() > 44L) { "Tệp âm thanh không hợp lệ" }
-
         var uploadedName: String? = null
         try {
-            onProgress("Đang tải tệp lên...", 5)
-            val uploaded = upload(file, onProgress)
+            onProgress("Đang tải tệp lên...", 2)
+            val uploaded = upload(source, onProgress)
             uploadedName = uploaded.name
             onProgress("Đang chép lời...", 55)
             val interaction = createInteraction(uploaded.uri, uploaded.mimeType, speakerDiarization)
@@ -63,45 +124,50 @@ class GeminiFileTranscribeClient(
         client.connectionPool.evictAll()
     }
 
-    private data class UploadedFile(
-        val name: String?,
-        val uri: String,
-        val mimeType: String,
-    )
-
-    private fun upload(file: File, onProgress: (String, Int) -> Unit): UploadedFile {
+    private fun upload(source: UploadSource, onProgress: (String, Int) -> Unit): UploadedFile {
         val startJson = JSONObject()
-            .put("file", JSONObject().put("display_name", file.name))
+            .put("file", JSONObject().put("display_name", source.displayName))
             .toString()
-        val startRequest = Request.Builder()
+        val startBuilder = Request.Builder()
             .url(UPLOAD_ENDPOINT)
             .header("x-goog-api-key", apiKey)
             .header("X-Goog-Upload-Protocol", "resumable")
             .header("X-Goog-Upload-Command", "start")
-            .header("X-Goog-Upload-Header-Content-Length", file.length().toString())
-            .header("X-Goog-Upload-Header-Content-Type", WAV_MIME)
+            .header("X-Goog-Upload-Header-Content-Type", source.mimeType)
+        if (source.contentLength >= 0L) {
+            startBuilder.header("X-Goog-Upload-Header-Content-Length", source.contentLength.toString())
+        }
+        val startRequest = startBuilder
             .post(startJson.toRequestBody(JSON_MEDIA))
             .build()
 
         val uploadUrl = client.newCall(startRequest).execute().use { response ->
             if (!response.isSuccessful) {
-                throw IllegalStateException("Không bắt đầu được tải tệp: HTTP ${response.code} ${response.body?.string().orEmpty().take(500)}")
+                throw IllegalStateException(
+                    "Không bắt đầu được tải tệp: HTTP ${response.code} ${response.body?.string().orEmpty().take(500)}"
+                )
             }
             response.header("x-goog-upload-url")
                 ?: response.header("X-Goog-Upload-URL")
                 ?: error("Gemini không trả về địa chỉ tải tệp")
         }
 
-        val uploadBody = ProgressFileRequestBody(file, WAV_MIME.toMediaType()) { sent, total ->
+        val uploadBody = ProgressStreamRequestBody(
+            source = source,
+            mediaType = source.mimeType.toMediaType(),
+        ) { sent, total ->
             val ratio = if (total <= 0L) 0.0 else sent.toDouble() / total.toDouble()
-            val percent = (5 + ratio * 45.0).toInt().coerceIn(5, 50)
+            val percent = if (total <= 0L) 25 else (2 + ratio * 48.0).toInt().coerceIn(2, 50)
             onProgress("Đang tải tệp lên...", percent)
         }
-        val uploadRequest = Request.Builder()
+        val uploadBuilder = Request.Builder()
             .url(uploadUrl)
-            .header("Content-Length", file.length().toString())
             .header("X-Goog-Upload-Offset", "0")
             .header("X-Goog-Upload-Command", "upload, finalize")
+        if (source.contentLength >= 0L) {
+            uploadBuilder.header("Content-Length", source.contentLength.toString())
+        }
+        val uploadRequest = uploadBuilder
             .post(uploadBody)
             .build()
 
@@ -119,8 +185,12 @@ class GeminiFileTranscribeClient(
         val mime = fileObject.optString("mimeType")
             .takeIf(String::isNotBlank)
             ?: fileObject.optString("mime_type").takeIf(String::isNotBlank)
-            ?: WAV_MIME
-        logger.log(2, "TranscribeFile", "Đã tải tệp bytes=${file.length()} hasName=${!name.isNullOrBlank()}")
+            ?: source.mimeType
+        logger.log(
+            2,
+            "TranscribeFile",
+            "Đã tải tệp name=${source.displayName} bytes=${source.contentLength} mime=$mime",
+        )
         return UploadedFile(name, uri, mime)
     }
 
@@ -131,14 +201,14 @@ class GeminiFileTranscribeClient(
     ): JSONObject {
         val mode = JSONObject()
             .put("type", "verbatim")
-            .put("timestamp_granularities", org.json.JSONArray().put("word"))
+            .put("timestamp_granularities", JSONArray().put("word"))
         if (speakerDiarization) mode.put("diarization_mode", "speaker")
 
         val requestJson = JSONObject()
             .put("model", MODEL)
             .put(
                 "input",
-                org.json.JSONArray().put(
+                JSONArray().put(
                     JSONObject()
                         .put("type", "audio")
                         .put("uri", fileUri)
@@ -197,7 +267,9 @@ class GeminiFileTranscribeClient(
             current = client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    throw IllegalStateException("Không đọc được tiến trình chép lời: HTTP ${response.code} ${body.take(500)}")
+                    throw IllegalStateException(
+                        "Không đọc được tiến trình chép lời: HTTP ${response.code} ${body.take(500)}"
+                    )
                 }
                 JSONObject(body)
             }
@@ -257,16 +329,16 @@ class GeminiFileTranscribeClient(
         return (value * 1_000.0).toLong().coerceAtLeast(0L)
     }
 
-    private class ProgressFileRequestBody(
-        private val file: File,
-        private val mediaType: okhttp3.MediaType,
+    private class ProgressStreamRequestBody(
+        private val source: UploadSource,
+        private val mediaType: MediaType,
         private val progress: (Long, Long) -> Unit,
     ) : RequestBody() {
-        override fun contentType(): okhttp3.MediaType = mediaType
-        override fun contentLength(): Long = file.length()
+        override fun contentType(): MediaType = mediaType
+        override fun contentLength(): Long = source.contentLength
 
         override fun writeTo(sink: BufferedSink) {
-            file.inputStream().use { input ->
+            source.open().use { input ->
                 val buffer = ByteArray(64 * 1024)
                 var sent = 0L
                 while (true) {
@@ -274,7 +346,7 @@ class GeminiFileTranscribeClient(
                     if (read <= 0) break
                     sink.write(buffer, 0, read)
                     sent += read
-                    progress(sent, file.length())
+                    progress(sent, source.contentLength)
                 }
             }
         }
@@ -282,7 +354,6 @@ class GeminiFileTranscribeClient(
 
     companion object {
         private const val MODEL = "gemini-3.5-transcribe"
-        private const val WAV_MIME = "audio/wav"
         private const val UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
         private const val INTERACTIONS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()

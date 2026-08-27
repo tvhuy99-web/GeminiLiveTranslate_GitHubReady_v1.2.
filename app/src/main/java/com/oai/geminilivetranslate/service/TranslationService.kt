@@ -15,13 +15,13 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.lifecycle.LifecycleService
+import com.oai.geminilivetranslate.audio.AudioFileSplitter
 import com.oai.geminilivetranslate.audio.AudioSource
 import com.oai.geminilivetranslate.audio.FileAudioSource
 import com.oai.geminilivetranslate.audio.InternalAudioSource
 import com.oai.geminilivetranslate.audio.MicAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
-import com.oai.geminilivetranslate.audio.VideoAudioExtractor
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -1792,6 +1792,7 @@ class TranslationService : LifecycleService() {
     companion object {
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
         private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
+        private const val MAX_EXPERIMENT_AUDIO_DURATION_MS = 60L * 60L * 1_000L
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

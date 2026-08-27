@@ -127,6 +127,10 @@ class TranslationService : LifecycleService() {
     private var fileInputEnded = false
     private var lastRawTranscript = ""
     @Volatile private var transcribePlainText = ""
+    @Volatile private var liveCommittedTranscript = ""
+    @Volatile private var liveInterimTranscript = ""
+    private var liveInterimEvents = 0L
+    private var liveFinalEvents = 0L
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
@@ -176,7 +180,7 @@ class TranslationService : LifecycleService() {
         when (intent?.action) {
             ACTION_PAUSE -> pause()
             ACTION_RESUME -> resume()
-            ACTION_STOP -> stopTranslation("Đã dừng dịch")
+            ACTION_STOP -> stopTranslation()
             ACTION_APPLY_SETTINGS -> {
                 applySettingsFromPreferences()
                 if (!_state.value.running) stopSelf(startId)
@@ -325,9 +329,10 @@ class TranslationService : LifecycleService() {
         connectGemini(apiKey)
     }
 
-    fun stopTranslation(message: String = "Đã dừng dịch") {
+    fun stopTranslation(message: String = if (isTranscribeMode()) "Đã dừng chép lời" else "Đã dừng dịch") {
         if (!stopping.compareAndSet(false, true)) return
         val hadActiveSession = _state.value.running || sessionId.isNotBlank()
+        finalizeLiveTranscriptionFallback("stop")
         connectionGeneration++
         inputEpoch.incrementAndGet()
         reconnectJob?.cancel(); reconnectJob = null
@@ -408,7 +413,7 @@ class TranslationService : LifecycleService() {
         source?.resume()
         aiPlayer?.resume()
         originalPlayer?.resume()
-        updateState { it.copy(paused = false, status = "Đang dịch") }
+        updateState { it.copy(paused = false, status = if (isTranscribeMode()) "Đang chép lời..." else "Đang dịch") }
         logger.log(2, "Session", "Tiếp tục session=$sessionId source=$currentMode fileSpeed=${formatFileSpeed()}x")
     }
 
@@ -596,6 +601,10 @@ class TranslationService : LifecycleService() {
         fileInputEnded = false
         lastRawTranscript = ""
         transcribePlainText = ""
+        liveCommittedTranscript = ""
+        liveInterimTranscript = ""
+        liveInterimEvents = 0L
+        liveFinalEvents = 0L
         transcribeRotationJob?.cancel()
         transcribeRotationJob = null
         totalInputBytes = 0L
@@ -722,11 +731,14 @@ class TranslationService : LifecycleService() {
 
                 override fun onInterimTranscript(text: String) {
                     if (generation != connectionGeneration || !_state.value.running || !isTranscribeMode()) return
-                    logger.log(3, "TranscribeLive", "interim chars=${text.length}")
+                    updateLiveInterimTranscript(text)
                 }
 
                 override fun onTurnComplete() {
                     if (generation != connectionGeneration) return
+                    if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+                        finalizeLiveTranscriptionFallback("turnComplete")
+                    }
                     lastRawTranscript = ""
                     flushTtsBuffer()
                     if (fileInputEnded) stopTranslation("Đã hoàn tất tệp")
@@ -1168,15 +1180,107 @@ class TranslationService : LifecycleService() {
     private fun appendTranscriptionSegment(raw: String) {
         val cleaned = raw.trim()
         if (cleaned.isBlank()) return
-        subtitles.append(cleaned)
-        updateState { current ->
-            val separator = if (current.transcript.isBlank()) "" else " "
-            current.copy(
-                transcript = (current.transcript + separator + cleaned).takeLast(MAX_TRANSCRIPT_CHARS),
+        liveFinalEvents++
+        liveCommittedTranscript = mergeLiveTranscript(liveCommittedTranscript, cleaned)
+        liveInterimTranscript = ""
+        transcribePlainText = liveCommittedTranscript
+        subtitles.reset()
+        subtitles.append(liveCommittedTranscript)
+        updateState {
+            it.copy(
+                transcript = liveCommittedTranscript.takeLast(MAX_TRANSCRIPT_CHARS),
                 status = "Đang chép lời...",
             )
         }
-        DiagnosticContext.put("session.transcriptChars", _state.value.transcript.length)
+        logger.log(
+            2,
+            "TranscribeLive",
+            "final event=$liveFinalEvents chars=${cleaned.length} committedChars=${liveCommittedTranscript.length} interimEvents=$liveInterimEvents",
+        )
+        DiagnosticContext.updateAll(
+            mapOf(
+                "session.transcriptChars" to _state.value.transcript.length,
+                "session.transcribeInterimEvents" to liveInterimEvents,
+                "session.transcribeFinalEvents" to liveFinalEvents,
+            )
+        )
+    }
+
+    private fun updateLiveInterimTranscript(raw: String) {
+        val cleaned = raw.trim()
+        if (cleaned.isBlank()) return
+        liveInterimTranscript = cleaned
+        liveInterimEvents++
+        val preview = mergeLiveTranscript(liveCommittedTranscript, cleaned)
+        transcribePlainText = preview
+        updateState {
+            it.copy(
+                transcript = preview.takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đang chép lời...",
+            )
+        }
+        if (liveInterimEvents == 1L || liveInterimEvents % 10L == 0L) {
+            logger.log(
+                3,
+                "TranscribeLive",
+                "interim event=$liveInterimEvents chars=${cleaned.length} previewChars=${preview.length} committedChars=${liveCommittedTranscript.length} finals=$liveFinalEvents",
+            )
+        }
+        DiagnosticContext.updateAll(
+            mapOf(
+                "session.transcriptChars" to _state.value.transcript.length,
+                "session.transcribeInterimEvents" to liveInterimEvents,
+                "session.transcribeFinalEvents" to liveFinalEvents,
+            )
+        )
+    }
+
+    private fun finalizeLiveTranscriptionFallback(reason: String) {
+        if (!isTranscribeMode() || currentMode == SourceMode.FILE) return
+        val preview = mergeLiveTranscript(liveCommittedTranscript, liveInterimTranscript).trim()
+        if (preview.isBlank()) {
+            logger.log(
+                2,
+                "TranscribeLive",
+                "Không có nội dung để chốt reason=$reason interimEvents=$liveInterimEvents finalEvents=$liveFinalEvents",
+            )
+            return
+        }
+        val usedInterimFallback = preview != liveCommittedTranscript
+        liveCommittedTranscript = preview
+        liveInterimTranscript = ""
+        transcribePlainText = preview
+        subtitles.reset()
+        subtitles.append(preview)
+        _state.update {
+            it.copy(
+                transcript = preview.takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đã chốt nội dung chép lời",
+            )
+        }
+        logger.log(
+            if (usedInterimFallback) 1 else 2,
+            "TranscribeLive",
+            "Chốt transcript reason=$reason chars=${preview.length} usedInterimFallback=$usedInterimFallback interimEvents=$liveInterimEvents finalEvents=$liveFinalEvents",
+        )
+    }
+
+    private fun mergeLiveTranscript(baseRaw: String, candidateRaw: String): String {
+        val base = baseRaw.trim()
+        val candidate = candidateRaw.trim()
+        if (base.isBlank()) return candidate
+        if (candidate.isBlank()) return base
+        if (candidate == base || base.endsWith(candidate)) return base
+        if (candidate.startsWith(base)) return candidate
+        if (base.startsWith(candidate)) return base
+        val maxOverlap = minOf(base.length, candidate.length)
+        for (length in maxOverlap downTo 1) {
+            if (base.regionMatches(base.length - length, candidate, 0, length, ignoreCase = false)) {
+                val suffix = candidate.substring(length).trimStart()
+                return if (suffix.isBlank()) base else "$base $suffix"
+            }
+        }
+        return "$base $candidate"
     }
 
     private fun appendTranslation(raw: String, callbackEvent: Long) {
@@ -1304,6 +1408,10 @@ class TranslationService : LifecycleService() {
     }
 
     private fun setupPlayers() {
+        if (isTranscribeMode()) {
+            logger.log(3, "AudioPlayer", "Bỏ qua output player trong chế độ chép lời")
+            return
+        }
         if (settings.aiVoice) aiPlayer = buildAiPlayer().also {
             it.start()
             it.setVolume(settings.translatedVolume)

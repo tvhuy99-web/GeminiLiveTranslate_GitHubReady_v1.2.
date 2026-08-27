@@ -63,9 +63,10 @@ object VideoAudioExtractor {
             }
 
             extractor.selectTrack(audioTrack)
-            muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            val muxerTrack = muxer.addTrack(format)
-            muxer.start()
+            val activeMuxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = activeMuxer
+            val muxerTrack = activeMuxer.addTrack(format)
+            activeMuxer.start()
             started = true
 
             val maxInputSize = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
@@ -91,7 +92,7 @@ object VideoAudioExtractor {
                 } else {
                     0
                 }
-                muxer.writeSampleData(muxerTrack, buffer, info)
+                activeMuxer.writeSampleData(muxerTrack, buffer, info)
                 sampleCount++
                 bytesWritten += size
                 if (durationUs > 0L) {
@@ -105,10 +106,10 @@ object VideoAudioExtractor {
             }
             onProgress(100)
             if (started) {
-                muxer.stop()
+                activeMuxer.stop()
                 started = false
             }
-            muxer.release()
+            activeMuxer.release()
             muxer = null
 
             if (!output.isFile || output.length() <= 0L) error("Không tách được âm thanh từ video")

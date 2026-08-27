@@ -978,8 +978,8 @@ class TranslationService : LifecycleService() {
     }
 
     private fun normalizeWordSpacing(value: String): String = value
-        .replace(Regex("\\s+([,.;:!?%])"), "$1")
-        .replace(Regex("([\\(\\[\\{])\\s+"), "$1")
+        .replace(Regex("\\s+([,.;:!?%])"), "\$1")
+        .replace(Regex("([\\(\\[\\{])\\s+"), "\$1")
         .replace(Regex("\\s+"), " ")
         .trim()
 

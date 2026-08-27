@@ -834,7 +834,7 @@ class TranslationService : LifecycleService() {
                         logger.log(
                             2,
                             "TranscribeFile",
-                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType}",
+                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}",
                         )
                         fileClient.transcribe(
                             file = extracted.file,

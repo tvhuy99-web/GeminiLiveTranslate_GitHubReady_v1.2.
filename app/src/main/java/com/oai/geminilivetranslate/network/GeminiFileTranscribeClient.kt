@@ -2,6 +2,7 @@ package com.oai.geminilivetranslate.network
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.os.SystemClock
 import com.oai.geminilivetranslate.core.SessionLogger
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -103,16 +104,45 @@ class GeminiFileTranscribeClient(
         onProgress: (String, Int) -> Unit,
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
+        val totalStartedAt = SystemClock.elapsedRealtime()
+        logger.log(
+            2,
+            "TranscribeFile",
+            "Bắt đầu Files API name=${source.displayName} bytes=${source.contentLength} mime=${source.mimeType} diarization=$speakerDiarization",
+        )
         var uploadedName: String? = null
         try {
             onProgress("Đang tải tệp lên...", 2)
+            val uploadStartedAt = SystemClock.elapsedRealtime()
             val uploaded = upload(source, onProgress)
             uploadedName = uploaded.name
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Upload hoàn tất elapsedMs=${SystemClock.elapsedRealtime() - uploadStartedAt} fileUri=${uploaded.uri.take(80)}",
+            )
             onProgress("Đang chép lời...", 55)
+            val requestStartedAt = SystemClock.elapsedRealtime()
             val interaction = createInteraction(uploaded.uri, uploaded.mimeType, speakerDiarization)
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Interactions API đã nhận yêu cầu elapsedMs=${SystemClock.elapsedRealtime() - requestStartedAt} status=${interaction.optString("status")} id=${interaction.optString("id")}",
+            )
+            val waitStartedAt = SystemClock.elapsedRealtime()
             val completed = awaitCompletion(interaction, onProgress)
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Gemini hoàn tất xử lý elapsedMs=${SystemClock.elapsedRealtime() - waitStartedAt} status=${completed.optString("status")}",
+            )
             val result = parseResult(completed)
             onProgress("Đang tạo kết quả...", 98)
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Kết thúc Files/Interactions totalElapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt} chars=${result.text.length} words=${result.words.size}",
+            )
             return result
         } finally {
             uploadedName?.let(::deleteUploadedFile)
@@ -125,6 +155,12 @@ class GeminiFileTranscribeClient(
     }
 
     private fun upload(source: UploadSource, onProgress: (String, Int) -> Unit): UploadedFile {
+        val uploadStartedAt = SystemClock.elapsedRealtime()
+        logger.log(
+            2,
+            "TranscribeFile",
+            "Khởi tạo resumable upload name=${source.displayName} bytes=${source.contentLength} mime=${source.mimeType}",
+        )
         val startJson = JSONObject()
             .put("file", JSONObject().put("display_name", source.displayName))
             .toString()
@@ -141,6 +177,7 @@ class GeminiFileTranscribeClient(
             .post(startJson.toRequestBody(JSON_MEDIA))
             .build()
 
+        val startRequestAt = SystemClock.elapsedRealtime()
         val uploadUrl = client.newCall(startRequest).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IllegalStateException(
@@ -151,7 +188,13 @@ class GeminiFileTranscribeClient(
                 ?: response.header("X-Goog-Upload-URL")
                 ?: error("Gemini không trả về địa chỉ tải tệp")
         }
+        logger.log(
+            3,
+            "TranscribeFile",
+            "Resumable upload URL sẵn sàng elapsedMs=${SystemClock.elapsedRealtime() - startRequestAt}",
+        )
 
+        var lastLoggedUploadBucket = -1
         val uploadBody = ProgressStreamRequestBody(
             source = source,
             mediaType = source.mimeType.toMediaType(),
@@ -159,6 +202,17 @@ class GeminiFileTranscribeClient(
             val ratio = if (total <= 0L) 0.0 else sent.toDouble() / total.toDouble()
             val percent = if (total <= 0L) 25 else (2 + ratio * 48.0).toInt().coerceIn(2, 50)
             onProgress("Đang tải tệp lên...", percent)
+            if (total > 0L) {
+                val bucket = ((sent * 4L) / total).toInt().coerceIn(0, 4)
+                if (bucket > lastLoggedUploadBucket && bucket > 0) {
+                    lastLoggedUploadBucket = bucket
+                    logger.log(
+                        3,
+                        "TranscribeFile",
+                        "Upload progress=${bucket * 25}% sent=$sent total=$total elapsedMs=${SystemClock.elapsedRealtime() - uploadStartedAt}",
+                    )
+                }
+            }
         }
         val uploadBuilder = Request.Builder()
             .url(uploadUrl)
@@ -186,10 +240,16 @@ class GeminiFileTranscribeClient(
             .takeIf(String::isNotBlank)
             ?: fileObject.optString("mime_type").takeIf(String::isNotBlank)
             ?: source.mimeType
+        val uploadElapsedMs = SystemClock.elapsedRealtime() - uploadStartedAt
+        val throughputMbps = if (source.contentLength > 0L && uploadElapsedMs > 0L) {
+            source.contentLength * 8.0 / uploadElapsedMs / 1_000.0
+        } else {
+            0.0
+        }
         logger.log(
             2,
             "TranscribeFile",
-            "Đã tải tệp name=${source.displayName} bytes=${source.contentLength} mime=$mime",
+            "Đã tải tệp name=${source.displayName} bytes=${source.contentLength} mime=$mime elapsedMs=$uploadElapsedMs avgMbps=${String.format(java.util.Locale.US, "%.2f", throughputMbps)}",
         )
         return UploadedFile(name, uri, mime)
     }

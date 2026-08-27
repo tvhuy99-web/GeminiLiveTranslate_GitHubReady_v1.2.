@@ -794,26 +794,30 @@ class TranslationService : LifecycleService() {
                 deleteRecursively()
                 mkdirs()
             }
+            val totalStartedAt = SystemClock.elapsedRealtime()
             try {
-                val durationMs = mediaDurationMs(uri)
-                if (durationMs <= 0L) {
-                    error("Không đọc được thời lượng tệp")
-                }
-                if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
-                    error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
-                }
-
                 val name = selectedFileName ?: uri.lastPathSegment ?: "audio"
                 val mimeType = selectedMimeType(uri, name)
                 val video = mimeType.startsWith("video/") || isVideoFileName(name)
+                val sourceBytes = sourceSizeBytes(uri)
+                logger.log(
+                    2,
+                    "TranscribeFile",
+                    "Bắt đầu xử lý name=$name mime=$mimeType video=$video sourceBytes=$sourceBytes",
+                )
+
+                var durationMs: Long
                 val fileClient = GeminiFileTranscribeClient(apiKey, logger)
                 val result = try {
                     if (video) {
+                        val extractStartedAt = SystemClock.elapsedRealtime()
+                        logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
                         updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
                         val extracted = VideoAudioExtractor.extract(
                             context = this@TranslationService,
                             uri = uri,
                             output = File(workDir, "audio.m4a"),
+                            maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
                         ) { percent ->
                             updateState {
                                 it.copy(
@@ -822,6 +826,13 @@ class TranslationService : LifecycleService() {
                                 )
                             }
                         }
+                        durationMs = extracted.durationMs
+                        val extractElapsedMs = SystemClock.elapsedRealtime() - extractStartedAt
+                        logger.log(
+                            2,
+                            "TranscribeFile",
+                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType}",
+                        )
                         fileClient.transcribe(
                             file = extracted.file,
                             mimeType = extracted.mimeType,
@@ -835,6 +846,18 @@ class TranslationService : LifecycleService() {
                             }
                         }
                     } else {
+                        val metadataStartedAt = SystemClock.elapsedRealtime()
+                        durationMs = mediaDurationMs(uri)
+                        val metadataElapsedMs = SystemClock.elapsedRealtime() - metadataStartedAt
+                        logger.log(
+                            2,
+                            "TranscribeFile",
+                            "Đọc metadata audio xong elapsedMs=$metadataElapsedMs durationMs=$durationMs",
+                        )
+                        if (durationMs <= 0L) error("Không đọc được thời lượng tệp")
+                        if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
+                            error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
+                        }
                         updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
                         fileClient.transcribe(
                             resolver = contentResolver,
@@ -855,6 +878,7 @@ class TranslationService : LifecycleService() {
                     fileClient.close()
                 }
 
+                val resultBuildStartedAt = SystemClock.elapsedRealtime()
                 val cues = buildTranscriptionCues(result.words, speakerDiarization)
                 if (cues.isNotEmpty()) {
                     subtitles.replaceTimed(cues)
@@ -869,6 +893,7 @@ class TranslationService : LifecycleService() {
                 } else {
                     result.text.trim().ifBlank { subtitles.plainText() }
                 }
+                val resultBuildElapsedMs = SystemClock.elapsedRealtime() - resultBuildStartedAt
                 fileInputEnded = true
                 updateState {
                     it.copy(
@@ -877,10 +902,20 @@ class TranslationService : LifecycleService() {
                         progressPercent = 100,
                     )
                 }
+                logger.log(
+                    2,
+                    "TranscribeFile",
+                    "Hoàn tất toàn bộ totalElapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt} resultBuildMs=$resultBuildElapsedMs chars=${transcribePlainText.length} words=${result.words.size} cues=${cues.size}",
+                )
                 stopTranslation("Đã hoàn tất chép lời")
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) return@launch
-                logger.log(0, "TranscribeFile", "Chép lời tệp thất bại", error)
+                logger.log(
+                    0,
+                    "TranscribeFile",
+                    "Chép lời tệp thất bại elapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt}",
+                    error,
+                )
                 if (_state.value.running) {
                     stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
                 }
@@ -892,16 +927,27 @@ class TranslationService : LifecycleService() {
 
     private fun mediaDurationMs(uri: Uri): Long {
         val retriever = MediaMetadataRetriever()
+        val descriptor = contentResolver.openFileDescriptor(uri, "r")
+            ?: error("Không mở được tệp để đọc thời lượng")
         return try {
-            retriever.setDataSource(this, uri)
+            retriever.setDataSource(descriptor.fileDescriptor)
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull()
                 ?.coerceAtLeast(0L)
                 ?: 0L
         } finally {
             retriever.release()
+            descriptor.close()
         }
     }
+
+    private fun sourceSizeBytes(uri: Uri): Long = runCatching {
+        contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+            descriptor.length.takeIf { it >= 0L }
+                ?: descriptor.parcelFileDescriptor.statSize.takeIf { it >= 0L }
+                ?: -1L
+        } ?: -1L
+    }.getOrDefault(-1L)
 
     private fun selectedMimeType(uri: Uri, name: String): String {
         contentResolver.getType(uri)?.takeIf(String::isNotBlank)?.let { return it }

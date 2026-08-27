@@ -396,6 +396,9 @@ class TranslationService : LifecycleService() {
 
     fun pause() {
         if (!_state.value.running || _state.value.paused) return
+        if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+            finalizeLiveTranscriptionFallback("reconnect")
+        }
         source?.pause()
         aiPlayer?.pause()
         originalPlayer?.pause()
@@ -1403,6 +1406,7 @@ class TranslationService : LifecycleService() {
             delay(TRANSCRIBE_LIVE_ROTATE_MS)
             if (!_state.value.running || !isTranscribeMode() || currentMode == SourceMode.FILE) return@launch
             logger.log(2, "TranscribeLive", "Xoay phiên trước giới hạn Live")
+            finalizeLiveTranscriptionFallback("rotation")
             source?.pause()
             clearPendingInputForFreshSession()
             connectGemini(apiKey)
@@ -1507,6 +1511,10 @@ class TranslationService : LifecycleService() {
     )
 
     private fun setupRecorders() {
+        if (isTranscribeMode()) {
+            logger.log(3, "Recorder", "Bỏ qua recorder đầu ra trong chế độ chép lời")
+            return
+        }
         if (!settings.saveAudioEnabled) return
         logger.log(2, "Recorder", "Bật ghi audio mode=${settings.saveAudioMode}; đích công khai Music/GeminiLiveTranslate")
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())

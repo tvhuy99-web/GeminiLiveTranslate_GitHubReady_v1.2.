@@ -813,38 +813,31 @@ class TranslationService : LifecycleService() {
                 val fileClient = GeminiFileTranscribeClient(apiKey, logger)
                 val result = try {
                     if (video) {
-                        val extractStartedAt = SystemClock.elapsedRealtime()
-                        logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
-                        updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
-                        val extracted = VideoAudioExtractor.extract(
-                            context = this@TranslationService,
-                            uri = uri,
-                            output = File(workDir, "audio.m4a"),
-                            maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
-                        ) { percent ->
-                            updateState {
-                                it.copy(
-                                    status = "Đang tách âm thanh...",
-                                    progressPercent = (percent / 10).coerceIn(0, 10),
-                                )
-                            }
-                        }
-                        durationMs = extracted.durationMs
-                        val extractElapsedMs = SystemClock.elapsedRealtime() - extractStartedAt
+                        val metadataStartedAt = SystemClock.elapsedRealtime()
+                        durationMs = mediaDurationMs(uri)
+                        val metadataElapsedMs = SystemClock.elapsedRealtime() - metadataStartedAt
                         logger.log(
                             2,
                             "TranscribeFile",
-                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}",
+                            "EXPERIMENT direct-video durationMs=$durationMs metadataMs=$metadataElapsedMs sourceBytes=$sourceBytes mime=$mimeType",
                         )
+                        if (durationMs <= 0L) error("Không đọc được thời lượng video")
+                        if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
+                            error("Video chép lời thử nghiệm tối đa 30 phút")
+                        }
+                        updateState { it.copy(status = "Đang tải video nguyên bản...", progressPercent = 0) }
                         fileClient.transcribe(
-                            file = extracted.file,
-                            mimeType = extracted.mimeType,
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
                             speakerDiarization = speakerDiarization,
+                            inputType = "video",
                         ) { status, percent ->
                             updateState {
                                 it.copy(
                                     status = status,
-                                    progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
+                                    progressPercent = percent.coerceIn(0, 98),
                                 )
                             }
                         }

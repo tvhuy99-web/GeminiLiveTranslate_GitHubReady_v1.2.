@@ -41,6 +41,27 @@ class GeminiLiveClientSetupTest {
     }
 
     @Test
+    fun transcriptionSetupUsesTextAndInputTranscription() {
+        val setup = JSONObject(
+            GeminiLiveClient.createSetupMessage(
+                model = "gemini-3.5-transcribe-live",
+                targetLanguage = "vi",
+                echoTargetLanguage = false,
+                operationMode = GeminiLiveClient.OperationMode.TRANSCRIBE,
+            )
+        ).getJSONObject("setup")
+        val generationConfig = setup.getJSONObject("generationConfig")
+
+        assertEquals("models/gemini-3.5-transcribe-live", setup.getString("model"))
+        assertEquals("TEXT", generationConfig.getJSONArray("responseModalities").getString(0))
+        assertTrue(setup.has("inputAudioTranscription"))
+        assertEquals(0, setup.getJSONObject("inputAudioTranscription").getJSONArray("languageCodes").length())
+        assertFalse(generationConfig.has("translationConfig"))
+        assertFalse(setup.has("contextWindowCompression"))
+        assertFalse(setup.has("sessionResumption"))
+    }
+
+    @Test
     fun newSessionOmitsEmptySessionResumptionObject() {
         val setup = JSONObject(
             GeminiLiveClient.createSetupMessage(

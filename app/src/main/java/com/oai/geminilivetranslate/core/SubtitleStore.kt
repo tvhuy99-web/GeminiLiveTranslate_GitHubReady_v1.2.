@@ -30,6 +30,22 @@ class SubtitleStore {
         lastEnd = end
     }
 
+    fun appendTimed(text: String, startMs: Long, endMs: Long) {
+        val cleaned = text.trim()
+        if (cleaned.isBlank()) return
+        val start = startMs.coerceAtLeast(0L)
+        val end = max(start + 1L, endMs)
+        cues += Cue(cues.size + 1, start, end, cleaned)
+        lastEnd = end
+    }
+
+    fun replaceTimed(items: List<Cue>) {
+        cues.clear()
+        items.sortedBy { it.startMs }.forEach {
+            appendTimed(it.text, it.startMs, it.endMs)
+        }
+    }
+
     fun plainText(): String = cues.joinToString("\n") { it.text }
 
     fun srtText(): String = cues.joinToString("\n\n") {

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -20,6 +21,7 @@ import com.oai.geminilivetranslate.audio.InternalAudioSource
 import com.oai.geminilivetranslate.audio.MicAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
+import com.oai.geminilivetranslate.audio.VideoAudioExtractor
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -768,67 +770,91 @@ class TranslationService : LifecycleService() {
         liveClient.connect()
     }
 
-    private data class TranscribeChunk(
-        val file: File,
-        val offsetMs: Long,
-        val durationMs: Long,
-    )
-
     private fun startFileTranscription(apiKey: String) {
         sourceJob?.cancel()
         sourceJob = serviceScope.launch(Dispatchers.IO) {
+            val uri = selectedUri ?: run {
+                stopTranslation("Chưa chọn tệp")
+                return@launch
+            }
             val workDir = File(cacheDir, "transcribe-$sessionId").apply {
                 deleteRecursively()
                 mkdirs()
             }
             try {
-                updateState { it.copy(status = "Đang chuẩn bị âm thanh...", progressPercent = 0) }
-                val chunks = prepareTranscribeChunks(selectedUri ?: error("Chưa chọn tệp"), workDir)
-                if (chunks.isEmpty()) error("Không đọc được âm thanh trong tệp")
+                val durationMs = mediaDurationMs(uri)
+                if (durationMs <= 0L) {
+                    error("Không đọc được thời lượng tệp")
+                }
+                if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
+                    error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
+                }
+
+                val name = selectedFileName ?: uri.lastPathSegment ?: "audio"
+                val mimeType = selectedMimeType(uri, name)
+                val video = mimeType.startsWith("video/") || isVideoFileName(name)
                 val fileClient = GeminiFileTranscribeClient(apiKey, logger)
-                val words = ArrayList<GeminiFileTranscribeClient.WordInfo>()
-                val textParts = ArrayList<String>()
-                try {
-                    chunks.forEachIndexed { index, chunk ->
-                        if (!_state.value.running) return@launch
-                        val base = (20 + index * 80 / chunks.size).coerceIn(20, 95)
-                        val span = (80 / chunks.size).coerceAtLeast(1)
-                        val result = fileClient.transcribe(
-                            file = chunk.file,
+                val result = try {
+                    if (video) {
+                        updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
+                        val extracted = VideoAudioExtractor.extract(
+                            context = this@TranslationService,
+                            uri = uri,
+                            output = File(workDir, "audio.m4a"),
+                        ) { percent ->
+                            updateState {
+                                it.copy(
+                                    status = "Đang tách âm thanh...",
+                                    progressPercent = (percent / 10).coerceIn(0, 10),
+                                )
+                            }
+                        }
+                        fileClient.transcribe(
+                            file = extracted.file,
+                            mimeType = extracted.mimeType,
                             speakerDiarization = speakerDiarization,
                         ) { status, percent ->
-                            val overall = (base + percent * span / 100).coerceIn(20, 98)
-                            updateState { it.copy(status = status, progressPercent = overall) }
+                            updateState {
+                                it.copy(
+                                    status = status,
+                                    progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
+                                )
+                            }
                         }
-                        result.text.trim().takeIf(String::isNotBlank)?.let(textParts::add)
-                        result.words.forEach { word ->
-                            words += word.copy(
-                                startMs = word.startMs + chunk.offsetMs,
-                                endMs = word.endMs + chunk.offsetMs,
-                            )
+                    } else {
+                        updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
+                        fileClient.transcribe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            speakerDiarization = speakerDiarization,
+                        ) { status, percent ->
+                            updateState {
+                                it.copy(
+                                    status = status,
+                                    progressPercent = percent.coerceIn(0, 98),
+                                )
+                            }
                         }
                     }
                 } finally {
                     fileClient.close()
                 }
 
-                val cues = buildTranscriptionCues(words, speakerDiarization)
+                val cues = buildTranscriptionCues(result.words, speakerDiarization)
                 if (cues.isNotEmpty()) {
                     subtitles.replaceTimed(cues)
                 } else {
                     subtitles.reset()
-                    chunks.zip(textParts).forEach { (chunk, text) ->
-                        subtitles.appendTimed(
-                            text,
-                            chunk.offsetMs,
-                            chunk.offsetMs + chunk.durationMs.coerceAtLeast(1_000L),
-                        )
+                    result.text.trim().takeIf(String::isNotBlank)?.let {
+                        subtitles.appendTimed(it, 0L, durationMs.coerceAtLeast(1_000L))
                     }
                 }
-                transcribePlainText = if (speakerDiarization) {
+                transcribePlainText = if (speakerDiarization && cues.isNotEmpty()) {
                     subtitles.plainText()
                 } else {
-                    textParts.joinToString("\n").trim().ifBlank { subtitles.plainText() }
+                    result.text.trim().ifBlank { subtitles.plainText() }
                 }
                 fileInputEnded = true
                 updateState {
@@ -846,90 +872,46 @@ class TranslationService : LifecycleService() {
                     stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
                 }
             } finally {
-                source = null
                 workDir.deleteRecursively()
             }
         }
     }
 
-    private suspend fun prepareTranscribeChunks(uri: Uri, workDir: File): List<TranscribeChunk> {
-        val files = ArrayList<File>()
-        val durations = ArrayList<Long>()
-        var writer: WavWriter? = null
-        var currentFile: File? = null
-        var chunkBytes = 0L
-        var sourceError: Throwable? = null
-
-        fun openChunk() {
-            val file = File(workDir, "part-${files.size + 1}.wav")
-            currentFile = file
-            writer = WavWriter(file, 16_000)
-            chunkBytes = 0L
-        }
-
-        fun closeChunk() {
-            val activeWriter = writer ?: return
-            activeWriter.close()
-            writer = null
-            val file = currentFile
-            currentFile = null
-            if (file != null && chunkBytes > 0L) {
-                files += file
-                durations += chunkBytes / PCM_BYTES_PER_MS
-            } else {
-                file?.delete()
-            }
-            chunkBytes = 0L
-        }
-
-        openChunk()
-        val decoder = FileAudioSource(
-            context = this,
-            uri = uri,
-            pacingEnabled = false,
-            leadMs = 0,
-            initialPlaybackSpeed = 1f,
-            logger = logger,
-        )
-        source = decoder
-        decoder.run(object : AudioSource.Listener {
-            override fun onPcm16Mono16k(data: ByteArray) {
-                if (!_state.value.running || data.isEmpty()) return
-                if (chunkBytes > 0L && chunkBytes + data.size > MAX_TRANSCRIBE_CHUNK_PCM_BYTES) {
-                    closeChunk()
-                    openChunk()
-                }
-                writer?.write(data)
-                chunkBytes += data.size
-                totalInputBytes += data.size
-            }
-
-            override fun onProgress(percent: Int, positionMs: Long, durationMs: Long) {
-                updateState {
-                    it.copy(
-                        status = "Đang chuẩn bị âm thanh...",
-                        progressPercent = (percent.coerceIn(0, 100) / 5).coerceIn(0, 20),
-                    )
-                }
-            }
-
-            override fun onCompleted() = Unit
-
-            override fun onError(error: Throwable) {
-                sourceError = error
-            }
-        })
-        closeChunk()
-        sourceError?.let { throw it }
-
-        var runningOffset = 0L
-        return files.mapIndexed { index, file ->
-            val duration = durations[index]
-            TranscribeChunk(file, runningOffset, duration).also {
-                runningOffset += duration
-            }
+    private fun mediaDurationMs(uri: Uri): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(this, uri)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.coerceAtLeast(0L)
+                ?: 0L
+        } finally {
+            retriever.release()
         }
     }
+
+    private fun selectedMimeType(uri: Uri, name: String): String {
+        contentResolver.getType(uri)?.takeIf(String::isNotBlank)?.let { return it }
+        return when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "m4a", "mp4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "ogg", "oga", "opus" -> "audio/ogg"
+            "webm" -> "video/webm"
+            "mp4", "m4v", "mov" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "3gp", "3gpp" -> "video/3gpp"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun isVideoFileName(name: String): Boolean =
+        when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "3gpp" -> true
+            else -> false
+        }
 
     private fun buildTranscriptionCues(
         words: List<GeminiFileTranscribeClient.WordInfo>,
@@ -1646,8 +1628,7 @@ class TranslationService : LifecycleService() {
 
     companion object {
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
-        private const val PCM_BYTES_PER_MS = 32L
-        private const val MAX_TRANSCRIBE_CHUNK_PCM_BYTES = 16_000L * 2L * 25L * 60L
+        private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

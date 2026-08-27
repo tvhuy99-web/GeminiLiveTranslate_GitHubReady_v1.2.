@@ -124,6 +124,7 @@ class TranslationService : LifecycleService() {
     private var sourceStarted = false
     private var fileInputEnded = false
     private var lastRawTranscript = ""
+    @Volatile private var transcribePlainText = ""
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
@@ -578,7 +579,11 @@ class TranslationService : LifecycleService() {
     }
 
     fun subtitleText(format: String = preferences.load().exportFormat): String =
-        if (format == "txt") subtitles.plainText() else subtitles.srtText()
+        if (format == "txt") {
+            transcribePlainText.takeIf { isTranscribeMode() && it.isNotBlank() } ?: subtitles.plainText()
+        } else {
+            subtitles.srtText()
+        }
 
     fun logText(): String = logger.text()
 
@@ -587,6 +592,9 @@ class TranslationService : LifecycleService() {
         sourceStarted = false
         fileInputEnded = false
         lastRawTranscript = ""
+        transcribePlainText = ""
+        transcribeRotationJob?.cancel()
+        transcribeRotationJob = null
         totalInputBytes = 0L
         totalOutputBytes = 0L
         sessionResumptionHandle = null
@@ -759,6 +767,221 @@ class TranslationService : LifecycleService() {
         client = liveClient
         liveClient.connect()
     }
+
+    private data class TranscribeChunk(
+        val file: File,
+        val offsetMs: Long,
+        val durationMs: Long,
+    )
+
+    private fun startFileTranscription(apiKey: String) {
+        sourceJob?.cancel()
+        sourceJob = serviceScope.launch(Dispatchers.IO) {
+            val workDir = File(cacheDir, "transcribe-$sessionId").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            try {
+                updateState { it.copy(status = "Đang chuẩn bị âm thanh...", progressPercent = 0) }
+                val chunks = prepareTranscribeChunks(selectedUri ?: error("Chưa chọn tệp"), workDir)
+                if (chunks.isEmpty()) error("Không đọc được âm thanh trong tệp")
+                val fileClient = GeminiFileTranscribeClient(apiKey, logger)
+                val words = ArrayList<GeminiFileTranscribeClient.WordInfo>()
+                val textParts = ArrayList<String>()
+                try {
+                    chunks.forEachIndexed { index, chunk ->
+                        if (!_state.value.running) return@launch
+                        val base = (20 + index * 80 / chunks.size).coerceIn(20, 95)
+                        val span = (80 / chunks.size).coerceAtLeast(1)
+                        val result = fileClient.transcribe(
+                            file = chunk.file,
+                            speakerDiarization = speakerDiarization,
+                        ) { status, percent ->
+                            val overall = (base + percent * span / 100).coerceIn(20, 98)
+                            updateState { it.copy(status = status, progressPercent = overall) }
+                        }
+                        result.text.trim().takeIf(String::isNotBlank)?.let(textParts::add)
+                        result.words.forEach { word ->
+                            words += word.copy(
+                                startMs = word.startMs + chunk.offsetMs,
+                                endMs = word.endMs + chunk.offsetMs,
+                            )
+                        }
+                    }
+                } finally {
+                    fileClient.close()
+                }
+
+                val cues = buildTranscriptionCues(words, speakerDiarization)
+                if (cues.isNotEmpty()) {
+                    subtitles.replaceTimed(cues)
+                } else {
+                    subtitles.reset()
+                    chunks.zip(textParts).forEach { (chunk, text) ->
+                        subtitles.appendTimed(
+                            text,
+                            chunk.offsetMs,
+                            chunk.offsetMs + chunk.durationMs.coerceAtLeast(1_000L),
+                        )
+                    }
+                }
+                transcribePlainText = if (speakerDiarization) {
+                    subtitles.plainText()
+                } else {
+                    textParts.joinToString("\n").trim().ifBlank { subtitles.plainText() }
+                }
+                fileInputEnded = true
+                updateState {
+                    it.copy(
+                        transcript = transcribePlainText.takeLast(MAX_TRANSCRIPT_CHARS),
+                        status = "Đã hoàn tất chép lời",
+                        progressPercent = 100,
+                    )
+                }
+                stopTranslation("Đã hoàn tất chép lời")
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) return@launch
+                logger.log(0, "TranscribeFile", "Chép lời tệp thất bại", error)
+                if (_state.value.running) {
+                    stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
+                }
+            } finally {
+                source = null
+                workDir.deleteRecursively()
+            }
+        }
+    }
+
+    private suspend fun prepareTranscribeChunks(uri: Uri, workDir: File): List<TranscribeChunk> {
+        val files = ArrayList<File>()
+        val durations = ArrayList<Long>()
+        var writer: WavWriter? = null
+        var currentFile: File? = null
+        var chunkBytes = 0L
+        var sourceError: Throwable? = null
+
+        fun openChunk() {
+            val file = File(workDir, "part-${files.size + 1}.wav")
+            currentFile = file
+            writer = WavWriter(file, 16_000)
+            chunkBytes = 0L
+        }
+
+        fun closeChunk() {
+            val activeWriter = writer ?: return
+            activeWriter.close()
+            writer = null
+            val file = currentFile
+            currentFile = null
+            if (file != null && chunkBytes > 0L) {
+                files += file
+                durations += chunkBytes / PCM_BYTES_PER_MS
+            } else {
+                file?.delete()
+            }
+            chunkBytes = 0L
+        }
+
+        openChunk()
+        val decoder = FileAudioSource(
+            context = this,
+            uri = uri,
+            pacingEnabled = false,
+            leadMs = 0,
+            initialPlaybackSpeed = 1f,
+            logger = logger,
+        )
+        source = decoder
+        decoder.run(object : AudioSource.Listener {
+            override fun onPcm16Mono16k(data: ByteArray) {
+                if (!_state.value.running || data.isEmpty()) return
+                if (chunkBytes > 0L && chunkBytes + data.size > MAX_TRANSCRIBE_CHUNK_PCM_BYTES) {
+                    closeChunk()
+                    openChunk()
+                }
+                writer?.write(data)
+                chunkBytes += data.size
+                totalInputBytes += data.size
+            }
+
+            override fun onProgress(percent: Int, positionMs: Long, durationMs: Long) {
+                updateState {
+                    it.copy(
+                        status = "Đang chuẩn bị âm thanh...",
+                        progressPercent = (percent.coerceIn(0, 100) / 5).coerceIn(0, 20),
+                    )
+                }
+            }
+
+            override fun onCompleted() = Unit
+
+            override fun onError(error: Throwable) {
+                sourceError = error
+            }
+        })
+        closeChunk()
+        sourceError?.let { throw it }
+
+        var runningOffset = 0L
+        return files.mapIndexed { index, file ->
+            val duration = durations[index]
+            TranscribeChunk(file, runningOffset, duration).also {
+                runningOffset += duration
+            }
+        }
+    }
+
+    private fun buildTranscriptionCues(
+        words: List<GeminiFileTranscribeClient.WordInfo>,
+        diarization: Boolean,
+    ): List<SubtitleStore.Cue> {
+        if (words.isEmpty()) return emptyList()
+        val speakerLabels = linkedMapOf<String, String>()
+
+        fun label(raw: String?): String? {
+            if (!diarization || raw.isNullOrBlank()) return null
+            return speakerLabels.getOrPut(raw) { "Người nói ${speakerLabels.size + 1}" }
+        }
+
+        val cues = ArrayList<SubtitleStore.Cue>()
+        var group = ArrayList<GeminiFileTranscribeClient.WordInfo>()
+        var groupSpeaker: String? = null
+
+        fun flush() {
+            if (group.isEmpty()) return
+            val body = normalizeWordSpacing(group.joinToString(" ") { it.text })
+            val speaker = label(groupSpeaker)
+            val text = if (speaker == null) body else "$speaker: $body"
+            cues += SubtitleStore.Cue(
+                index = cues.size + 1,
+                startMs = group.first().startMs,
+                endMs = group.last().endMs.coerceAtLeast(group.first().startMs + 1L),
+                text = text,
+            )
+            group = ArrayList()
+            groupSpeaker = null
+        }
+
+        words.sortedBy { it.startMs }.forEach { word ->
+            val speakerChanged = diarization && group.isNotEmpty() && word.speaker != groupSpeaker
+            val tooLong = group.isNotEmpty() && (
+                word.endMs - group.first().startMs >= 5_500L ||
+                    group.size >= 14 ||
+                    group.sumOf { it.text.length + 1 } >= 84
+                )
+            if (speakerChanged || tooLong) flush()
+            if (group.isEmpty()) groupSpeaker = word.speaker
+            group += word
+        }
+        flush()
+        return cues
+    }
+
+    private fun normalizeWordSpacing(value: String): String = value
+        .replace(Regex("\\s+([,.;:!?%])"), "$1")
+        .replace(Regex("([\\(\\[\\{])\\s+"), "$1")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     private fun launchSource() {
         if (sourceStarted || !_state.value.running) return
@@ -1396,6 +1619,16 @@ class TranslationService : LifecycleService() {
         if (_state.value.running) notificationController.update(_state.value)
     }
 
+    private fun isTranscribeMode(): Boolean =
+        processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE
+
+    private fun activeModelName(): String = if (isTranscribeMode()) {
+        if (currentMode == SourceMode.FILE) AppPreferences.TRANSCRIBE_FILE_MODEL
+        else AppPreferences.TRANSCRIBE_LIVE_MODEL
+    } else {
+        settings.model
+    }
+
     private fun elapsedMs(): Long = (SystemClock.elapsedRealtime() - sessionStartedAt).coerceAtLeast(0)
     private fun originalGain(): Float = settings.originalVolume.coerceIn(0, 100) / 100f
     private fun translatedGain(): Float = settings.translatedVolume.coerceIn(0, 100) / 100f
@@ -1412,6 +1645,9 @@ class TranslationService : LifecycleService() {
     }
 
     companion object {
+        private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
+        private const val PCM_BYTES_PER_MS = 32L
+        private const val MAX_TRANSCRIBE_CHUNK_PCM_BYTES = 16_000L * 2L * 25L * 60L
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

@@ -851,25 +851,35 @@ class TranslationService : LifecycleService() {
                             "Đọc metadata audio xong elapsedMs=$metadataElapsedMs durationMs=$durationMs",
                         )
                         if (durationMs <= 0L) error("Không đọc được thời lượng tệp")
-                        if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
-                            error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
-                        }
-                        updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
-                        fileClient.transcribe(
-                            resolver = contentResolver,
-                            uri = uri,
-                            displayName = name,
-                            mimeType = mimeType,
-                            speakerDiarization = speakerDiarization,
-                        ) { status, percent ->
-                            updateState {
-                                it.copy(
-                                    status = status,
-                                    progressPercent = percent.coerceIn(0, 98),
+                        when {
+                            durationMs <= MAX_TRANSCRIBE_FILE_DURATION_MS -> {
+                                updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
+                                fileClient.transcribe(
+                                    resolver = contentResolver,
+                                    uri = uri,
+                                    displayName = name,
+                                    mimeType = mimeType,
+                                    speakerDiarization = speakerDiarization,
+                                    inputType = "audio",
+                                ) { status, percent ->
+                                    updateState {
+                                        it.copy(
+                                            status = status,
+                                            progressPercent = percent.coerceIn(0, 98),
+                                        )
+                                    }
+                                }
+                            }
+                            durationMs <= MAX_EXPERIMENT_AUDIO_DURATION_MS -> {
+                                transcribeSplitAudioExperiment(
+                                    fileClient = fileClient,
+                                    uri = uri,
+                                    workDir = workDir,
+                                    durationMs = durationMs,
                                 )
                             }
-                        }
-                    }
+                            else -> error("Thử nghiệm tự chia hiện hỗ trợ tệp âm thanh tối đa 60 phút")
+                        }                    }
                 } finally {
                     fileClient.close()
                 }
@@ -921,6 +931,86 @@ class TranslationService : LifecycleService() {
         }
     }
 
+    private fun transcribeSplitAudioExperiment(
+        fileClient: GeminiFileTranscribeClient,
+        uri: Uri,
+        workDir: File,
+        durationMs: Long,
+    ): GeminiFileTranscribeClient.Result {
+        val splitStartedAt = SystemClock.elapsedRealtime()
+        logger.log(
+            2,
+            "TranscribeFile",
+            "EXPERIMENT long-audio: bắt đầu chia hai phần durationMs=$durationMs",
+        )
+        updateState {
+            it.copy(
+                status = "Đang chia tệp âm thanh...",
+                progressPercent = 0,
+            )
+        }
+        val split = AudioFileSplitter.splitInHalf(
+            context = this,
+            uri = uri,
+            outputDir = workDir,
+            maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
+        ) { percent ->
+            updateState {
+                it.copy(
+                    status = "Đang chia tệp âm thanh...",
+                    progressPercent = (percent / 10).coerceIn(0, 10),
+                )
+            }
+        }
+        val splitElapsedMs = SystemClock.elapsedRealtime() - splitStartedAt
+        logger.log(
+            2,
+            "TranscribeFile",
+            "Chia audio xong elapsedMs=$splitElapsedMs strategy=${split.strategy} samples=${split.sampleCount} outputBytes=${split.outputBytes} part1Bytes=${split.parts[0].file.length()} part2Bytes=${split.parts[1].file.length()} part1Ms=${split.parts[0].durationMs} part2Ms=${split.parts[1].durationMs}",
+        )
+
+        val textParts = ArrayList<String>()
+        val words = ArrayList<GeminiFileTranscribeClient.WordInfo>()
+        split.parts.forEachIndexed { index, part ->
+            val partStartedAt = SystemClock.elapsedRealtime()
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Bắt đầu chép phần ${index + 1}/${split.parts.size} file=${part.file.name} bytes=${part.file.length()} offsetMs=${part.startOffsetMs} durationMs=${part.durationMs}",
+            )
+            val partResult = fileClient.transcribe(
+                file = part.file,
+                mimeType = part.mimeType,
+                speakerDiarization = speakerDiarization,
+                inputType = "audio",
+            ) { status, percent ->
+                val base = 10 + index * 44
+                val mapped = base + percent * 44 / 100
+                updateState {
+                    it.copy(
+                        status = "Phần ${index + 1}/${split.parts.size}: $status",
+                        progressPercent = mapped.coerceIn(10, 98),
+                    )
+                }
+            }
+            partResult.text.trim().takeIf(String::isNotBlank)?.let(textParts::add)
+            partResult.words.forEach { word ->
+                words += word.copy(
+                    startMs = word.startMs + part.startOffsetMs,
+                    endMs = word.endMs + part.startOffsetMs,
+                )
+            }
+            logger.log(
+                2,
+                "TranscribeFile",
+                "Hoàn tất phần ${index + 1}/${split.parts.size} elapsedMs=${SystemClock.elapsedRealtime() - partStartedAt} chars=${partResult.text.length} words=${partResult.words.size}",
+            )
+        }
+        return GeminiFileTranscribeClient.Result(
+            text = textParts.joinToString("\n").trim(),
+            words = words.sortedBy { it.startMs },
+        )
+    }
     private fun mediaDurationMs(uri: Uri): Long {
         val retriever = MediaMetadataRetriever()
         val descriptor = contentResolver.openFileDescriptor(uri, "r")

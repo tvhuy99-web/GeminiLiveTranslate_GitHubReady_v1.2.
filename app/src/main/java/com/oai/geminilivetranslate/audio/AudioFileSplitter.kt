@@ -123,7 +123,7 @@ object AudioFileSplitter {
         val batch1 = ByteBuffer.allocateDirect(BATCH_BYTES + AAC_MAX_SAMPLE_BYTES + ADTS_HEADER_BYTES)
         val batch2 = ByteBuffer.allocateDirect(BATCH_BYTES + AAC_MAX_SAMPLE_BYTES + ADTS_HEADER_BYTES)
         var sampleCount = 0L
-        var part2FirstUs = splitUs
+        var part2FirstUs = -1L
         var lastProgress = -1
 
         FileOutputStream(first).channel.use { ch1 ->
@@ -145,7 +145,7 @@ object AudioFileSplitter {
                     }
                     val sampleTimeUs = extractor.sampleTime.coerceAtLeast(0L)
                     val firstPart = sampleTimeUs < splitUs
-                    if (!firstPart && part2FirstUs == splitUs) part2FirstUs = sampleTimeUs
+                    if (!firstPart && part2FirstUs < 0L) part2FirstUs = sampleTimeUs
                     val target = if (firstPart) batch1 else batch2
                     if (target.remaining() < size + ADTS_HEADER_BYTES) flush(target, firstPart)
 
@@ -171,11 +171,12 @@ object AudioFileSplitter {
         }
 
         validateParts(first, second)
+        val secondStartUs = part2FirstUs.takeIf { it >= 0L } ?: splitUs
         onProgress(100)
         return Result(
             parts = listOf(
-                Part(first, "audio/aac", 0L, part2FirstUs / 1_000L),
-                Part(second, "audio/aac", part2FirstUs / 1_000L, (durationUs - part2FirstUs) / 1_000L),
+                Part(first, "audio/aac", 0L, secondStartUs / 1_000L),
+                Part(second, "audio/aac", secondStartUs / 1_000L, (durationUs - secondStartUs) / 1_000L),
             ),
             sourceMimeType = mime,
             durationMs = durationUs / 1_000L,
@@ -208,7 +209,7 @@ object AudioFileSplitter {
         val batch1 = ByteBuffer.allocateDirect(BATCH_BYTES + maxInput)
         val batch2 = ByteBuffer.allocateDirect(BATCH_BYTES + maxInput)
         var sampleCount = 0L
-        var part2FirstUs = splitUs
+        var part2FirstUs = -1L
         var lastProgress = -1
 
         FileOutputStream(first).channel.use { ch1 ->
@@ -227,7 +228,7 @@ object AudioFileSplitter {
                     if (size < 0) break
                     val sampleTimeUs = extractor.sampleTime.coerceAtLeast(0L)
                     val firstPart = sampleTimeUs < splitUs
-                    if (!firstPart && part2FirstUs == splitUs) part2FirstUs = sampleTimeUs
+                    if (!firstPart && part2FirstUs < 0L) part2FirstUs = sampleTimeUs
                     val target = if (firstPart) batch1 else batch2
                     if (target.remaining() < size) flush(target, firstPart)
 
@@ -246,11 +247,12 @@ object AudioFileSplitter {
         }
 
         validateParts(first, second)
+        val secondStartUs = part2FirstUs.takeIf { it >= 0L } ?: splitUs
         onProgress(100)
         return Result(
             parts = listOf(
-                Part(first, "audio/mpeg", 0L, part2FirstUs / 1_000L),
-                Part(second, "audio/mpeg", part2FirstUs / 1_000L, (durationUs - part2FirstUs) / 1_000L),
+                Part(first, "audio/mpeg", 0L, secondStartUs / 1_000L),
+                Part(second, "audio/mpeg", secondStartUs / 1_000L, (durationUs - secondStartUs) / 1_000L),
             ),
             sourceMimeType = mime,
             durationMs = durationUs / 1_000L,

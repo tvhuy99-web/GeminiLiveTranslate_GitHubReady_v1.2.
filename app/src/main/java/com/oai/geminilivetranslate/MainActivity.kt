@@ -501,6 +501,7 @@ class MainActivity : AppCompatActivity() {
         fileControls.isVisible = fileMode && !transcribe
         fileSpeedLayout.isVisible = fileMode && !transcribe
         progressSeekBar.isVisible = fileMode
+        progressSeekBar.isEnabled = !transcribe
         originalVolumeSeekBar.isVisible = !transcribe && mode != SourceMode.MICROPHONE
         translatedVolumeLabel.isVisible = !transcribe
         translatedVolumeSeekBar.isVisible = !transcribe
@@ -691,7 +692,19 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    GeminiLiveClient.testConnection(key, settings.model, settings.targetLanguage, settings.echoTargetLanguage, logger)
+                    val transcribe = isTranscribeSelected()
+                    GeminiLiveClient.testConnection(
+                        apiKey = key,
+                        model = if (transcribe) AppPreferences.TRANSCRIBE_LIVE_MODEL else settings.model,
+                        targetLanguage = settings.targetLanguage,
+                        echoTargetLanguage = settings.echoTargetLanguage,
+                        logger = logger,
+                        operationMode = if (transcribe) {
+                            GeminiLiveClient.OperationMode.TRANSCRIBE
+                        } else {
+                            GeminiLiveClient.OperationMode.TRANSLATE
+                        },
+                    )
                 }
             }.onSuccess { elapsed ->
                 logger.log(2, "Settings", "Kiểm tra API từ màn hình chính thành công latencyMs=$elapsed")
@@ -713,7 +726,8 @@ class MainActivity : AppCompatActivity() {
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
-        exportDocument.launch("gemini_translate_${System.currentTimeMillis()}.$extension")
+        val prefix = if (isTranscribeSelected()) "gemini_transcribe" else "gemini_translate"
+        exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }
 
     private fun showMicLanguageManager() {
@@ -783,6 +797,17 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(view) })
             .setPositiveButton("Đóng", null).show()
+    }
+
+    private fun isTranscribeSelected(): Boolean =
+        preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_TRANSCRIBE
+
+    private fun restoreProcessingModeUi() = with(binding) {
+        val transcribe = isTranscribeSelected()
+        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
+        val mode = SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        speakerDiarizationSwitch.isVisible = transcribe && mode == SourceMode.FILE
     }
 
     private fun loadSourceMode(): SourceMode {

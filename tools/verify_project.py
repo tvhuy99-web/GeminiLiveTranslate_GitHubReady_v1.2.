@@ -25,6 +25,7 @@ REQUIRED = [
     "app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt",
     "app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt",
     "app/src/main/java/com/oai/geminilivetranslate/network/GeminiLiveClient.kt",
+    "app/src/main/java/com/oai/geminilivetranslate/network/GeminiFileTranscribeClient.kt",
     "app/src/main/java/com/oai/geminilivetranslate/core/AppLogRepository.kt",
     "app/src/main/java/com/oai/geminilivetranslate/core/SessionLogger.kt",
     "app/src/main/java/com/oai/geminilivetranslate/core/SettingsPolicy.kt",
@@ -105,6 +106,11 @@ def main() -> None:
             "targetLanguageCode",
             "contextWindowCompression",
             "slidingWindow",
+            "gemini-3.5-transcribe",
+            "gemini-3.5-transcribe-live",
+            "inputAudioTranscription",
+            "diarization_mode",
+            "timestamp_granularities",
             "AudioPlaybackCaptureConfiguration",
             "AndroidKeyStore",
             "FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION",
@@ -164,9 +170,13 @@ def main() -> None:
     )
 
     client = (JAVA_ROOT / "com/oai/geminilivetranslate/network/GeminiLiveClient.kt").read_text(encoding="utf-8")
-    for forbidden in ['.put("inputAudioTranscription"', '.put("outputAudioTranscription"']:
-        if forbidden in client:
-            fail(f"Unsupported transcription request field is present in Gemini setup: {forbidden}")
+    if '.put("outputAudioTranscription"' in client:
+        fail("Unsupported outputAudioTranscription field is present in Gemini setup")
+    require_tokens(
+        client,
+        ['OperationMode.TRANSCRIBE', '.put("inputAudioTranscription"', 'JSONArray().put("TEXT")'],
+        "Gemini live transcription",
+    )
 
     service = (JAVA_ROOT / "com/oai/geminilivetranslate/service/TranslationService.kt").read_text(encoding="utf-8")
     if service.count("notificationController.start(this, initialState)") != 1:

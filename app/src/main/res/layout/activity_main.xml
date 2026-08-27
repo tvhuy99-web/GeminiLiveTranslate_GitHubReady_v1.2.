@@ -23,6 +23,13 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/processingModeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="Chế độ: Dịch thuật" />
+
+        <Button
             android:id="@+id/apiKeyButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -59,6 +66,14 @@
                 android:contentDescription="Chọn nguồn âm thanh"
                 android:minHeight="48dp" />
         </LinearLayout>
+
+        <Switch
+            android:id="@+id/speakerDiarizationSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="Phân biệt người nói"
+            android:visibility="gone" />
 
         <LinearLayout
             android:id="@+id/micLanguageLayout"

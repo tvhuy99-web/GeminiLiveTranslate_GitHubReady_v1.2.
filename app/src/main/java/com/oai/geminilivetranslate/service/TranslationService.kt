@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaMetadataRetriever
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -20,6 +21,7 @@ import com.oai.geminilivetranslate.audio.InternalAudioSource
 import com.oai.geminilivetranslate.audio.MicAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
+import com.oai.geminilivetranslate.audio.VideoAudioExtractor
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -33,6 +35,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
+import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +52,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -86,6 +90,7 @@ class TranslationService : LifecycleService() {
     private var reconnectJob: Job? = null
     private var healthJob: Job? = null
     private var fileFinishFallbackJob: Job? = null
+    private var transcribeRotationJob: Job? = null
     private var originalQueueJob: Job? = null
     private var originalQueue: Channel<ByteArray>? = null
     private var inputSendJob: Job? = null
@@ -121,9 +126,16 @@ class TranslationService : LifecycleService() {
     private var sourceStarted = false
     private var fileInputEnded = false
     private var lastRawTranscript = ""
+    @Volatile private var transcribePlainText = ""
+    @Volatile private var liveCommittedTranscript = ""
+    @Volatile private var liveInterimTranscript = ""
+    private var liveInterimEvents = 0L
+    private var liveFinalEvents = 0L
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
+    @Volatile private var processingMode = AppPreferences.PROCESSING_MODE_TRANSLATE
+    @Volatile private var speakerDiarization = false
     private var sessionStartedAt = 0L
     private var totalInputBytes = 0L
     private var totalOutputBytes = 0L
@@ -147,6 +159,8 @@ class TranslationService : LifecycleService() {
         notificationController = NotificationController(this)
         recordingStore = PublicRecordingStore(this, logger)
         settings = preferences.load()
+        processingMode = preferences.loadProcessingMode()
+        speakerDiarization = preferences.loadSpeakerDiarization()
         _state.update {
             it.copy(
                 aiVoice = settings.aiVoice,
@@ -166,7 +180,7 @@ class TranslationService : LifecycleService() {
         when (intent?.action) {
             ACTION_PAUSE -> pause()
             ACTION_RESUME -> resume()
-            ACTION_STOP -> stopTranslation("Đã dừng dịch")
+            ACTION_STOP -> stopTranslation()
             ACTION_APPLY_SETTINGS -> {
                 applySettingsFromPreferences()
                 if (!_state.value.running) stopSelf(startId)
@@ -186,6 +200,22 @@ class TranslationService : LifecycleService() {
         _state.update { it.copy(sourceMode = mode) }
     }
 
+    fun setProcessingMode(value: String) {
+        if (_state.value.running) return
+        processingMode = if (value == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE
+        } else {
+            AppPreferences.PROCESSING_MODE_TRANSLATE
+        }
+        preferences.setProcessingMode(processingMode)
+    }
+
+    fun setSpeakerDiarization(enabled: Boolean) {
+        if (_state.value.running) return
+        speakerDiarization = enabled
+        preferences.setSpeakerDiarization(enabled)
+    }
+
     fun setSelectedFile(uri: Uri, name: String?) {
         if (_state.value.running && currentMode == SourceMode.FILE) stopTranslation("Đã dừng do đổi tệp")
         selectedUri = uri
@@ -201,6 +231,8 @@ class TranslationService : LifecycleService() {
         if (_state.value.running) return
         stopping.set(false)
         settings = preferences.load()
+        processingMode = preferences.loadProcessingMode()
+        speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
         val apiKey = keyStore.load().selected
         if (apiKey.isNullOrBlank()) {
@@ -225,14 +257,16 @@ class TranslationService : LifecycleService() {
         DiagnosticContext.updateAll(mapOf(
             "session.id" to sessionId,
             "session.source" to mode.name,
-            "session.model" to settings.model,
+            "session.model" to activeModelName(),
+            "session.processingMode" to processingMode,
+            "session.speakerDiarization" to speakerDiarization,
             "session.targetLanguage" to settings.targetLanguage,
             "session.filePlaybackSpeed" to filePlaybackSpeed,
             "session.startedAt" to Date().toString(),
         ))
         subtitles.reset()
         val initialState = _state.value.copy(
-            status = "Đang khởi động phiên dịch...",
+            status = if (isTranscribeMode()) "Đang khởi động chép lời..." else "Đang khởi động phiên dịch...",
             health = "",
             running = true,
             paused = false,
@@ -242,14 +276,23 @@ class TranslationService : LifecycleService() {
             selectedFileName = selectedFileName,
             transcript = "",
             progressPercent = 0,
-            canSeek = mode == SourceMode.FILE,
-            aiVoice = settings.aiVoice,
+            canSeek = mode == SourceMode.FILE && !isTranscribeMode(),
+            aiVoice = settings.aiVoice && !isTranscribeMode(),
             currentLanguage = settings.targetLanguage,
             lastError = null,
         )
         _state.value = initialState
-        setupInputSender()
         notificationController.start(this, initialState)
+
+        if (isTranscribeMode() && mode == SourceMode.FILE) {
+            runCatching { acquireWakeLock() }.onFailure {
+                logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
+            }
+            startFileTranscription(apiKey)
+            return
+        }
+
+        setupInputSender()
 
         if (mode == SourceMode.INTERNAL) {
             val projection = runCatching {
@@ -280,19 +323,21 @@ class TranslationService : LifecycleService() {
         logger.log(
             2,
             "Session",
-            "Bắt đầu session=$sessionId nguồn=$mode model=${settings.model} đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
+            "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
         startHealthMonitor()
         connectGemini(apiKey)
     }
 
-    fun stopTranslation(message: String = "Đã dừng dịch") {
+    fun stopTranslation(message: String = if (isTranscribeMode()) "Đã dừng chép lời" else "Đã dừng dịch") {
         if (!stopping.compareAndSet(false, true)) return
         val hadActiveSession = _state.value.running || sessionId.isNotBlank()
+        finalizeLiveTranscriptionFallback("stop")
         connectionGeneration++
         inputEpoch.incrementAndGet()
         reconnectJob?.cancel(); reconnectJob = null
         fileFinishFallbackJob?.cancel(); fileFinishFallbackJob = null
+        transcribeRotationJob?.cancel(); transcribeRotationJob = null
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
         sourceJob?.cancel(); sourceJob = null
@@ -351,6 +396,9 @@ class TranslationService : LifecycleService() {
 
     fun pause() {
         if (!_state.value.running || _state.value.paused) return
+        if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+            finalizeLiveTranscriptionFallback("reconnect")
+        }
         source?.pause()
         aiPlayer?.pause()
         originalPlayer?.pause()
@@ -368,7 +416,7 @@ class TranslationService : LifecycleService() {
         source?.resume()
         aiPlayer?.resume()
         originalPlayer?.resume()
-        updateState { it.copy(paused = false, status = "Đang dịch") }
+        updateState { it.copy(paused = false, status = if (isTranscribeMode()) "Đang chép lời..." else "Đang dịch") }
         logger.log(2, "Session", "Tiếp tục session=$sessionId source=$currentMode fileSpeed=${formatFileSpeed()}x")
     }
 
@@ -542,7 +590,11 @@ class TranslationService : LifecycleService() {
     }
 
     fun subtitleText(format: String = preferences.load().exportFormat): String =
-        if (format == "txt") subtitles.plainText() else subtitles.srtText()
+        if (format == "txt") {
+            transcribePlainText.takeIf { isTranscribeMode() && it.isNotBlank() } ?: subtitles.plainText()
+        } else {
+            subtitles.srtText()
+        }
 
     fun logText(): String = logger.text()
 
@@ -551,6 +603,13 @@ class TranslationService : LifecycleService() {
         sourceStarted = false
         fileInputEnded = false
         lastRawTranscript = ""
+        transcribePlainText = ""
+        liveCommittedTranscript = ""
+        liveInterimTranscript = ""
+        liveInterimEvents = 0L
+        liveFinalEvents = 0L
+        transcribeRotationJob?.cancel()
+        transcribeRotationJob = null
         totalInputBytes = 0L
         totalOutputBytes = 0L
         sessionResumptionHandle = null
@@ -573,14 +632,16 @@ class TranslationService : LifecycleService() {
         reconnectJob?.cancel()
         reconnectJob = null
         val generation = ++connectionGeneration
-        val handleForThisConnection = sessionResumptionHandle
+        val handleForThisConnection = if (isTranscribeMode()) null else sessionResumptionHandle
         setupStartedAt = SystemClock.elapsedRealtime()
         logger.log(2, "GeminiWS", "Mở kết nối generation=$generation resume=${!handleForThisConnection.isNullOrBlank()} maxWireBytes=${calculateMaxQueuedWireBytes()}")
         client?.close(false)
         updateState {
             it.copy(
                 setupComplete = false,
-                status = if (handleForThisConnection.isNullOrBlank()) {
+                status = if (isTranscribeMode()) {
+                    "Đang kết nối chép lời..."
+                } else if (handleForThisConnection.isNullOrBlank()) {
                     "Đang kết nối Gemini Live API..."
                 } else {
                     "Đang khôi phục phiên Gemini..."
@@ -589,12 +650,17 @@ class TranslationService : LifecycleService() {
         }
         val liveClient = GeminiLiveClient(
             apiKey = apiKey,
-            model = settings.model,
+            model = activeModelName(),
             targetLanguage = settings.targetLanguage,
             echoTargetLanguage = settings.echoTargetLanguage,
             logger = logger,
             resumeHandle = handleForThisConnection,
             maxQueuedWireBytes = calculateMaxQueuedWireBytes(),
+            operationMode = if (isTranscribeMode()) {
+                GeminiLiveClient.OperationMode.TRANSCRIBE
+            } else {
+                GeminiLiveClient.OperationMode.TRANSLATE
+            },
             listener = object : GeminiLiveClient.Listener {
                 override fun onSetupComplete() {
                     if (generation != connectionGeneration || !_state.value.running) return
@@ -610,13 +676,16 @@ class TranslationService : LifecycleService() {
                     updateState {
                         it.copy(
                             setupComplete = true,
-                            status = if (handleForThisConnection.isNullOrBlank()) {
+                            status = if (isTranscribeMode()) {
+                                "Đang chép lời..."
+                            } else if (handleForThisConnection.isNullOrBlank()) {
                                 "Setup hoàn tất! Bắt đầu truyền audio..."
                             } else {
                                 "Đã khôi phục phiên; tiếp tục truyền audio..."
                             }
                         )
                     }
+                    if (isTranscribeMode()) scheduleTranscribeRotation(apiKey)
                     if (sourceStarted) {
                         if (!_state.value.paused) {
                             source?.resume()
@@ -642,11 +711,11 @@ class TranslationService : LifecycleService() {
                         logger.log(1, "SubtitlePipe", "Bỏ onText event=$event do generation cũ callback=$generation current=$currentGeneration")
                         return
                     }
-                    appendTranslation(text, event)
+                    if (!isTranscribeMode()) appendTranslation(text, event)
                 }
 
                 override fun onAudio(pcm24kMono: ByteArray) {
-                    if (generation != connectionGeneration || !_state.value.running) return
+                    if (generation != connectionGeneration || !_state.value.running || isTranscribeMode()) return
                     totalOutputBytes += pcm24kMono.size
                     if (settings.aiVoice) aiPlayer?.enqueue(pcm24kMono)
                     translatedWriter?.write(pcm24kMono)
@@ -655,11 +724,24 @@ class TranslationService : LifecycleService() {
                 }
 
                 override fun onInputTranscript(text: String) {
-                    logger.log(3, "GeminiInput", text)
+                    if (generation != connectionGeneration || !_state.value.running) return
+                    if (isTranscribeMode()) {
+                        appendTranscriptionSegment(text)
+                    } else {
+                        logger.log(3, "GeminiInput", text)
+                    }
+                }
+
+                override fun onInterimTranscript(text: String) {
+                    if (generation != connectionGeneration || !_state.value.running || !isTranscribeMode()) return
+                    updateLiveInterimTranscript(text)
                 }
 
                 override fun onTurnComplete() {
                     if (generation != connectionGeneration) return
+                    if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+                        finalizeLiveTranscriptionFallback("turnComplete")
+                    }
                     lastRawTranscript = ""
                     flushTtsBuffer()
                     if (fileInputEnded) stopTranslation("Đã hoàn tất tệp")
@@ -703,6 +785,247 @@ class TranslationService : LifecycleService() {
         client = liveClient
         liveClient.connect()
     }
+
+    private fun startFileTranscription(apiKey: String) {
+        sourceJob?.cancel()
+        sourceJob = serviceScope.launch(Dispatchers.IO) {
+            val uri = selectedUri ?: run {
+                stopTranslation("Chưa chọn tệp")
+                return@launch
+            }
+            val workDir = File(cacheDir, "transcribe-$sessionId").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            val totalStartedAt = SystemClock.elapsedRealtime()
+            try {
+                val name = selectedFileName ?: uri.lastPathSegment ?: "audio"
+                val mimeType = selectedMimeType(uri, name)
+                val video = mimeType.startsWith("video/") || isVideoFileName(name)
+                val sourceBytes = sourceSizeBytes(uri)
+                logger.log(
+                    2,
+                    "TranscribeFile",
+                    "Bắt đầu xử lý name=$name mime=$mimeType video=$video sourceBytes=$sourceBytes",
+                )
+
+                var durationMs: Long
+                val fileClient = GeminiFileTranscribeClient(apiKey, logger)
+                val result = try {
+                    if (video) {
+                        val extractStartedAt = SystemClock.elapsedRealtime()
+                        logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
+                        updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
+                        val extracted = VideoAudioExtractor.extract(
+                            context = this@TranslationService,
+                            uri = uri,
+                            output = File(workDir, "audio.m4a"),
+                            maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
+                        ) { percent ->
+                            updateState {
+                                it.copy(
+                                    status = "Đang tách âm thanh...",
+                                    progressPercent = (percent / 10).coerceIn(0, 10),
+                                )
+                            }
+                        }
+                        durationMs = extracted.durationMs
+                        val extractElapsedMs = SystemClock.elapsedRealtime() - extractStartedAt
+                        logger.log(
+                            2,
+                            "TranscribeFile",
+                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}",
+                        )
+                        fileClient.transcribe(
+                            file = extracted.file,
+                            mimeType = extracted.mimeType,
+                            speakerDiarization = speakerDiarization,
+                        ) { status, percent ->
+                            updateState {
+                                it.copy(
+                                    status = status,
+                                    progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
+                                )
+                            }
+                        }
+                    } else {
+                        val metadataStartedAt = SystemClock.elapsedRealtime()
+                        durationMs = mediaDurationMs(uri)
+                        val metadataElapsedMs = SystemClock.elapsedRealtime() - metadataStartedAt
+                        logger.log(
+                            2,
+                            "TranscribeFile",
+                            "Đọc metadata audio xong elapsedMs=$metadataElapsedMs durationMs=$durationMs",
+                        )
+                        if (durationMs <= 0L) error("Không đọc được thời lượng tệp")
+                        if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
+                            error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
+                        }
+                        updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
+                        fileClient.transcribe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            speakerDiarization = speakerDiarization,
+                        ) { status, percent ->
+                            updateState {
+                                it.copy(
+                                    status = status,
+                                    progressPercent = percent.coerceIn(0, 98),
+                                )
+                            }
+                        }
+                    }
+                } finally {
+                    fileClient.close()
+                }
+
+                val resultBuildStartedAt = SystemClock.elapsedRealtime()
+                val cues = buildTranscriptionCues(result.words, speakerDiarization)
+                if (cues.isNotEmpty()) {
+                    subtitles.replaceTimed(cues)
+                } else {
+                    subtitles.reset()
+                    result.text.trim().takeIf(String::isNotBlank)?.let {
+                        subtitles.appendTimed(it, 0L, durationMs.coerceAtLeast(1_000L))
+                    }
+                }
+                transcribePlainText = if (speakerDiarization && cues.isNotEmpty()) {
+                    subtitles.plainText()
+                } else {
+                    result.text.trim().ifBlank { subtitles.plainText() }
+                }
+                val resultBuildElapsedMs = SystemClock.elapsedRealtime() - resultBuildStartedAt
+                fileInputEnded = true
+                updateState {
+                    it.copy(
+                        transcript = transcribePlainText.takeLast(MAX_TRANSCRIPT_CHARS),
+                        status = "Đã hoàn tất chép lời",
+                        progressPercent = 100,
+                    )
+                }
+                logger.log(
+                    2,
+                    "TranscribeFile",
+                    "Hoàn tất toàn bộ totalElapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt} resultBuildMs=$resultBuildElapsedMs chars=${transcribePlainText.length} words=${result.words.size} cues=${cues.size}",
+                )
+                stopTranslation("Đã hoàn tất chép lời")
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) return@launch
+                logger.log(
+                    0,
+                    "TranscribeFile",
+                    "Chép lời tệp thất bại elapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt}",
+                    error,
+                )
+                if (_state.value.running) {
+                    stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
+                }
+            } finally {
+                workDir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun mediaDurationMs(uri: Uri): Long {
+        val retriever = MediaMetadataRetriever()
+        val descriptor = contentResolver.openFileDescriptor(uri, "r")
+            ?: error("Không mở được tệp để đọc thời lượng")
+        return try {
+            retriever.setDataSource(descriptor.fileDescriptor)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?.coerceAtLeast(0L)
+                ?: 0L
+        } finally {
+            retriever.release()
+            descriptor.close()
+        }
+    }
+
+    private fun sourceSizeBytes(uri: Uri): Long = runCatching {
+        contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+            descriptor.length.takeIf { it >= 0L }
+                ?: descriptor.parcelFileDescriptor.statSize.takeIf { it >= 0L }
+                ?: -1L
+        } ?: -1L
+    }.getOrDefault(-1L)
+
+    private fun selectedMimeType(uri: Uri, name: String): String {
+        contentResolver.getType(uri)?.takeIf(String::isNotBlank)?.let { return it }
+        return when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "m4a", "mp4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "ogg", "oga", "opus" -> "audio/ogg"
+            "webm" -> "video/webm"
+            "mp4", "m4v", "mov" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "3gp", "3gpp" -> "video/3gpp"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun isVideoFileName(name: String): Boolean =
+        when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "3gpp" -> true
+            else -> false
+        }
+
+    private fun buildTranscriptionCues(
+        words: List<GeminiFileTranscribeClient.WordInfo>,
+        diarization: Boolean,
+    ): List<SubtitleStore.Cue> {
+        if (words.isEmpty()) return emptyList()
+        val speakerLabels = linkedMapOf<String, String>()
+
+        fun label(raw: String?): String? {
+            if (!diarization || raw.isNullOrBlank()) return null
+            return speakerLabels.getOrPut(raw) { "Người nói ${speakerLabels.size + 1}" }
+        }
+
+        val cues = ArrayList<SubtitleStore.Cue>()
+        var group = ArrayList<GeminiFileTranscribeClient.WordInfo>()
+        var groupSpeaker: String? = null
+
+        fun flush() {
+            if (group.isEmpty()) return
+            val body = normalizeWordSpacing(group.joinToString(" ") { it.text })
+            val speaker = label(groupSpeaker)
+            val text = if (speaker == null) body else "$speaker: $body"
+            cues += SubtitleStore.Cue(
+                index = cues.size + 1,
+                startMs = group.first().startMs,
+                endMs = group.last().endMs.coerceAtLeast(group.first().startMs + 1L),
+                text = text,
+            )
+            group = ArrayList()
+            groupSpeaker = null
+        }
+
+        words.sortedBy { it.startMs }.forEach { word ->
+            val speakerChanged = diarization && group.isNotEmpty() && word.speaker != groupSpeaker
+            val tooLong = group.isNotEmpty() && (
+                word.endMs - group.first().startMs >= 5_500L ||
+                    group.size >= 14 ||
+                    group.sumOf { it.text.length + 1 } >= 84
+                )
+            if (speakerChanged || tooLong) flush()
+            if (group.isEmpty()) groupSpeaker = word.speaker
+            group += word
+        }
+        flush()
+        return cues
+    }
+
+    private fun normalizeWordSpacing(value: String): String = value
+        .replace(Regex("\\s+([,.;:!?%])"), "\$1")
+        .replace(Regex("([\\(\\[\\{])\\s+"), "\$1")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     private fun launchSource() {
         if (sourceStarted || !_state.value.running) return
@@ -903,6 +1226,112 @@ class TranslationService : LifecycleService() {
         return (seconds * 1_000.0 - 1_000.0).toLong().coerceIn(250L, 3_000L)
     }
 
+    private fun appendTranscriptionSegment(raw: String) {
+        val cleaned = raw.trim()
+        if (cleaned.isBlank()) return
+        liveFinalEvents++
+        liveCommittedTranscript = mergeLiveTranscript(liveCommittedTranscript, cleaned)
+        liveInterimTranscript = ""
+        transcribePlainText = liveCommittedTranscript
+        subtitles.reset()
+        subtitles.append(liveCommittedTranscript)
+        updateState {
+            it.copy(
+                transcript = liveCommittedTranscript.takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đang chép lời...",
+            )
+        }
+        logger.log(
+            2,
+            "TranscribeLive",
+            "final event=$liveFinalEvents chars=${cleaned.length} committedChars=${liveCommittedTranscript.length} interimEvents=$liveInterimEvents",
+        )
+        DiagnosticContext.updateAll(
+            mapOf(
+                "session.transcriptChars" to _state.value.transcript.length,
+                "session.transcribeInterimEvents" to liveInterimEvents,
+                "session.transcribeFinalEvents" to liveFinalEvents,
+            )
+        )
+    }
+
+    private fun updateLiveInterimTranscript(raw: String) {
+        val cleaned = raw.trim()
+        if (cleaned.isBlank()) return
+        liveInterimTranscript = cleaned
+        liveInterimEvents++
+        val preview = mergeLiveTranscript(liveCommittedTranscript, cleaned)
+        transcribePlainText = preview
+        updateState {
+            it.copy(
+                transcript = preview.takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đang chép lời...",
+            )
+        }
+        if (liveInterimEvents == 1L || liveInterimEvents % 10L == 0L) {
+            logger.log(
+                3,
+                "TranscribeLive",
+                "interim event=$liveInterimEvents chars=${cleaned.length} previewChars=${preview.length} committedChars=${liveCommittedTranscript.length} finals=$liveFinalEvents",
+            )
+        }
+        DiagnosticContext.updateAll(
+            mapOf(
+                "session.transcriptChars" to _state.value.transcript.length,
+                "session.transcribeInterimEvents" to liveInterimEvents,
+                "session.transcribeFinalEvents" to liveFinalEvents,
+            )
+        )
+    }
+
+    private fun finalizeLiveTranscriptionFallback(reason: String) {
+        if (!isTranscribeMode() || currentMode == SourceMode.FILE) return
+        val preview = mergeLiveTranscript(liveCommittedTranscript, liveInterimTranscript).trim()
+        if (preview.isBlank()) {
+            logger.log(
+                2,
+                "TranscribeLive",
+                "Không có nội dung để chốt reason=$reason interimEvents=$liveInterimEvents finalEvents=$liveFinalEvents",
+            )
+            return
+        }
+        val usedInterimFallback = preview != liveCommittedTranscript
+        liveCommittedTranscript = preview
+        liveInterimTranscript = ""
+        transcribePlainText = preview
+        subtitles.reset()
+        subtitles.append(preview)
+        _state.update {
+            it.copy(
+                transcript = preview.takeLast(MAX_TRANSCRIPT_CHARS),
+                status = "Đã chốt nội dung chép lời",
+            )
+        }
+        logger.log(
+            if (usedInterimFallback) 1 else 2,
+            "TranscribeLive",
+            "Chốt transcript reason=$reason chars=${preview.length} usedInterimFallback=$usedInterimFallback interimEvents=$liveInterimEvents finalEvents=$liveFinalEvents",
+        )
+    }
+
+    private fun mergeLiveTranscript(baseRaw: String, candidateRaw: String): String {
+        val base = baseRaw.trim()
+        val candidate = candidateRaw.trim()
+        if (base.isBlank()) return candidate
+        if (candidate.isBlank()) return base
+        if (candidate == base || base.endsWith(candidate)) return base
+        if (candidate.startsWith(base)) return candidate
+        if (base.startsWith(candidate)) return base
+        val maxOverlap = minOf(base.length, candidate.length)
+        for (length in maxOverlap downTo 1) {
+            if (base.regionMatches(base.length - length, candidate, 0, length, ignoreCase = false)) {
+                val suffix = candidate.substring(length).trimStart()
+                return if (suffix.isBlank()) base else "$base $suffix"
+            }
+        }
+        return "$base $candidate"
+    }
+
     private fun appendTranslation(raw: String, callbackEvent: Long) {
         val cleaned = raw.trim()
         if (cleaned.isBlank()) {
@@ -965,9 +1394,22 @@ class TranslationService : LifecycleService() {
         val apiError = error as? GeminiLiveClient.GeminiApiException
         when (apiError?.code) {
             400, 401, 403 -> stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key và cấu hình")
-            404 -> stopTranslation("Không tìm thấy model ${settings.model}")
+            404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
             429 -> scheduleReconnect(60_000L, true, "Gemini đang giới hạn lưu lượng")
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
+        }
+    }
+
+    private fun scheduleTranscribeRotation(apiKey: String) {
+        transcribeRotationJob?.cancel()
+        transcribeRotationJob = serviceScope.launch {
+            delay(TRANSCRIBE_LIVE_ROTATE_MS)
+            if (!_state.value.running || !isTranscribeMode() || currentMode == SourceMode.FILE) return@launch
+            logger.log(2, "TranscribeLive", "Xoay phiên trước giới hạn Live")
+            finalizeLiveTranscriptionFallback("rotation")
+            source?.pause()
+            clearPendingInputForFreshSession()
+            connectGemini(apiKey)
         }
     }
 
@@ -1016,6 +1458,10 @@ class TranslationService : LifecycleService() {
     }
 
     private fun setupPlayers() {
+        if (isTranscribeMode()) {
+            logger.log(3, "AudioPlayer", "Bỏ qua output player trong chế độ chép lời")
+            return
+        }
         if (settings.aiVoice) aiPlayer = buildAiPlayer().also {
             it.start()
             it.setVolume(settings.translatedVolume)
@@ -1065,6 +1511,10 @@ class TranslationService : LifecycleService() {
     )
 
     private fun setupRecorders() {
+        if (isTranscribeMode()) {
+            logger.log(3, "Recorder", "Bỏ qua recorder đầu ra trong chế độ chép lời")
+            return
+        }
         if (!settings.saveAudioEnabled) return
         logger.log(2, "Recorder", "Bật ghi audio mode=${settings.saveAudioMode}; đích công khai Music/GeminiLiveTranslate")
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -1314,6 +1764,16 @@ class TranslationService : LifecycleService() {
         if (_state.value.running) notificationController.update(_state.value)
     }
 
+    private fun isTranscribeMode(): Boolean =
+        processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE
+
+    private fun activeModelName(): String = if (isTranscribeMode()) {
+        if (currentMode == SourceMode.FILE) AppPreferences.TRANSCRIBE_FILE_MODEL
+        else AppPreferences.TRANSCRIBE_LIVE_MODEL
+    } else {
+        settings.model
+    }
+
     private fun elapsedMs(): Long = (SystemClock.elapsedRealtime() - sessionStartedAt).coerceAtLeast(0)
     private fun originalGain(): Float = settings.originalVolume.coerceIn(0, 100) / 100f
     private fun translatedGain(): Float = settings.translatedVolume.coerceIn(0, 100) / 100f
@@ -1330,6 +1790,8 @@ class TranslationService : LifecycleService() {
     }
 
     companion object {
+        private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
+        private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

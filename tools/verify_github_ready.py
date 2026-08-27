@@ -155,9 +155,8 @@ def main() -> None:
             fail(f"Build/update signing configuration is missing token: {token}")
 
     client = (ROOT / "app/src/main/java/com/oai/geminilivetranslate/network/GeminiLiveClient.kt").read_text(encoding="utf-8")
-    for forbidden in ['.put("inputAudioTranscription"', '.put("outputAudioTranscription"']:
-        if forbidden in client:
-            fail(f"Gemini setup reintroduced unsupported field: {forbidden}")
+    if '.put("outputAudioTranscription"' in client:
+        fail("Gemini setup contains unsupported outputAudioTranscription")
     for token in [
         "createSetupMessage",
         "responseModalities",
@@ -165,6 +164,8 @@ def main() -> None:
         "targetLanguageCode",
         "contextWindowCompression",
         "slidingWindow",
+        "inputAudioTranscription",
+        "OperationMode.TRANSCRIBE",
     ]:
         if token not in client:
             fail(f"Gemini setup is missing token: {token}")

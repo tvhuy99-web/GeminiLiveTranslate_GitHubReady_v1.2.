@@ -27,13 +27,17 @@ class GeminiLiveClient(
     private val listener: Listener,
     private val resumeHandle: String? = null,
     private val maxQueuedWireBytes: Long = DEFAULT_MAX_QUEUED_WIRE_BYTES,
+    private val operationMode: OperationMode = OperationMode.TRANSLATE,
 ) {
+    enum class OperationMode { TRANSLATE, TRANSCRIBE }
+
     interface Listener {
         fun onOpen() = Unit
         fun onSetupComplete()
         fun onText(text: String)
         fun onAudio(pcm24kMono: ByteArray)
         fun onInputTranscript(text: String) = Unit
+        fun onInterimTranscript(text: String) = Unit
         fun onTurnComplete() = Unit
         fun onInterrupted() = Unit
         fun onSessionResumptionUpdate(resumable: Boolean, newHandle: String?) = Unit
@@ -227,6 +231,7 @@ class GeminiLiveClient(
             targetLanguage = targetLanguage,
             echoTargetLanguage = echoTargetLanguage,
             resumeHandle = resumeHandle,
+            operationMode = operationMode,
         )
     }
 
@@ -270,6 +275,9 @@ class GeminiLiveClient(
                 logger.log(2, "GeminiResponse", "serverContent interrupted=true")
                 listener.onInterrupted()
             }
+
+            serverContent.optJSONObject("interimInputTranscription")
+                ?.optString("text")?.takeIf(String::isNotBlank)?.let(listener::onInterimTranscript)
 
             val inputObject = serverContent.optJSONObject("inputTranscription")
             if (serverContent.has("inputTranscription") && inputObject == null) {
@@ -423,22 +431,36 @@ class GeminiLiveClient(
             targetLanguage: String,
             echoTargetLanguage: Boolean,
             resumeHandle: String? = null,
+            operationMode: OperationMode = OperationMode.TRANSLATE,
         ): String {
-            val translationConfig = JSONObject()
-                .put("targetLanguageCode", targetLanguage)
-                .put("echoTargetLanguage", echoTargetLanguage)
-            val generationConfig = JSONObject()
-                .put("responseModalities", JSONArray().put("AUDIO"))
-                .put("translationConfig", translationConfig)
             val setup = JSONObject()
                 .put("model", "models/${model.trim().removePrefix("models/")}")
-                .put("generationConfig", generationConfig)
-                .put(
+            if (operationMode == OperationMode.TRANSCRIBE) {
+                setup.put(
+                    "generationConfig",
+                    JSONObject().put("responseModalities", JSONArray().put("TEXT")),
+                )
+                setup.put(
+                    "inputAudioTranscription",
+                    JSONObject().put("languageCodes", JSONArray()),
+                )
+            } else {
+                val translationConfig = JSONObject()
+                    .put("targetLanguageCode", targetLanguage)
+                    .put("echoTargetLanguage", echoTargetLanguage)
+                setup.put(
+                    "generationConfig",
+                    JSONObject()
+                        .put("responseModalities", JSONArray().put("AUDIO"))
+                        .put("translationConfig", translationConfig),
+                )
+                setup.put(
                     "contextWindowCompression",
                     JSONObject().put("slidingWindow", JSONObject()),
                 )
-            resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { handle ->
-                setup.put("sessionResumption", JSONObject().put("handle", handle))
+                resumeHandle?.trim()?.takeIf(String::isNotBlank)?.let { handle ->
+                    setup.put("sessionResumption", JSONObject().put("handle", handle))
+                }
             }
             return JSONObject().put("setup", setup).toString()
         }
@@ -449,6 +471,7 @@ class GeminiLiveClient(
             targetLanguage: String,
             echoTargetLanguage: Boolean,
             logger: SessionLogger,
+            operationMode: OperationMode = OperationMode.TRANSLATE,
         ): Long {
             val started = System.nanoTime()
             val result = CompletableDeferred<Result<Unit>>()
@@ -463,7 +486,8 @@ class GeminiLiveClient(
                     override fun onClosed(reason: String) {
                         if (!result.isCompleted) result.complete(Result.failure(IllegalStateException(reason)))
                     }
-                }
+                },
+                operationMode = operationMode,
             )
             try {
                 testClient.connect()

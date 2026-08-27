@@ -172,6 +172,8 @@ class MainActivity : AppCompatActivity() {
             translationService?.let { service ->
                 val restoredMode = loadSourceMode()
                 service.setSourceMode(restoredMode)
+                service.setProcessingMode(preferences.loadProcessingMode())
+                service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
                 selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
                 syncFileSpeedUi(selectedFilePlaybackSpeed)
@@ -241,6 +243,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUi() = with(binding) {
         titleText.text = "Gemini Live Translate v${BuildConfig.VERSION_NAME}"
+        processingModeButton.setOnClickListener {
+            if (translationService?.state?.value?.running == true) return@setOnClickListener
+            val next = if (isTranscribeSelected()) {
+                AppPreferences.PROCESSING_MODE_TRANSLATE
+            } else {
+                AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            }
+            preferences.setProcessingMode(next)
+            translationService?.setProcessingMode(next)
+            restoreProcessingModeUi()
+        }
+        speakerDiarizationSwitch.setOnCheckedChangeListener { _, checked ->
+            if (speakerDiarizationSwitch.isPressed) {
+                preferences.setSpeakerDiarization(checked)
+                translationService?.setSpeakerDiarization(checked)
+            }
+        }
         audioSourceSpinner.adapter = ArrayAdapter(
             this@MainActivity,
             android.R.layout.simple_spinner_item,
@@ -257,6 +276,7 @@ class MainActivity : AppCompatActivity() {
             }
             saveSourceMode(mode)
             translationService?.setSourceMode(mode)
+            translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
             updateModeUi(mode, translationService?.state?.value?.running == true)
         }
         audioSourceSpinner.post { spinnerReady = true }
@@ -377,8 +397,9 @@ class MainActivity : AppCompatActivity() {
             )
             lastRenderedTranscriptChars = transcriptChars
         }
-        subtitleText.text = state.transcript.ifBlank { "Chưa có nội dung dịch" }
-        val expectedChars = if (transcriptChars == 0) "Chưa có nội dung dịch".length else transcriptChars
+        val emptyTranscript = if (isTranscribeSelected()) "Chưa có nội dung chép lời" else "Chưa có nội dung dịch"
+        subtitleText.text = state.transcript.ifBlank { emptyTranscript }
+        val expectedChars = if (transcriptChars == 0) emptyTranscript.length else transcriptChars
         val actualChars = subtitleText.text.length
         if (actualChars != expectedChars) {
             logger.log(1, "SubtitleUI", "TextView mismatch stateChars=$transcriptChars expectedChars=$expectedChars actualChars=$actualChars")
@@ -392,8 +413,12 @@ class MainActivity : AppCompatActivity() {
         }
         subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
         if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
-        progressSeekBar.contentDescription = "Tiến trình phát: ${state.progressPercent}%"
-        aiVoiceSwitch.isChecked = state.aiVoice
+        progressSeekBar.contentDescription = if (isTranscribeSelected()) {
+            "Tiến trình xử lý: ${state.progressPercent}%"
+        } else {
+            "Tiến trình phát: ${state.progressPercent}%"
+        }
+        if (!isTranscribeSelected()) aiVoiceSwitch.isChecked = state.aiVoice
         if (audioSourceSpinner.selectedItemPosition != state.sourceMode.ordinal) {
             spinnerReady = false
             audioSourceSpinner.setSelection(state.sourceMode.ordinal)
@@ -401,7 +426,9 @@ class MainActivity : AppCompatActivity() {
         }
         state.selectedFileName?.let { selectFileButton.text = it }
         startButton.text = when {
+            state.running && isTranscribeSelected() -> "Dừng chép lời"
             state.running -> "Dừng dịch"
+            isTranscribeSelected() -> "Bắt đầu chép lời"
             state.sourceMode == SourceMode.MICROPHONE -> "Bắt đầu thu âm"
             state.sourceMode == SourceMode.INTERNAL -> "Bắt đầu thu nội bộ"
             else -> "Bắt đầu"
@@ -430,7 +457,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         service.setSourceMode(mode)
-        if (mode == SourceMode.FILE) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        service.setProcessingMode(preferences.loadProcessingMode())
+        service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
+        if (mode == SourceMode.FILE && !isTranscribeSelected()) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         startService(Intent(this, TranslationService::class.java))
         when (mode) {
             SourceMode.FILE -> service.startTranslation(mode)
@@ -460,19 +489,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateModeUi(mode: SourceMode, running: Boolean) = with(binding) {
+        val transcribe = isTranscribeSelected()
         val fileMode = mode == SourceMode.FILE
         val micMode = mode == SourceMode.MICROPHONE
+        processingModeButton.isEnabled = !running
+        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        speakerDiarizationSwitch.isVisible = transcribe && fileMode
+        speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode
-        fileControls.isVisible = fileMode
-        fileSpeedLayout.isVisible = fileMode
+        miniBrowserButton.isVisible = !transcribe || mode == SourceMode.INTERNAL
+        fileControls.isVisible = fileMode && !transcribe
+        fileSpeedLayout.isVisible = fileMode && !transcribe
         progressSeekBar.isVisible = fileMode
-        originalVolumeSeekBar.isVisible = mode != SourceMode.MICROPHONE
-        micLanguageLayout.isVisible = micMode
-        nextLanguageButton.isVisible = micMode && preferences.load().micLanguages.size > 1
-        if (!running) startButton.text = when (mode) {
-            SourceMode.FILE -> "Bắt đầu"
-            SourceMode.MICROPHONE -> "Bắt đầu thu âm"
-            SourceMode.INTERNAL -> "Bắt đầu thu nội bộ"
+        progressSeekBar.isEnabled = !transcribe
+        originalVolumeSeekBar.isVisible = !transcribe && mode != SourceMode.MICROPHONE
+        translatedVolumeLabel.isVisible = !transcribe
+        translatedVolumeSeekBar.isVisible = !transcribe
+        aiVoiceSwitch.isVisible = !transcribe
+        aiAudioStreamLayout.isVisible = !transcribe
+        autoDuckingSwitch.isVisible = !transcribe
+        micLanguageLayout.isVisible = micMode && !transcribe
+        nextLanguageButton.isVisible = micMode && !transcribe && preferences.load().micLanguages.size > 1
+        if (!running) {
+            startButton.text = if (transcribe) {
+                "Bắt đầu chép lời"
+            } else {
+                when (mode) {
+                    SourceMode.FILE -> "Bắt đầu"
+                    SourceMode.MICROPHONE -> "Bắt đầu thu âm"
+                    SourceMode.INTERNAL -> "Bắt đầu thu nội bộ"
+                }
+            }
         }
         applyUiMode()
     }
@@ -485,6 +532,8 @@ class MainActivity : AppCompatActivity() {
         audioSourceSpinner.setSelection(restoredMode.ordinal)
         audioSourceSpinner.post { spinnerReady = true }
         translationService?.setSourceMode(restoredMode)
+        translationService?.setProcessingMode(preferences.loadProcessingMode())
+        translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
         translationService?.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         originalVolumeSeekBar.progress = settings.originalVolume
         translatedVolumeSeekBar.progress = settings.translatedVolume
@@ -493,10 +542,12 @@ class MainActivity : AppCompatActivity() {
         aiAudioStreamSpinner.setSelection(aiStreamValues.indexOf(settings.aiAudioStreamType).coerceAtLeast(0))
         aiAudioStreamSpinner.post { aiStreamSpinnerReady = true }
         autoDuckingSwitch.isChecked = settings.autoDucking
+        speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
         exportButton.text = if (settings.exportFormat == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         settingsButton.text = if (settings.uiMode == "simple") "Cài đặt" else "Cài đặt nâng cao"
         syncFileSpeedUi(selectedFilePlaybackSpeed)
         restoreMicLanguageSpinner()
+        restoreProcessingModeUi()
         updateModeUi(restoredMode, translationService?.state?.value?.running == true)
         applyUiMode()
     }
@@ -524,20 +575,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyUiMode() = with(binding) {
         val simple = preferences.load().uiMode == "simple"
-        autoDuckingSwitch.isVisible = !simple
-        aiAudioStreamLayout.isVisible = !simple && aiVoiceSwitch.isChecked
+        val transcribe = isTranscribeSelected()
+        val fileMode = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
         logButton.isVisible = !simple
-        fileSpeedLayout.isVisible = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
-        if (simple && audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal) {
+        if (transcribe) {
+            autoDuckingSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            fileSpeedLayout.isVisible = false
             rewindButton.isVisible = false
             forwardButton.isVisible = false
-            progressSeekBar.isVisible = false
             originalVolumeSeekBar.isVisible = false
-        } else if (audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal) {
-            rewindButton.isVisible = true
-            forwardButton.isVisible = true
-            progressSeekBar.isVisible = true
-            originalVolumeSeekBar.isVisible = true
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            progressSeekBar.isVisible = fileMode
+        } else {
+            autoDuckingSwitch.isVisible = !simple
+            aiAudioStreamLayout.isVisible = !simple && aiVoiceSwitch.isChecked
+            fileSpeedLayout.isVisible = fileMode
+            if (simple && fileMode) {
+                rewindButton.isVisible = false
+                forwardButton.isVisible = false
+                progressSeekBar.isVisible = false
+                originalVolumeSeekBar.isVisible = false
+            } else if (fileMode) {
+                rewindButton.isVisible = true
+                forwardButton.isVisible = true
+                progressSeekBar.isVisible = true
+                originalVolumeSeekBar.isVisible = true
+            }
         }
     }
 
@@ -626,7 +692,19 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    GeminiLiveClient.testConnection(key, settings.model, settings.targetLanguage, settings.echoTargetLanguage, logger)
+                    val transcribe = isTranscribeSelected()
+                    GeminiLiveClient.testConnection(
+                        apiKey = key,
+                        model = if (transcribe) AppPreferences.TRANSCRIBE_LIVE_MODEL else settings.model,
+                        targetLanguage = settings.targetLanguage,
+                        echoTargetLanguage = settings.echoTargetLanguage,
+                        logger = logger,
+                        operationMode = if (transcribe) {
+                            GeminiLiveClient.OperationMode.TRANSCRIBE
+                        } else {
+                            GeminiLiveClient.OperationMode.TRANSLATE
+                        },
+                    )
                 }
             }.onSuccess { elapsed ->
                 logger.log(2, "Settings", "Kiểm tra API từ màn hình chính thành công latencyMs=$elapsed")
@@ -648,7 +726,8 @@ class MainActivity : AppCompatActivity() {
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
-        exportDocument.launch("gemini_translate_${System.currentTimeMillis()}.$extension")
+        val prefix = if (isTranscribeSelected()) "gemini_transcribe" else "gemini_translate"
+        exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }
 
     private fun showMicLanguageManager() {
@@ -718,6 +797,17 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(view) })
             .setPositiveButton("Đóng", null).show()
+    }
+
+    private fun isTranscribeSelected(): Boolean =
+        preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_TRANSCRIBE
+
+    private fun restoreProcessingModeUi() = with(binding) {
+        val transcribe = isTranscribeSelected()
+        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
+        val mode = SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        speakerDiarizationSwitch.isVisible = transcribe && mode == SourceMode.FILE
     }
 
     private fun loadSourceMode(): SourceMode {

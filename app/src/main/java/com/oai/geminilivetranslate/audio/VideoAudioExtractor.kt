@@ -43,9 +43,10 @@ object VideoAudioExtractor {
             error("Video không có track âm thanh")
         }
 
-        val mimeType = audioFormat.getString(MediaFormat.KEY_MIME).orEmpty()
-        val durationUs = if (audioFormat.containsKey(MediaFormat.KEY_DURATION)) {
-            audioFormat.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
+        val format = requireNotNull(audioFormat)
+        val mimeType = format.getString(MediaFormat.KEY_MIME).orEmpty()
+        val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+            format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
         } else {
             0L
         }
@@ -54,12 +55,12 @@ object VideoAudioExtractor {
         val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         var started = false
         try {
-            val muxerTrack = muxer.addTrack(audioFormat)
+            val muxerTrack = muxer.addTrack(format)
             muxer.start()
             started = true
 
-            val maxInputSize = if (audioFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                audioFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(256 * 1024)
+            val maxInputSize = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(256 * 1024)
             } else {
                 1024 * 1024
             }

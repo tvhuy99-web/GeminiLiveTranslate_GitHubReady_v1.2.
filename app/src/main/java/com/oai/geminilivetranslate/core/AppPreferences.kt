@@ -98,6 +98,22 @@ class AppPreferences(context: Context) {
         load().copy(micLanguages = codes, micLanguageIndex = index)
     )
 
+    fun loadProcessingMode(): String = prefs.getString(KEY_PROCESSING_MODE, PROCESSING_MODE_TRANSLATE)
+        .orEmpty()
+        .takeIf { it == PROCESSING_MODE_TRANSLATE || it == PROCESSING_MODE_TRANSCRIBE }
+        ?: PROCESSING_MODE_TRANSLATE
+
+    fun setProcessingMode(value: String) {
+        val safe = if (value == PROCESSING_MODE_TRANSCRIBE) PROCESSING_MODE_TRANSCRIBE else PROCESSING_MODE_TRANSLATE
+        prefs.edit().putString(KEY_PROCESSING_MODE, safe).apply()
+    }
+
+    fun loadSpeakerDiarization(): Boolean = prefs.getBoolean(KEY_SPEAKER_DIARIZATION, false)
+
+    fun setSpeakerDiarization(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SPEAKER_DIARIZATION, enabled).apply()
+    }
+
     fun restoreDefaultsPreservingKeys(): AppSettings = AppSettings().let(SettingsPolicy::sanitize).also(::save)
 
     fun clear(): Boolean = prefs.edit().clear().commit()
@@ -147,5 +163,11 @@ class AppPreferences(context: Context) {
         private const val KEY_TRANSLATED_VOLUME = "volumeTranslate"
         private const val KEY_MIC_LANGUAGES = "micLanguages"
         private const val KEY_MIC_LANGUAGE_INDEX = "micLanguageIndex"
+        private const val KEY_PROCESSING_MODE = "processingMode"
+        private const val KEY_SPEAKER_DIARIZATION = "speakerDiarization"
+        const val PROCESSING_MODE_TRANSLATE = "translate"
+        const val PROCESSING_MODE_TRANSCRIBE = "transcribe"
+        const val TRANSCRIBE_FILE_MODEL = "gemini-3.5-transcribe"
+        const val TRANSCRIBE_LIVE_MODEL = "gemini-3.5-transcribe-live"
     }
 }

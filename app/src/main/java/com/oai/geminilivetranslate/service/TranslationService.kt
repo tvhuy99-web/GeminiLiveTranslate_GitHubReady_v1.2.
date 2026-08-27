@@ -262,7 +262,7 @@ class TranslationService : LifecycleService() {
         ))
         subtitles.reset()
         val initialState = _state.value.copy(
-            status = "Đang khởi động phiên dịch...",
+            status = if (isTranscribeMode()) "Đang khởi động chép lời..." else "Đang khởi động phiên dịch...",
             health = "",
             running = true,
             paused = false,
@@ -278,7 +278,6 @@ class TranslationService : LifecycleService() {
             lastError = null,
         )
         _state.value = initialState
-        setupInputSender()
         notificationController.start(this, initialState)
 
         if (isTranscribeMode() && mode == SourceMode.FILE) {
@@ -288,6 +287,8 @@ class TranslationService : LifecycleService() {
             startFileTranscription(apiKey)
             return
         }
+
+        setupInputSender()
 
         if (mode == SourceMode.INTERNAL) {
             val projection = runCatching {

@@ -59,6 +59,7 @@ class GeminiFileTranscribeClient(
         displayName: String,
         mimeType: String,
         speakerDiarization: Boolean,
+        inputType: String = if (mimeType.startsWith("video/")) "video" else "audio",
         onProgress: (String, Int) -> Unit,
     ): Result {
         val length = runCatching {
@@ -75,6 +76,7 @@ class GeminiFileTranscribeClient(
                 open = { resolver.openInputStream(uri) ?: error("Không mở được tệp đã chọn") },
             ),
             speakerDiarization,
+            inputType,
             onProgress,
         )
     }
@@ -83,6 +85,7 @@ class GeminiFileTranscribeClient(
         file: File,
         mimeType: String,
         speakerDiarization: Boolean,
+        inputType: String = if (mimeType.startsWith("video/")) "video" else "audio",
         onProgress: (String, Int) -> Unit,
     ): Result {
         require(file.isFile && file.length() > 0L) { "Tệp âm thanh không hợp lệ" }
@@ -94,6 +97,7 @@ class GeminiFileTranscribeClient(
                 open = { file.inputStream() },
             ),
             speakerDiarization,
+            inputType,
             onProgress,
         )
     }
@@ -101,6 +105,7 @@ class GeminiFileTranscribeClient(
     private fun transcribe(
         source: UploadSource,
         speakerDiarization: Boolean,
+        inputType: String,
         onProgress: (String, Int) -> Unit,
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
@@ -108,7 +113,7 @@ class GeminiFileTranscribeClient(
         logger.log(
             2,
             "TranscribeFile",
-            "Bắt đầu Files API name=${source.displayName} bytes=${source.contentLength} mime=${source.mimeType} diarization=$speakerDiarization",
+            "Bắt đầu Files API name=${source.displayName} bytes=${source.contentLength} mime=${source.mimeType} inputType=$inputType diarization=$speakerDiarization",
         )
         var uploadedName: String? = null
         try {
@@ -123,7 +128,7 @@ class GeminiFileTranscribeClient(
             )
             onProgress("Đang chép lời...", 55)
             val requestStartedAt = SystemClock.elapsedRealtime()
-            val interaction = createInteraction(uploaded.uri, uploaded.mimeType, speakerDiarization)
+            val interaction = createInteraction(uploaded.uri, uploaded.mimeType, speakerDiarization, inputType)
             logger.log(
                 2,
                 "TranscribeFile",
@@ -258,6 +263,7 @@ class GeminiFileTranscribeClient(
         fileUri: String,
         mimeType: String,
         speakerDiarization: Boolean,
+        inputType: String,
     ): JSONObject {
         val mode = JSONObject()
             .put("type", "verbatim")
@@ -270,7 +276,7 @@ class GeminiFileTranscribeClient(
                 "input",
                 JSONArray().put(
                     JSONObject()
-                        .put("type", "audio")
+                        .put("type", inputType)
                         .put("uri", fileUri)
                         .put("mime_type", mimeType)
                 )

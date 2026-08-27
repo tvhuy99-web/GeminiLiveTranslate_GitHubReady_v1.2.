@@ -33,6 +33,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
+import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -86,6 +88,7 @@ class TranslationService : LifecycleService() {
     private var reconnectJob: Job? = null
     private var healthJob: Job? = null
     private var fileFinishFallbackJob: Job? = null
+    private var transcribeRotationJob: Job? = null
     private var originalQueueJob: Job? = null
     private var originalQueue: Channel<ByteArray>? = null
     private var inputSendJob: Job? = null
@@ -124,6 +127,8 @@ class TranslationService : LifecycleService() {
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
+    @Volatile private var processingMode = AppPreferences.PROCESSING_MODE_TRANSLATE
+    @Volatile private var speakerDiarization = false
     private var sessionStartedAt = 0L
     private var totalInputBytes = 0L
     private var totalOutputBytes = 0L
@@ -147,6 +152,8 @@ class TranslationService : LifecycleService() {
         notificationController = NotificationController(this)
         recordingStore = PublicRecordingStore(this, logger)
         settings = preferences.load()
+        processingMode = preferences.loadProcessingMode()
+        speakerDiarization = preferences.loadSpeakerDiarization()
         _state.update {
             it.copy(
                 aiVoice = settings.aiVoice,
@@ -186,6 +193,22 @@ class TranslationService : LifecycleService() {
         _state.update { it.copy(sourceMode = mode) }
     }
 
+    fun setProcessingMode(value: String) {
+        if (_state.value.running) return
+        processingMode = if (value == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE
+        } else {
+            AppPreferences.PROCESSING_MODE_TRANSLATE
+        }
+        preferences.setProcessingMode(processingMode)
+    }
+
+    fun setSpeakerDiarization(enabled: Boolean) {
+        if (_state.value.running) return
+        speakerDiarization = enabled
+        preferences.setSpeakerDiarization(enabled)
+    }
+
     fun setSelectedFile(uri: Uri, name: String?) {
         if (_state.value.running && currentMode == SourceMode.FILE) stopTranslation("Đã dừng do đổi tệp")
         selectedUri = uri
@@ -201,6 +224,8 @@ class TranslationService : LifecycleService() {
         if (_state.value.running) return
         stopping.set(false)
         settings = preferences.load()
+        processingMode = preferences.loadProcessingMode()
+        speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
         val apiKey = keyStore.load().selected
         if (apiKey.isNullOrBlank()) {
@@ -225,7 +250,9 @@ class TranslationService : LifecycleService() {
         DiagnosticContext.updateAll(mapOf(
             "session.id" to sessionId,
             "session.source" to mode.name,
-            "session.model" to settings.model,
+            "session.model" to activeModelName(),
+            "session.processingMode" to processingMode,
+            "session.speakerDiarization" to speakerDiarization,
             "session.targetLanguage" to settings.targetLanguage,
             "session.filePlaybackSpeed" to filePlaybackSpeed,
             "session.startedAt" to Date().toString(),
@@ -242,14 +269,22 @@ class TranslationService : LifecycleService() {
             selectedFileName = selectedFileName,
             transcript = "",
             progressPercent = 0,
-            canSeek = mode == SourceMode.FILE,
-            aiVoice = settings.aiVoice,
+            canSeek = mode == SourceMode.FILE && !isTranscribeMode(),
+            aiVoice = settings.aiVoice && !isTranscribeMode(),
             currentLanguage = settings.targetLanguage,
             lastError = null,
         )
         _state.value = initialState
         setupInputSender()
         notificationController.start(this, initialState)
+
+        if (isTranscribeMode() && mode == SourceMode.FILE) {
+            runCatching { acquireWakeLock() }.onFailure {
+                logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
+            }
+            startFileTranscription(apiKey)
+            return
+        }
 
         if (mode == SourceMode.INTERNAL) {
             val projection = runCatching {
@@ -280,7 +315,7 @@ class TranslationService : LifecycleService() {
         logger.log(
             2,
             "Session",
-            "Bắt đầu session=$sessionId nguồn=$mode model=${settings.model} đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
+            "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
         startHealthMonitor()
         connectGemini(apiKey)
@@ -293,6 +328,7 @@ class TranslationService : LifecycleService() {
         inputEpoch.incrementAndGet()
         reconnectJob?.cancel(); reconnectJob = null
         fileFinishFallbackJob?.cancel(); fileFinishFallbackJob = null
+        transcribeRotationJob?.cancel(); transcribeRotationJob = null
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
         sourceJob?.cancel(); sourceJob = null

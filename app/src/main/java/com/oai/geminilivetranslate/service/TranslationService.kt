@@ -301,6 +301,7 @@ class TranslationService : LifecycleService() {
             } else {
                 currentHistorySession = currentHistory.copy(
                     processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
                     speakerDiarization = speakerDiarization,
                 )
             }
@@ -315,6 +316,7 @@ class TranslationService : LifecycleService() {
             "session.source" to mode.name,
             "session.model" to activeModelName(),
             "session.processingMode" to processingMode,
+            "session.videoDescriptionMode" to videoDescriptionMode,
             "session.speakerDiarization" to speakerDiarization,
             "session.targetLanguage" to settings.targetLanguage,
             "session.filePlaybackSpeed" to filePlaybackSpeed,
@@ -322,7 +324,12 @@ class TranslationService : LifecycleService() {
         ))
         subtitles.reset()
         val initialState = _state.value.copy(
-            status = if (isTranscribeMode()) "Đang khởi động chép lời..." else "Đang khởi động phiên dịch...",
+            status = when {
+                isVideoDescriptionMode() && isVideoDescriptionSummary() -> "Đang khởi động mô tả tổng hợp..."
+                isVideoDescriptionMode() -> "Đang khởi động mô tả theo thời gian..."
+                isTranscribeMode() -> "Đang khởi động chép lời..."
+                else -> "Đang khởi động phiên dịch..."
+            },
             health = "",
             running = true,
             paused = false,
@@ -332,16 +339,25 @@ class TranslationService : LifecycleService() {
             selectedFileName = selectedFileName,
             transcript = "",
             progressPercent = 0,
-            canSeek = mode == SourceMode.FILE && !isTranscribeMode(),
-            aiVoice = settings.aiVoice && !isTranscribeMode(),
+            canSeek = mode == SourceMode.FILE && !isTranscribeMode() && !isVideoDescriptionMode(),
+            aiVoice = settings.aiVoice && !isTranscribeMode() && !isVideoDescriptionMode(),
             currentLanguage = settings.targetLanguage,
             lastError = null,
             subtitleTranslationAvailable = false,
             subtitleTranslationInProgress = false,
             subtitleShowingVietnamese = false,
+            videoDescriptionMode = videoDescriptionMode,
         )
         _state.value = initialState
         notificationController.start(this, initialState)
+
+        if (isVideoDescriptionMode()) {
+            runCatching { acquireWakeLock() }.onFailure {
+                logger.log(0, "VideoDescription", "Không tạo được wake lock", it)
+            }
+            startVideoDescription(apiKey)
+            return
+        }
 
         if (isTranscribeMode() && mode == SourceMode.FILE) {
             runCatching { acquireWakeLock() }.onFailure {

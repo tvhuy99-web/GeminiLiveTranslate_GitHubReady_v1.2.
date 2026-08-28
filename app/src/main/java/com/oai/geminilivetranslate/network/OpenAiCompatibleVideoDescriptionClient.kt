@@ -27,11 +27,13 @@ class OpenAiCompatibleVideoDescriptionClient(
     private val timelinePromptTemplate: String,
     private val summaryPromptTemplate: String,
     private val streamingEnabled: Boolean,
+    private val requestTimeoutMs: Int,
+    private val temperature: Double,
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(requestTimeoutMs.coerceIn(30_000, 900_000).toLong(), TimeUnit.MILLISECONDS)
+        .writeTimeout(requestTimeoutMs.coerceIn(30_000, 900_000).toLong(), TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -87,7 +89,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         logger.log(
             2,
             TAG,
-            "Bắt đầu model=$model endpoint=${sanitizeUrl(endpoint)} mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs streaming=$streamingEnabled",
+            "Bắt đầu model=$model endpoint=${sanitizeUrl(endpoint)} mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs streaming=$streamingEnabled timeoutMs=$requestTimeoutMs temperature=$temperature",
         )
 
         onProgress("Đang gửi nguyên video tới API...", 8)
@@ -140,7 +142,7 @@ class OpenAiCompatibleVideoDescriptionClient(
                 if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey")
                 if (streamingEnabled) header("Accept", "text/event-stream")
             }
-            .post(VideoRequestBody(source, model.trim(), prompt, streamingEnabled))
+            .post(VideoRequestBody(source, model.trim(), prompt, streamingEnabled, temperature))
             .build()
 
         return client.newCall(request).execute().use { response ->
@@ -296,6 +298,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         model: String,
         prompt: String,
         stream: Boolean,
+        temperature: Double,
     ) : RequestBody() {
         private val prefix: ByteArray
         private val suffix: ByteArray
@@ -305,8 +308,9 @@ class OpenAiCompatibleVideoDescriptionClient(
             val promptJson = JSONObject.quote(prompt)
             val mime = source.mimeType.replace("\"", "")
             val streamText = if (stream) "true" else "false"
+            val temperatureText = temperature.coerceIn(0.0, 2.0).toString()
             val beforeData =
-                """{"model":$modelJson,"stream":$streamText,"messages":[{"role":"user","content":[{"type":"text","text":$promptJson},{"type":"video_url","video_url":{"url":"data:$mime;base64,"""
+                """{"model":$modelJson,"stream":$streamText,"temperature":$temperatureText,"messages":[{"role":"user","content":[{"type":"text","text":$promptJson},{"type":"video_url","video_url":{"url":"data:$mime;base64,"""
             val afterData = "\"}}]}]}"
             prefix = beforeData.toByteArray(Charsets.UTF_8)
             suffix = afterData.toByteArray(Charsets.UTF_8)

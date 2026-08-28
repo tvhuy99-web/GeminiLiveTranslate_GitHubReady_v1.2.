@@ -419,8 +419,6 @@ class MainActivity : AppCompatActivity() {
 
         selectFileButton.setOnClickListener { launchFilePicker() }
         miniBrowserButton.setOnClickListener { startActivity(Intent(this@MainActivity, MiniBrowserActivity::class.java)) }
-        apiKeyButton.setOnClickListener { showApiKeyManager() }
-        testConnectionButton.setOnClickListener { testConnection() }
         startButton.setOnClickListener {
             val service = translationService
             if (service?.state?.value?.running == true) {
@@ -706,7 +704,6 @@ class MainActivity : AppCompatActivity() {
         videoDescriptionModeSpinner.isEnabled = !running
 
         if (videoDescription) {
-            apiKeyButton.isVisible = false
             audioSourceLabel.isVisible = false
             audioSourceSpinner.isVisible = false
             speakerDiarizationSwitch.isVisible = false
@@ -716,7 +713,6 @@ class MainActivity : AppCompatActivity() {
                 selectFileButton.text = "Chọn tệp âm thanh hoặc video"
             }
             miniBrowserButton.isVisible = false
-            testConnectionButton.isVisible = false
             fileControls.isVisible = false
             fileSpeedLayout.isVisible = false
             progressSeekBar.isVisible = true
@@ -737,10 +733,8 @@ class MainActivity : AppCompatActivity() {
             return@with
         }
 
-        apiKeyButton.isVisible = false
         audioSourceLabel.isVisible = true
         audioSourceSpinner.isVisible = true
-        testConnectionButton.isVisible = false
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode

@@ -14,8 +14,6 @@ class OriginalPcmDeadlineQueueTest {
         val chunkA = ByteArray(3_200) { 1 }
         val chunkB = ByteArray(3_200) { 2 }
         val chunkC = ByteArray(3_200) { 3 }
-
-        // 3,200 bytes of PCM16 mono at 16 kHz = 100 ms media, or 50 ms at 2x.
         assertEquals(1_000L, queue.enqueue(chunkA, playbackSpeed = 2f, nowMs = 1_000L))
         assertEquals(1_050L, queue.enqueue(chunkB, playbackSpeed = 2f, nowMs = 1_000L))
         assertEquals(1_100L, queue.enqueue(chunkC, playbackSpeed = 2f, nowMs = 1_000L))

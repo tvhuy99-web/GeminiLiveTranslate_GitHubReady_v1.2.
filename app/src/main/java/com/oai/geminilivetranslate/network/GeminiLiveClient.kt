@@ -418,14 +418,7 @@ class GeminiLiveClient(
         private const val MIN_QUEUED_WIRE_BYTES = 64L * 1024L
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
 
-        /**
-         * Builds the raw WebSocket setup message used by the working translation payload.
-         *
-         * The translation model keeps responseModalities and translationConfig inside
-         * generationConfig. Transcription objects remain intentionally omitted. Context-window
-         * compression belongs directly under setup, alongside sessionResumption, according to
-         * BidiGenerateContentSetup; putting it inside generationConfig would be an invalid schema.
-         */
+        
         internal fun createSetupMessage(
             model: String,
             targetLanguage: String,

@@ -7,11 +7,6 @@ import java.security.MessageDigest;
 import java.util.*;
 import java.util.zip.*;
 
-/**
- * Minimal transparent Gradle bootstrap used because the project was generated
- * in an offline environment. It downloads the pinned Gradle distribution,
- * verifies SHA-256, prevents zip-slip, and delegates to Gradle's executable.
- */
 public final class GradleWrapperMain {
     public static void main(String[] args) throws Exception {
         File jar = new File(GradleWrapperMain.class.getProtectionDomain().getCodeSource().getLocation().toURI());

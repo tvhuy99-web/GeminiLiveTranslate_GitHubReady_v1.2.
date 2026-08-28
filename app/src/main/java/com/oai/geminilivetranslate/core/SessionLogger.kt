@@ -3,7 +3,6 @@ package com.oai.geminilivetranslate.core
 import android.content.Context
 import java.io.File
 
-/** Compatibility facade backed by one process-wide repository. */
 class SessionLogger(context: Context, @Suppress("UNUSED_PARAMETER") preferences: AppPreferences) {
     private val repository = AppLogRepository.get(context)
 

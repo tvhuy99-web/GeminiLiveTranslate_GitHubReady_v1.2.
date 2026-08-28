@@ -408,7 +408,6 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         ttsEngine.stop()
         restoreDucking("resume")
         lastCueListIndex = -1
-        processCue(currentPositionMs)
         status("Đang phát với phụ đề")
         updateButtons()
         logger.log(2, TAG, "Tiếp tục positionMs=$currentPositionMs speed=${formatSpeed()}x")

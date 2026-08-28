@@ -767,8 +767,8 @@ class MainActivity : AppCompatActivity() {
     private fun openSubtitlePlayback() {
         val service = translationService
         val state = service?.state?.value
-        val mediaUri = service?.selectedMediaUri()
-        val mediaName = service?.selectedMediaName()
+        val mediaUri = if (state?.sourceMode == SourceMode.FILE) service.selectedMediaUri() else null
+        val mediaName = if (mediaUri != null) service?.selectedMediaName() else null
         val subtitleSrt = service?.subtitleText("srt").orEmpty()
         val vietnamese = state?.subtitleTranslationAvailable == true &&
             state.subtitleShowingVietnamese

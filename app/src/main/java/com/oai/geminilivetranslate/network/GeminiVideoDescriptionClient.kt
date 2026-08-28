@@ -27,6 +27,8 @@ class GeminiVideoDescriptionClient(
     private val timelinePromptTemplate: String = VideoDescriptionPromptDefaults.TIMELINE,
     private val summaryPromptTemplate: String = VideoDescriptionPromptDefaults.SUMMARY,
     private val streamingEnabled: Boolean = true,
+    private val requestTimeoutMs: Int = 300_000,
+    private val temperature: Double = 0.2,
 ) {
     enum class Mode {
         TIMELINE,
@@ -73,8 +75,8 @@ class GeminiVideoDescriptionClient(
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .writeTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(requestTimeoutMs.coerceIn(30_000, 900_000).toLong(), TimeUnit.MILLISECONDS)
+        .writeTimeout(requestTimeoutMs.coerceIn(30_000, 900_000).toLong(), TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
     @Volatile private var cancelled = false
@@ -130,7 +132,7 @@ class GeminiVideoDescriptionClient(
         logger.log(
             2,
             TAG,
-            "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled",
+            "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled timeoutMs=$requestTimeoutMs temperature=$temperature",
         )
 
         var uploadedName: String? = null
@@ -566,6 +568,10 @@ class GeminiVideoDescriptionClient(
         val request = JSONObject()
             .put("model", model)
             .put("store", false)
+            .put(
+                "generation_config",
+                JSONObject().put("temperature", temperature.coerceIn(0.0, 2.0))
+            )
             .put(
                 "input",
                 JSONArray()

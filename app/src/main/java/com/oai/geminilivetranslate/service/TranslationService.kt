@@ -37,6 +37,7 @@ import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
+import com.oai.geminilivetranslate.network.SubtitleTranslationClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,11 +83,13 @@ class TranslationService : LifecycleService() {
     private lateinit var notificationController: NotificationController
     private lateinit var recordingStore: PublicRecordingStore
     private val subtitles = SubtitleStore()
+    private val vietnameseSubtitles = SubtitleStore()
 
     @Volatile private var settings = AppSettings()
     @Volatile private var client: GeminiLiveClient? = null
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
+    private var subtitleTranslationJob: Job? = null
     private var reconnectJob: Job? = null
     private var healthJob: Job? = null
     private var fileFinishFallbackJob: Job? = null
@@ -280,6 +283,9 @@ class TranslationService : LifecycleService() {
             aiVoice = settings.aiVoice && !isTranscribeMode(),
             currentLanguage = settings.targetLanguage,
             lastError = null,
+            subtitleTranslationAvailable = false,
+            subtitleTranslationInProgress = false,
+            subtitleShowingVietnamese = false,
         )
         _state.value = initialState
         notificationController.start(this, initialState)
@@ -589,12 +595,216 @@ class TranslationService : LifecycleService() {
         return code
     }
 
-    fun subtitleText(format: String = preferences.load().exportFormat): String =
-        if (format == "txt") {
-            transcribePlainText.takeIf { isTranscribeMode() && it.isNotBlank() } ?: subtitles.plainText()
+    fun subtitleText(format: String = preferences.load().exportFormat): String {
+        val useVietnamese = _state.value.subtitleTranslationAvailable &&
+            _state.value.subtitleShowingVietnamese
+        val store = if (useVietnamese) vietnameseSubtitles else subtitles
+        return if (format == "txt") {
+            if (useVietnamese) {
+                store.plainText()
+            } else {
+                transcribePlainText.takeIf { isTranscribeMode() && it.isNotBlank() }
+                    ?: store.plainText()
+            }
         } else {
-            subtitles.srtText()
+            store.srtText()
         }
+    }
+
+    fun translateSubtitlesToVietnamese() {
+        if (!isTranscribeMode()) {
+            logger.log(1, "SubtitleTranslate", "Bỏ yêu cầu dịch vì processingMode=$processingMode")
+            return
+        }
+        if (_state.value.running) {
+            logger.log(1, "SubtitleTranslate", "Bỏ yêu cầu dịch vì phiên chép lời vẫn đang chạy")
+            updateState { it.copy(status = "Hãy chờ chép lời hoàn tất trước khi dịch phụ đề") }
+            return
+        }
+        if (_state.value.subtitleTranslationInProgress) return
+
+        val sourceCues = subtitles.snapshot()
+        if (sourceCues.isEmpty()) {
+            logger.log(1, "SubtitleTranslate", "Không có cue nguồn để dịch")
+            updateState { it.copy(status = "Chưa có phụ đề để dịch") }
+            return
+        }
+        if (_state.value.subtitleTranslationAvailable) {
+            showVietnameseSubtitles(true)
+            return
+        }
+
+        val apiKey = keyStore.load().selected
+        if (apiKey.isNullOrBlank()) {
+            logger.log(1, "SubtitleTranslate", "Không thể dịch vì chưa có API Key")
+            updateState { it.copy(status = "Chưa có API Key để dịch phụ đề") }
+            return
+        }
+
+        val sourceSignature = subtitleSignature(sourceCues)
+        val sourceChars = sourceCues.sumOf { it.text.length }
+        val startedAt = SystemClock.elapsedRealtime()
+        logger.log(
+            2,
+            "SubtitleTranslate",
+            "Bắt đầu tác vụ UI model=${AppPreferences.SUBTITLE_TRANSLATE_MODEL} cues=${sourceCues.size} chars=$sourceChars signature=$sourceSignature",
+        )
+        DiagnosticContext.updateAll(
+            mapOf(
+                "subtitleTranslate.model" to AppPreferences.SUBTITLE_TRANSLATE_MODEL,
+                "subtitleTranslate.cues" to sourceCues.size,
+                "subtitleTranslate.sourceChars" to sourceChars,
+                "subtitleTranslate.sourceSignature" to sourceSignature,
+                "subtitleTranslate.running" to true,
+            )
+        )
+        updateState {
+            it.copy(
+                status = "Đang dịch phụ đề sang tiếng Việt...",
+                subtitleTranslationInProgress = true,
+                subtitleShowingVietnamese = false,
+            )
+        }
+
+        subtitleTranslationJob?.cancel()
+        subtitleTranslationJob = serviceScope.launch(Dispatchers.IO) {
+            val client = SubtitleTranslationClient(
+                apiKey = apiKey,
+                logger = logger,
+                includeTranscriptInLogs = settings.logIncludeTranscript,
+            )
+            try {
+                val result = client.translate(sourceCues)
+                val currentCues = subtitles.snapshot()
+                val currentSignature = subtitleSignature(currentCues)
+                if (currentSignature != sourceSignature || currentCues.size != sourceCues.size) {
+                    logger.log(
+                        1,
+                        "SubtitleTranslate",
+                        "Hủy áp dụng bản dịch vì phụ đề nguồn đã thay đổi expectedSignature=$sourceSignature currentSignature=$currentSignature expectedCues=${sourceCues.size} currentCues=${currentCues.size}",
+                    )
+                    updateState {
+                        it.copy(
+                            status = "Phụ đề đã thay đổi; bản dịch vừa tạo không được áp dụng",
+                            subtitleTranslationInProgress = false,
+                            subtitleShowingVietnamese = false,
+                        )
+                    }
+                    return@launch
+                }
+
+                val translatedById = result.items.associateBy { it.id }
+                val translatedCues = sourceCues.map { cue ->
+                    SubtitleStore.Cue(
+                        index = cue.index,
+                        startMs = cue.startMs,
+                        endMs = cue.endMs,
+                        text = translatedById.getValue(cue.index).text,
+                    )
+                }
+                vietnameseSubtitles.replaceTimed(translatedCues)
+                val translatedText = vietnameseSubtitles.plainText()
+                val applyElapsedMs = SystemClock.elapsedRealtime() - startedAt
+                logger.log(
+                    2,
+                    "SubtitleTranslate",
+                    "Áp dụng bản dịch thành công cues=${translatedCues.size} translatedChars=${translatedText.length} attempts=${result.attempts} interactionId=${result.interactionId ?: "none"} inputTokens=${result.inputTokens} outputTokens=${result.outputTokens} thoughtTokens=${result.thoughtTokens} totalTokens=${result.totalTokens} clientElapsedMs=${result.elapsedMs} totalElapsedMs=$applyElapsedMs",
+                )
+                DiagnosticContext.updateAll(
+                    mapOf(
+                        "subtitleTranslate.running" to false,
+                        "subtitleTranslate.success" to true,
+                        "subtitleTranslate.translatedChars" to translatedText.length,
+                        "subtitleTranslate.attempts" to result.attempts,
+                        "subtitleTranslate.inputTokens" to result.inputTokens,
+                        "subtitleTranslate.outputTokens" to result.outputTokens,
+                        "subtitleTranslate.thoughtTokens" to result.thoughtTokens,
+                        "subtitleTranslate.totalTokens" to result.totalTokens,
+                        "subtitleTranslate.elapsedMs" to applyElapsedMs,
+                    )
+                )
+                updateState {
+                    it.copy(
+                        transcript = translatedText.takeLast(MAX_TRANSCRIPT_CHARS),
+                        status = "Đã dịch phụ đề sang tiếng Việt",
+                        subtitleTranslationAvailable = true,
+                        subtitleTranslationInProgress = false,
+                        subtitleShowingVietnamese = true,
+                        lastError = null,
+                    )
+                }
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) return@launch
+                val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+                logger.log(
+                    0,
+                    "SubtitleTranslate",
+                    "Tác vụ dịch thất bại totalElapsedMs=$elapsedMs sourceCues=${sourceCues.size} sourceChars=$sourceChars",
+                    error,
+                )
+                DiagnosticContext.updateAll(
+                    mapOf(
+                        "subtitleTranslate.running" to false,
+                        "subtitleTranslate.success" to false,
+                        "subtitleTranslate.elapsedMs" to elapsedMs,
+                        "subtitleTranslate.error" to (error.message ?: error.javaClass.simpleName),
+                    )
+                )
+                updateState {
+                    it.copy(
+                        transcript = originalTranscriptForDisplay().takeLast(MAX_TRANSCRIPT_CHARS),
+                        status = "Lỗi dịch phụ đề: ${error.message ?: error.javaClass.simpleName}",
+                        subtitleTranslationInProgress = false,
+                        subtitleShowingVietnamese = false,
+                        lastError = error.message ?: error.javaClass.simpleName,
+                    )
+                }
+            } finally {
+                client.close()
+                subtitleTranslationJob = null
+            }
+        }
+    }
+
+    fun toggleSubtitleLanguage() {
+        if (!_state.value.subtitleTranslationAvailable || _state.value.subtitleTranslationInProgress) return
+        showVietnameseSubtitles(!_state.value.subtitleShowingVietnamese)
+    }
+
+    private fun showVietnameseSubtitles(showVietnamese: Boolean) {
+        if (showVietnamese && !_state.value.subtitleTranslationAvailable) return
+        val text = if (showVietnamese) {
+            vietnameseSubtitles.plainText()
+        } else {
+            originalTranscriptForDisplay()
+        }
+        logger.log(
+            2,
+            "SubtitleTranslate",
+            "Chuyển hiển thị language=${if (showVietnamese) "vi" else "original"} chars=${text.length}",
+        )
+        updateState {
+            it.copy(
+                transcript = text.takeLast(MAX_TRANSCRIPT_CHARS),
+                subtitleShowingVietnamese = showVietnamese,
+                status = if (showVietnamese) "Đang xem bản dịch tiếng Việt" else "Đang xem bản gốc",
+            )
+        }
+    }
+
+    private fun originalTranscriptForDisplay(): String =
+        transcribePlainText.takeIf { it.isNotBlank() } ?: subtitles.plainText()
+
+    private fun subtitleSignature(cues: List<SubtitleStore.Cue>): String {
+        var hash = 1125899906842597L
+        cues.forEach { cue ->
+            hash = hash * 31L + cue.index
+            hash = hash * 31L + cue.startMs
+            hash = hash * 31L + cue.endMs
+            hash = hash * 31L + cue.text.hashCode()
+        }
+        return java.lang.Long.toUnsignedString(hash, 16)
+    }
 
     fun logText(): String = logger.text()
 
@@ -610,6 +820,9 @@ class TranslationService : LifecycleService() {
         liveFinalEvents = 0L
         transcribeRotationJob?.cancel()
         transcribeRotationJob = null
+        subtitleTranslationJob?.cancel()
+        subtitleTranslationJob = null
+        vietnameseSubtitles.reset()
         totalInputBytes = 0L
         totalOutputBytes = 0L
         sessionResumptionHandle = null

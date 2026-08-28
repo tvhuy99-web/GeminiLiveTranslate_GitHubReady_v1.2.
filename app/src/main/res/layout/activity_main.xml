@@ -37,6 +37,14 @@
             android:text="Chế độ: Dịch thuật" />
 
         <Button
+            android:id="@+id/videoDescriptionModeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="Mô tả theo thời gian"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/apiKeyButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

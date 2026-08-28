@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Process-wide diagnostics store. Every SessionLogger instance delegates here. */
 class AppLogRepository private constructor(context: Context) {
     data class Entry(
         val sequence: Long,

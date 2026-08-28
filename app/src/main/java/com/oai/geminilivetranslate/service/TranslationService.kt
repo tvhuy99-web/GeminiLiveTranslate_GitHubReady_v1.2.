@@ -1463,6 +1463,15 @@ class TranslationService : LifecycleService() {
                     client.close()
                 }
 
+                if (!_state.value.running || selectedUri != uri) {
+                    logger.log(
+                        1,
+                        "VideoDescription",
+                        "Bỏ kết quả đã trả về vì phiên không còn hiện hành running=${_state.value.running} selectedChanged=${selectedUri != uri} name=$name",
+                    )
+                    return@launch
+                }
+
                 if (isVideoDescriptionSummary()) {
                     subtitles.reset()
                     videoSummaryText = result.summaryText

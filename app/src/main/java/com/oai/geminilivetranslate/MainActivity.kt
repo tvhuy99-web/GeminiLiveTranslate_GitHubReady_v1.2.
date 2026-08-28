@@ -551,6 +551,18 @@ class MainActivity : AppCompatActivity() {
             else -> "Chưa có nội dung dịch"
         }
         subtitleText.text = state.transcript.ifBlank { emptyTranscript }
+        subtitleScroll.contentDescription = when {
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() && state.running ->
+                "Nội dung mô tả tổng hợp, đang cập nhật"
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Nội dung mô tả tổng hợp"
+            isVideoDescriptionSelected() && state.running ->
+                "Nội dung mô tả theo thời gian, đang cập nhật"
+            isVideoDescriptionSelected() ->
+                "Nội dung mô tả theo thời gian"
+            isTranscribeSelected() -> "Nội dung chép lời"
+            else -> "Nội dung dịch"
+        }
         val expectedChars = if (transcriptChars == 0) emptyTranscript.length else transcriptChars
         val actualChars = subtitleText.text.length
         if (actualChars != expectedChars) {
@@ -563,7 +575,9 @@ class MainActivity : AppCompatActivity() {
                 "TextView committed stateChars=$transcriptChars viewChars=$actualChars shown=${subtitleText.isShown} visibility=${subtitleText.visibility} alpha=${subtitleText.alpha} width=${subtitleText.width} height=${subtitleText.height}",
             )
         }
-        subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
+        if (!(isVideoDescriptionSelected() && state.running)) {
+            subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
+        }
         if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
         progressSeekBar.contentDescription = when {
             isVideoDescriptionSelected() -> "Tiến trình mô tả video: ${state.progressPercent}%"

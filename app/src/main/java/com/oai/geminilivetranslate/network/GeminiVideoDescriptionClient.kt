@@ -350,7 +350,7 @@ class GeminiVideoDescriptionClient(
                 )
             }
             when (state) {
-                "", "ACTIVE" -> {
+                "ACTIVE" -> {
                     onProgress("Video đã sẵn sàng để phân tích", 55)
                     return
                 }
@@ -843,7 +843,7 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
     companion object {
         const val MAX_VIDEO_DURATION_MS = 20L * 60L * 1_000L
         private const val MAX_ITEM_SECONDS = 15.0
-        private const val TIMECODE_TOLERANCE_SECONDS = 0.75
+        private const val TIMECODE_TOLERANCE_SECONDS = 0.10
         private const val MAX_ATTEMPTS = 2
         private const val MAX_FILE_POLLS = 180
         private const val MAX_INTERACTION_POLLS = 300

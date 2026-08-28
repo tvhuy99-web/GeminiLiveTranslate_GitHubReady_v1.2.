@@ -286,9 +286,11 @@ class TranslationService : LifecycleService() {
         videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
-        val apiKey = keyStore.takeGeminiKey()
         val aiApi = AiApiSettingsStore(this).load()
-        if (isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+        val useProxyVideoDescription =
+            isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
+        val apiKey = if (useProxyVideoDescription) null else keyStore.takeGeminiKey()
+        if (useProxyVideoDescription) {
             if (aiApi.proxyModel.isBlank()) {
                 updateError("Chưa chọn model OpenAI-compatible")
                 return
@@ -1314,7 +1316,7 @@ class TranslationService : LifecycleService() {
                             }
                         )
                     }
-                    if (isTranscribeMode()) scheduleTranscribeRotation(apiKey)
+                    if (isTranscribeMode()) scheduleTranscribeRotation()
                     if (sourceStarted) {
                         if (!_state.value.paused) {
                             source?.resume()
@@ -2289,7 +2291,7 @@ class TranslationService : LifecycleService() {
         }
     }
 
-    private fun scheduleTranscribeRotation(apiKey: String) {
+    private fun scheduleTranscribeRotation() {
         transcribeRotationJob?.cancel()
         transcribeRotationJob = serviceScope.launch {
             delay(TRANSCRIBE_LIVE_ROTATE_MS)
@@ -2298,7 +2300,7 @@ class TranslationService : LifecycleService() {
             finalizeLiveTranscriptionFallback("rotation")
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(apiKey)
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
     }
 

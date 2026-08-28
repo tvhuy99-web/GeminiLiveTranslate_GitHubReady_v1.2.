@@ -93,7 +93,22 @@ class OpenAiCompatibleVideoDescriptionClient(
         )
 
         onProgress("Đang gửi nguyên video tới API...", 8)
-        val output = execute(source, prompt, mode, onProgress, onPartial)
+        val output = if (streamingEnabled) {
+            try {
+                execute(source, prompt, mode, onProgress, onPartial, stream = true)
+            } catch (error: Throwable) {
+                if (cancelled || !shouldFallbackFromStreaming(error)) throw error
+                logger.log(
+                    1,
+                    TAG,
+                    "Streaming Proxy không khả dụng; thử lại non-stream reason=${error.message ?: error.javaClass.simpleName}",
+                )
+                onProgress("API không hỗ trợ streaming; đang nhận kết quả thông thường...", 65)
+                execute(source, prompt, mode, onProgress, onPartial, stream = false)
+            }
+        } else {
+            execute(source, prompt, mode, onProgress, onPartial, stream = false)
+        }
         val timelineItems = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
             parseTimeline(output, durationSeconds)
         } else {
@@ -132,6 +147,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         mode: GeminiVideoDescriptionClient.Mode,
         onProgress: (String, Int) -> Unit,
         onPartial: (String) -> Unit,
+        stream: Boolean,
     ): String {
         throwIfCancelled()
         val url = normalizeEndpoint(endpoint)
@@ -140,9 +156,9 @@ class OpenAiCompatibleVideoDescriptionClient(
             .header("Content-Type", "application/json")
             .apply {
                 if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey")
-                if (streamingEnabled) header("Accept", "text/event-stream")
+                if (stream) header("Accept", "text/event-stream")
             }
-            .post(VideoRequestBody(source, model.trim(), prompt, streamingEnabled, temperature))
+            .post(VideoRequestBody(source, model.trim(), prompt, stream, temperature))
             .build()
 
         return client.newCall(request).execute().use { response ->
@@ -154,10 +170,10 @@ class OpenAiCompatibleVideoDescriptionClient(
             logger.log(
                 2,
                 TAG,
-                "POST stream=$streamingEnabled HTTP=${response.code} contentType=$contentType endpoint=${sanitizeUrl(url)}",
+                "POST stream=$stream HTTP=${response.code} contentType=$contentType endpoint=${sanitizeUrl(url)}",
             )
             onProgress("Đang nhận kết quả...", 70)
-            if (streamingEnabled && contentType.contains("text/event-stream", ignoreCase = true)) {
+            if (stream && contentType.contains("text/event-stream", ignoreCase = true)) {
                 readSse(response.body?.source() ?: error("API không trả luồng dữ liệu"), mode, onPartial)
             } else {
                 val text = extractNonStreamText(response.body?.string().orEmpty())
@@ -168,6 +184,20 @@ class OpenAiCompatibleVideoDescriptionClient(
         }.also {
             onProgress("Đang hoàn tất kết quả...", 96)
         }
+    }
+
+    private fun shouldFallbackFromStreaming(error: Throwable): Boolean {
+        val message = error.message.orEmpty().lowercase()
+        return listOf(
+            "http 400",
+            "http 404",
+            "http 405",
+            "http 406",
+            "http 415",
+            "http 422",
+            "không trả luồng dữ liệu",
+            "không trả nội dung",
+        ).any(message::contains)
     }
 
     private fun readSse(

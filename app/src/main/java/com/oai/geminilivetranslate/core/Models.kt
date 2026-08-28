@@ -64,4 +64,5 @@ data class SessionUiState(
     val subtitleTranslationAvailable: Boolean = false,
     val subtitleTranslationInProgress: Boolean = false,
     val subtitleShowingVietnamese: Boolean = false,
+    val videoDescriptionMode: String = AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
 )

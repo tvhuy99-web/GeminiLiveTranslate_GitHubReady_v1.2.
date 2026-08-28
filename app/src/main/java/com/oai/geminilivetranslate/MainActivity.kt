@@ -44,6 +44,7 @@ import com.oai.geminilivetranslate.service.TranslationService
 import com.oai.geminilivetranslate.ui.LogViewerActivity
 import com.oai.geminilivetranslate.ui.MiniBrowserActivity
 import com.oai.geminilivetranslate.ui.SettingsActivity
+import com.oai.geminilivetranslate.ui.SubtitlePlaybackActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -341,6 +342,7 @@ class MainActivity : AppCompatActivity() {
         }
         autoDuckingSwitch.setOnCheckedChangeListener { _, checked -> translationService?.setAutoDucking(checked) ?: preferences.setAutoDucking(checked) }
         exportButton.setOnClickListener { exportTranscript() }
+        subtitlePlaybackButton.setOnClickListener { openSubtitlePlayback() }
         translateToVietnameseButton.setOnClickListener {
             val service = translationService
             if (service == null) {
@@ -455,6 +457,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
         val transcribe = isTranscribeSelected()
         val hasContent = state.transcript.isNotBlank()
+        subtitlePlaybackButton.isVisible = transcribe
         translateToVietnameseButton.isVisible =
             transcribe && !state.running && (hasContent || state.subtitleTranslationInProgress)
         translateToVietnameseButton.isEnabled =
@@ -759,6 +762,43 @@ class MainActivity : AppCompatActivity() {
             binding.testConnectionButton.isEnabled = true
             binding.testConnectionButton.text = "Kiểm tra API và kết nối"
         }
+    }
+
+    private fun openSubtitlePlayback() {
+        val service = translationService
+        val state = service?.state?.value
+        val mediaUri = service?.selectedMediaUri()
+        val mediaName = service?.selectedMediaName()
+        val subtitleSrt = service?.subtitleText("srt").orEmpty()
+        val vietnamese = state?.subtitleTranslationAvailable == true &&
+            state.subtitleShowingVietnamese
+        val subtitleName = when {
+            subtitleSrt.isBlank() -> null
+            vietnamese -> "Phụ đề tiếng Việt - phiên hiện tại"
+            else -> "Phụ đề bản gốc - phiên hiện tại"
+        }
+
+        logger.log(
+            2,
+            "SubtitlePlayback",
+            "Mở màn hình từ MainActivity seedMedia=${mediaUri != null} mediaName=${mediaName ?: "none"} seedSubtitle=${subtitleSrt.isNotBlank()} subtitleChars=${subtitleSrt.length} version=${if (vietnamese) "vi" else "original"} running=${state?.running == true}",
+        )
+
+        val intent = Intent(this, SubtitlePlaybackActivity::class.java).apply {
+            mediaUri?.let {
+                putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_URI, it.toString())
+                putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_NAME, mediaName ?: "Media từ phiên hiện tại")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            if (subtitleSrt.isNotBlank()) {
+                putExtra(SubtitlePlaybackActivity.EXTRA_SUBTITLE_SRT, subtitleSrt)
+                putExtra(
+                    SubtitlePlaybackActivity.EXTRA_SUBTITLE_NAME,
+                    subtitleName ?: "Phụ đề từ phiên hiện tại",
+                )
+            }
+        }
+        startActivity(intent)
     }
 
     private fun exportTranscript() {

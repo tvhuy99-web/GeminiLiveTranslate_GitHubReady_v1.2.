@@ -259,10 +259,16 @@ class ApiSettingsActivity : AppCompatActivity() {
     }
 
     private fun fetchModels(provider: String) {
+        val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            geminiKey.text.toString().trim()
+        } else {
+            proxyKey.text.toString().trim()
+        }
+        val proxyUrlValue = proxyUrl.text.toString().trim()
         lifecycleScope.launch {
             toast("Đang tải danh sách model...")
             runCatching {
-                withContext(Dispatchers.IO) { fetchModelList(provider) }
+                withContext(Dispatchers.IO) { fetchModelList(provider, keyValue, proxyUrlValue) }
             }.onSuccess { models ->
                 if (models.isEmpty()) {
                     toast("API không trả danh sách model")
@@ -289,16 +295,22 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun testConnection() {
         val provider = currentProvider()
+        val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            geminiKey.text.toString().trim()
+        } else {
+            proxyKey.text.toString().trim()
+        }
+        val proxyUrlValue = proxyUrl.text.toString().trim()
+        val selected = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            geminiModel.text.toString().trim().removePrefix("models/")
+        } else {
+            proxyModel.text.toString().trim()
+        }
         lifecycleScope.launch {
             toast("Đang kiểm tra kết nối...")
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val models = fetchModelList(provider)
-                    val selected = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-                        geminiModel.text.toString().trim().removePrefix("models/")
-                    } else {
-                        proxyModel.text.toString().trim()
-                    }
+                    val models = fetchModelList(provider, keyValue, proxyUrlValue)
                     val found = selected.isBlank() || selected in models
                     models.size to found
                 }
@@ -313,11 +325,15 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun fetchModelList(provider: String): List<String> {
+    private fun fetchModelList(
+        provider: String,
+        keyValue: String,
+        proxyUrlValue: String,
+    ): List<String> {
         val (url, key) = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            "https://generativelanguage.googleapis.com/v1beta/models" to geminiKey.text.toString().trim()
+            "https://generativelanguage.googleapis.com/v1beta/models" to keyValue
         } else {
-            modelsUrl(proxyUrl.text.toString()) to proxyKey.text.toString().trim()
+            modelsUrl(proxyUrlValue) to keyValue
         }
         if (provider == AiApiSettingsStore.PROVIDER_GEMINI && key.isBlank()) {
             error("Hãy nhập Gemini API Key trước")

@@ -906,7 +906,6 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         private val FRIENDLY_NAMES = mapOf(
-            "model" to "bộ máy dịch",
             "targetLanguage" to "ngôn ngữ cần dịch sang",
             "echoTargetLanguage" to "đọc lại câu đã đúng ngôn ngữ",
             "aiVoice" to "giọng dịch",

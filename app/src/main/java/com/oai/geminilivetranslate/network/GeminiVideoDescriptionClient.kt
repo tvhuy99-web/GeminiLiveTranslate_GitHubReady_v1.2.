@@ -392,28 +392,26 @@ class GeminiVideoDescriptionClient(
         fileUri: String,
         mimeType: String,
         prompt: String,
-        responseFormat: JSONObject,
+        responseFormat: JSONObject?,
         mode: Mode,
         onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
     ): InteractionResult {
+        if (streamingEnabled) {
+            return createStreaming(
+                fileUri = fileUri,
+                mimeType = mimeType,
+                prompt = prompt,
+                responseFormat = responseFormat,
+                mode = mode,
+                onProgress = onProgress,
+                onPartial = onPartial,
+            )
+        }
+
         throwIfCancelled()
         val startedAt = SystemClock.elapsedRealtime()
-        val requestJson = JSONObject()
-            .put("model", AppPreferences.VIDEO_DESCRIPTION_MODEL)
-            .put("store", false)
-            .put(
-                "input",
-                JSONArray()
-                    .put(
-                        JSONObject()
-                            .put("type", "video")
-                            .put("uri", fileUri)
-                            .put("mime_type", mimeType)
-                    )
-                    .put(JSONObject().put("type", "text").put("text", prompt))
-            )
-            .put("response_format", responseFormat)
-
+        val requestJson = baseInteractionRequest(fileUri, mimeType, prompt, responseFormat)
         onProgress(
             if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
             58,
@@ -433,7 +431,7 @@ class GeminiVideoDescriptionClient(
             logger.log(
                 if (response.isSuccessful) 2 else 0,
                 TAG,
-                "Interactions POST direct=true background=false store=false mode=$mode HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                "Interactions POST direct=true stream=false store=false mode=$mode model=$model HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
             )
             if (!response.isSuccessful) {
                 throw IllegalStateException(
@@ -449,6 +447,146 @@ class GeminiVideoDescriptionClient(
             id = root.optString("id").takeIf(String::isNotBlank),
             elapsedMs = SystemClock.elapsedRealtime() - startedAt,
         )
+    }
+
+    private fun createStreaming(
+        fileUri: String,
+        mimeType: String,
+        prompt: String,
+        responseFormat: JSONObject?,
+        mode: Mode,
+        onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
+    ): InteractionResult {
+        throwIfCancelled()
+        val startedAt = SystemClock.elapsedRealtime()
+        val requestJson = baseInteractionRequest(fileUri, mimeType, prompt, responseFormat)
+            .put("stream", true)
+        val request = Request.Builder()
+            .url(INTERACTIONS_ENDPOINT)
+            .header("x-goog-api-key", apiKey)
+            .header("Api-Revision", INTERACTIONS_STREAM_REVISION)
+            .header("Accept", "text/event-stream")
+            .header("Content-Type", "application/json")
+            .post(requestJson.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        onProgress(
+            if (mode == Mode.TIMELINE) "Đang nhận mô tả theo thời gian..." else "Đang nhận mô tả tổng hợp...",
+            58,
+        )
+
+        val output = StringBuilder()
+        var interactionId: String? = null
+        var usage: JSONObject? = null
+        var lastPreview = ""
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val body = response.body?.string().orEmpty()
+                throw IllegalStateException(
+                    "Gemini HTTP ${response.code}: ${sanitizeForLog(body, 1_000)}"
+                )
+            }
+            logger.log(
+                2,
+                TAG,
+                "Interactions POST direct=true stream=true store=false mode=$mode model=$model HTTP=${response.code} contentType=${response.header("Content-Type") ?: "none"} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+            )
+            val source = response.body?.source() ?: error("Gemini không trả luồng dữ liệu")
+            var eventName = ""
+            while (true) {
+                throwIfCancelled()
+                val line = source.readUtf8Line() ?: break
+                if (line.startsWith("event:")) {
+                    eventName = line.substringAfter("event:").trim()
+                    continue
+                }
+                if (!line.startsWith("data:")) continue
+                val data = line.substringAfter("data:").trim()
+                if (data.isBlank() || data == "[DONE]") continue
+                val event = runCatching { JSONObject(data) }.getOrNull() ?: continue
+                val eventType = event.optString("event_type").ifBlank { eventName }
+                when (eventType) {
+                    "interaction.created" -> {
+                        interactionId = event.optJSONObject("interaction")
+                            ?.optString("id")
+                            ?.takeIf(String::isNotBlank)
+                    }
+                    "step.delta" -> {
+                        val delta = event.optJSONObject("delta")
+                        if (delta?.optString("type") == "text") {
+                            val text = delta.optString("text")
+                            if (text.isNotEmpty()) {
+                                output.append(text)
+                                val preview = if (mode == Mode.SUMMARY) {
+                                    output.toString()
+                                } else {
+                                    timelinePreview(output.toString())
+                                }
+                                if (preview.isNotBlank() && preview != lastPreview) {
+                                    lastPreview = preview
+                                    onPartial(preview)
+                                }
+                            }
+                        }
+                    }
+                    "interaction.completed" -> {
+                        val interaction = event.optJSONObject("interaction")
+                        if (interactionId.isNullOrBlank()) {
+                            interactionId = interaction?.optString("id")?.takeIf(String::isNotBlank)
+                        }
+                        usage = interaction?.optJSONObject("usage") ?: event.optJSONObject("usage")
+                    }
+                }
+            }
+        }
+        throwIfCancelled()
+        val finalText = output.toString().trim()
+        if (finalText.isBlank()) error("Gemini không trả nội dung mô tả video")
+        val root = JSONObject().put("output_text", finalText)
+        usage?.let { root.put("usage", it) }
+        onPartial(if (mode == Mode.SUMMARY) finalText else timelinePreview(finalText))
+        onProgress("Đang hoàn tất kết quả...", 96)
+        return InteractionResult(
+            root = root,
+            id = interactionId,
+            elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+        )
+    }
+
+    private fun baseInteractionRequest(
+        fileUri: String,
+        mimeType: String,
+        prompt: String,
+        responseFormat: JSONObject?,
+    ): JSONObject {
+        val request = JSONObject()
+            .put("model", model)
+            .put("store", false)
+            .put(
+                "input",
+                JSONArray()
+                    .put(
+                        JSONObject()
+                            .put("type", "video")
+                            .put("uri", fileUri)
+                            .put("mime_type", mimeType)
+                    )
+                    .put(JSONObject().put("type", "text").put("text", prompt))
+            )
+        if (responseFormat != null) request.put("response_format", responseFormat)
+        return request
+    }
+
+    private fun timelinePreview(partialJson: String): String {
+        val regex = Regex("""\"text\"\s*:\s*\"((?:\\\\.|[^\"\\\\])*)\"""")
+        return regex.findAll(partialJson)
+            .mapNotNull { match ->
+                val encoded = match.groupValues[1]
+                runCatching { JSONArray("[\"$encoded\"]").getString(0) }.getOrNull()
+            }
+            .filter(String::isNotBlank)
+            .joinToString("\n")
     }
 
     private fun extractOutputText(root: JSONObject): String {
@@ -849,6 +987,7 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
             "https://generativelanguage.googleapis.com/upload/v1beta/files"
         private const val INTERACTIONS_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/interactions"
+        private const val INTERACTIONS_STREAM_REVISION = "2026-05-20"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

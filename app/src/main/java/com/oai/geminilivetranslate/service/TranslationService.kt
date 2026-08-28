@@ -286,8 +286,7 @@ class TranslationService : LifecycleService() {
         videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
-        val secretState = keyStore.load()
-        val apiKey = secretState.selected
+        val apiKey = keyStore.takeGeminiKey()
         val aiApi = AiApiSettingsStore(this).load()
         if (isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
             if (aiApi.proxyModel.isBlank()) {
@@ -671,7 +670,7 @@ class TranslationService : LifecycleService() {
             source?.pause()
             clearPendingInputForFreshSession()
             updateState { it.copy(setupComplete = false, status = "Đang áp dụng model/ngôn ngữ mới...") }
-            connectGemini(keyStore.load().selected.orEmpty())
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
         if (running && diff.nextSession.isNotEmpty()) {
             logger.log(1, "Settings", "Đã lưu cho phiên tiếp theo: ${diff.nextSession.joinToString()}; phiên hiện tại giữ queue=$activeInputQueueCapacity quality=${activeAfter.qualityMode}")
@@ -688,7 +687,7 @@ class TranslationService : LifecycleService() {
             )
             return
         }
-        val selectedKey = keyStore.load().selected
+        val selectedKey = keyStore.takeGeminiKey()
         if (selectedKey.isNullOrBlank()) {
             stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")
             return
@@ -712,7 +711,7 @@ class TranslationService : LifecycleService() {
         if (_state.value.running && currentMode == SourceMode.MICROPHONE) {
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(keyStore.load().selected.orEmpty())
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
         return code
     }
@@ -759,7 +758,7 @@ class TranslationService : LifecycleService() {
             return
         }
 
-        val apiKey = keyStore.load().selected
+        val apiKey = keyStore.takeGeminiKey()
         if (apiKey.isNullOrBlank()) {
             logger.log(1, "SubtitleTranslate", "Không thể dịch vì chưa có API Key")
             updateState { it.copy(status = "Chưa có API Key để dịch phụ đề") }
@@ -2266,10 +2265,26 @@ class TranslationService : LifecycleService() {
     private fun handleConnectionError(error: Throwable) {
         logger.log(0, "Gemini", "Mất kết nối", error)
         val apiError = error as? GeminiLiveClient.GeminiApiException
+        val hasMoreKeys = keyStore.load().keys.size > 1
         when (apiError?.code) {
-            400, 401, 403 -> stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key và cấu hình")
+            400 -> stopTranslation("Yêu cầu Gemini không hợp lệ; hãy kiểm tra cấu hình")
+            401, 403 -> {
+                if (hasMoreKeys) {
+                    scheduleReconnect(500L, true, "API Key hiện tại bị từ chối; đang chuyển sang API Key tiếp theo")
+                } else {
+                    stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key")
+                }
+            }
             404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
-            429 -> scheduleReconnect(60_000L, true, "Gemini đang giới hạn lưu lượng")
+            429 -> scheduleReconnect(
+                if (hasMoreKeys) 500L else 60_000L,
+                true,
+                if (hasMoreKeys) {
+                    "API Key hiện tại bị giới hạn; đang chuyển sang API Key tiếp theo"
+                } else {
+                    "Gemini đang giới hạn lưu lượng"
+                },
+            )
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
         }
     }
@@ -2311,7 +2326,7 @@ class TranslationService : LifecycleService() {
         }
         reconnectJob = serviceScope.launch {
             delay(delayMs)
-            if (_state.value.running) connectGemini(keyStore.load().selected.orEmpty())
+            if (_state.value.running) connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
     }
 
@@ -2328,7 +2343,7 @@ class TranslationService : LifecycleService() {
         ttsEngine?.stop()
         synchronized(ttsBuffer) { ttsBuffer.clear() }
         updateState { it.copy(transcript = "", status = "Đang tạo phiên Gemini mới sau khi tua...") }
-        connectGemini(keyStore.load().selected.orEmpty())
+        connectGemini(keyStore.takeGeminiKey().orEmpty())
     }
 
     private fun setupPlayers() {

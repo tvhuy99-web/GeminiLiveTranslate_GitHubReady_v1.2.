@@ -680,6 +680,14 @@ class TranslationService : LifecycleService() {
 
     private fun refreshConnectionWithSelectedApiKey() {
         if (!_state.value.running) return
+        if (isTranscribeMode() || isVideoDescriptionMode()) {
+            logger.log(
+                2,
+                "ApiKey",
+                "API Key đã thay đổi; phiên hiện tại giữ cấu hình lúc bắt đầu và key mới áp dụng từ phiên tiếp theo processing=$processingMode",
+            )
+            return
+        }
         val selectedKey = keyStore.load().selected
         if (selectedKey.isNullOrBlank()) {
             stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")

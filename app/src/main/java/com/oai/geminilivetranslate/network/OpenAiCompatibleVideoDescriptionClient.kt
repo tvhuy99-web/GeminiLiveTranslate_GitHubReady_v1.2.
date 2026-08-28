@@ -277,7 +277,11 @@ class OpenAiCompatibleVideoDescriptionClient(
 
     private fun normalizeEndpoint(raw: String): String {
         val url = raw.trim().removeSuffix("/")
-        return if (url.endsWith("/chat/completions")) url else "$url/chat/completions"
+        return when {
+            url.endsWith("/chat/completions") -> url
+            url.endsWith("/responses") -> url.removeSuffix("/responses") + "/chat/completions"
+            else -> "$url/chat/completions"
+        }
     }
 
     private fun sanitizeUrl(raw: String): String = raw.substringBefore('?').take(180)

@@ -342,6 +342,10 @@ class ApiSettingsActivity : AppCompatActivity() {
             )
         }.onSuccess {
             val currentGeminiKey = keys.load().selected
+            startService(
+                Intent(this, TranslationService::class.java)
+                    .setAction(TranslationService.ACTION_APPLY_SETTINGS)
+            )
             if (previousGeminiKey != currentGeminiKey) {
                 startService(
                     Intent(this, TranslationService::class.java)

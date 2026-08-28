@@ -222,6 +222,10 @@ class GeminiVideoDescriptionClient(
         }
     }
 
+    fun cancel() {
+        client.dispatcher.cancelAll()
+    }
+
     fun close() {
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
@@ -418,11 +422,12 @@ class GeminiVideoDescriptionClient(
 
             interactionId = root.optString("id").takeIf(String::isNotBlank)
                 ?: error("Gemini không trả interaction id cho tác vụ nền")
+            val activeId = interactionId
             for (poll in 0..MAX_INTERACTION_POLLS) {
                 when (root.optString("status").lowercase()) {
                     "", "completed" -> return InteractionResult(
                         root = root,
-                        id = interactionId,
+                        id = activeId,
                         elapsedMs = SystemClock.elapsedRealtime() - startedAt,
                     )
                     "failed", "cancelled", "incomplete" -> {
@@ -439,7 +444,7 @@ class GeminiVideoDescriptionClient(
                     if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
                     (58 + poll / 5).coerceAtMost(96),
                 )
-                val cleanId = interactionId.substringAfterLast('/')
+                val cleanId = activeId.substringAfterLast('/')
                 val pollRequest = Request.Builder()
                     .url("$INTERACTIONS_ENDPOINT/$cleanId")
                     .header("x-goog-api-key", apiKey)

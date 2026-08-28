@@ -441,7 +441,7 @@ class TranslationService : LifecycleService() {
         transcribeRotationJob?.cancel(); transcribeRotationJob = null
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
-        videoDescriptionClient?.close(); videoDescriptionClient = null
+        videoDescriptionClient?.cancel()
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
         runCatching { mediaProjection?.stop() }

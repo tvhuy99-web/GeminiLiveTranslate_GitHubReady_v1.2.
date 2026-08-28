@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.SystemClock
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
 import com.oai.geminilivetranslate.core.VideoDescriptionTimelineRules
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -22,6 +23,10 @@ class GeminiVideoDescriptionClient(
     private val apiKey: String,
     private val logger: SessionLogger,
     private val includeOutputInLogs: Boolean,
+    private val model: String = AppPreferences.VIDEO_DESCRIPTION_MODEL,
+    private val timelinePromptTemplate: String = VideoDescriptionPromptDefaults.TIMELINE,
+    private val summaryPromptTemplate: String = VideoDescriptionPromptDefaults.SUMMARY,
+    private val streamingEnabled: Boolean = true,
 ) {
     enum class Mode {
         TIMELINE,
@@ -82,6 +87,7 @@ class GeminiVideoDescriptionClient(
         durationMs: Long,
         mode: Mode,
         onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit = {},
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
         require(mimeType in SUPPORTED_VIDEO_MIME_TYPES) {
@@ -108,6 +114,7 @@ class GeminiVideoDescriptionClient(
             durationMs = durationMs,
             mode = mode,
             onProgress = onProgress,
+            onPartial = onPartial,
         )
     }
 
@@ -116,13 +123,14 @@ class GeminiVideoDescriptionClient(
         durationMs: Long,
         mode: Mode,
         onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
     ): Result {
         val startedAt = SystemClock.elapsedRealtime()
         val durationSeconds = durationMs / 1_000.0
         logger.log(
             2,
             TAG,
-            "Bắt đầu model=${AppPreferences.VIDEO_DESCRIPTION_MODEL} mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS",
+            "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled",
         )
 
         var uploadedName: String? = null
@@ -132,18 +140,19 @@ class GeminiVideoDescriptionClient(
             uploadedName = uploaded.name
             waitUntilActive(uploaded, onProgress)
 
-            val prompt = when (mode) {
-                Mode.TIMELINE -> timelinePrompt(durationSeconds)
-                Mode.SUMMARY -> summaryPrompt(durationSeconds)
-            }
-            val responseFormat = when (mode) {
-                Mode.TIMELINE -> timelineResponseFormat()
-                Mode.SUMMARY -> summaryResponseFormat()
+            val prompt = VideoDescriptionPromptDefaults.render(
+                if (mode == Mode.TIMELINE) timelinePromptTemplate else summaryPromptTemplate,
+                durationSeconds,
+            )
+            val responseFormat = when {
+                mode == Mode.TIMELINE -> timelineResponseFormat()
+                streamingEnabled -> null
+                else -> summaryResponseFormat()
             }
             logger.log(
                 2,
                 TAG,
-                "Chuẩn bị Interactions mode=$mode promptChars=${prompt.length} structuredOutput=true durationSeconds=${formatSeconds(durationSeconds)}",
+                "Chuẩn bị Interactions mode=$mode promptChars=${prompt.length} structuredOutput=${responseFormat != null} durationSeconds=${formatSeconds(durationSeconds)} streaming=$streamingEnabled",
             )
 
             var lastError: Throwable? = null
@@ -163,6 +172,7 @@ class GeminiVideoDescriptionClient(
                         responseFormat = responseFormat,
                         mode = mode,
                         onProgress = onProgress,
+                        onPartial = onPartial,
                     )
                     val outputText = extractOutputText(interaction.root)
                     val usage = interaction.root.optJSONObject("usage")

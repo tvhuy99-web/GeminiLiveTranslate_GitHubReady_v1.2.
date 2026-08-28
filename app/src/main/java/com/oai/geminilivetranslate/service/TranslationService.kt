@@ -1794,7 +1794,6 @@ class TranslationService : LifecycleService() {
                             }
                         }
                     }
-                }
 
                 val resultBuildStartedAt = SystemClock.elapsedRealtime()
                 val cues = buildTranscriptionCues(result.words, speakerDiarization)

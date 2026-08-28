@@ -468,6 +468,10 @@ class TranslationService : LifecycleService() {
 
     fun currentFilePlaybackSpeed(): Float = filePlaybackSpeed
 
+    fun selectedMediaUri(): Uri? = selectedUri
+
+    fun selectedMediaName(): String? = selectedFileName
+
     fun setAiVoice(enabled: Boolean) {
         preferences.setAiVoice(enabled)
         settings = settings.copy(aiVoice = enabled)

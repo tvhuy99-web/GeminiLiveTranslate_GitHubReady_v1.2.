@@ -110,7 +110,7 @@ class SessionHistoryStore(context: Context) {
         val safeId = sanitizeId(id) ?: return false
         val deletedIds = meta.getStringSet(KEY_DELETED_IDS, emptySet()).orEmpty().toMutableSet()
         deletedIds += safeId
-        meta.edit().putStringSet(KEY_DELETED_IDS, deletedIds.takeLast(MAX_TOMBSTONES).toSet()).apply()
+        meta.edit().putStringSet(KEY_DELETED_IDS, deletedIds.toList().takeLast(MAX_TOMBSTONES).toSet()).apply()
         val file = fileFor(safeId)
         return !file.exists() || file.delete()
     }

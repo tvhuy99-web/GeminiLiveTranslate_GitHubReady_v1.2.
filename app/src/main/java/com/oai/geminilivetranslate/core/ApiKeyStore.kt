@@ -50,11 +50,10 @@ class ApiKeyStore(context: Context) {
     fun setGeminiKey(key: String): State {
         val normalized = key.trim()
         val current = load()
-        if (normalized.isBlank()) {
-            return save(current.copy(keys = emptyList(), selected = null))
-        }
+        if (normalized.isBlank()) return current
         require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
-        return save(current.copy(keys = listOf(normalized), selected = normalized))
+        val keys = (current.keys + normalized).distinct()
+        return save(current.copy(keys = keys, selected = normalized))
     }
 
     @Synchronized

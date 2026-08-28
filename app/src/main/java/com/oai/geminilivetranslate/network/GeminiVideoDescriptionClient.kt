@@ -82,7 +82,9 @@ class GeminiVideoDescriptionClient(
         onProgress: (String, Int) -> Unit,
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
-        require(mimeType.startsWith("video/")) { "Tệp đã chọn không phải video" }
+        require(mimeType in SUPPORTED_VIDEO_MIME_TYPES) {
+            "Định dạng video chưa được Gemini 3.7 Flash hỗ trợ trực tiếp: $mimeType"
+        }
         require(durationMs in 1..MAX_VIDEO_DURATION_MS) {
             "Video phải dài tối đa 20 phút"
         }
@@ -896,6 +898,17 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
     }
 
     companion object {
+        private val SUPPORTED_VIDEO_MIME_TYPES = setOf(
+            "video/mp4",
+            "video/mpeg",
+            "video/mpg",
+            "video/mov",
+            "video/avi",
+            "video/x-flv",
+            "video/webm",
+            "video/wmv",
+            "video/3gpp",
+        )
         const val MAX_VIDEO_DURATION_MS = 20L * 60L * 1_000L
         private const val MAX_ITEM_SECONDS = 15.0
         private const val TIMECODE_TOLERANCE_SECONDS = 0.10

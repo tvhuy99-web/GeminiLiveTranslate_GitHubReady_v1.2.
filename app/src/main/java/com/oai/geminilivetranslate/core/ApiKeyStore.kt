@@ -50,16 +50,43 @@ class ApiKeyStore(context: Context) {
     }
 
     @Synchronized
-    fun takeGeminiKey(): String? {
+    fun currentGeminiKey(): String? {
+        val current = load()
+        return current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
+    }
+
+    @Synchronized
+    fun orderedGeminiKeys(): List<String> {
+        val current = load()
+        if (current.keys.isEmpty()) return emptyList()
+        val selected = current.selected?.takeIf { it in current.keys } ?: current.keys.first()
+        val start = current.keys.indexOf(selected).coerceAtLeast(0)
+        return current.keys.indices.map { offset ->
+            current.keys[(start + offset) % current.keys.size]
+        }
+    }
+
+    @Synchronized
+    fun selectNextGeminiKey(after: String? = null): String? {
         val current = load()
         if (current.keys.isEmpty()) return null
-        val selected = current.selected?.takeIf { it in current.keys } ?: current.keys.first()
-        if (current.keys.size > 1) {
-            val index = current.keys.indexOf(selected)
-            val next = current.keys[(index + 1) % current.keys.size]
-            save(current.copy(selected = next))
-        }
-        return selected
+        val active = after?.takeIf { it in current.keys }
+            ?: current.selected?.takeIf { it in current.keys }
+            ?: current.keys.first()
+        if (current.keys.size == 1) return active
+        val index = current.keys.indexOf(active)
+        val next = current.keys[(index + 1) % current.keys.size]
+        save(current.copy(selected = next))
+        return next
+    }
+
+    @Synchronized
+    fun selectGeminiKey(key: String): String? {
+        val current = load()
+        val normalized = key.trim()
+        if (normalized !in current.keys) return null
+        save(current.copy(selected = normalized))
+        return normalized
     }
 
     @Synchronized

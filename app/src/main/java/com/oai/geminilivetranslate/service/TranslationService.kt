@@ -1008,7 +1008,9 @@ class TranslationService : LifecycleService() {
             transcript = displayText.takeLast(MAX_TRANSCRIPT_CHARS),
             progressPercent = 0,
             canSeek = false,
-            aiVoice = settings.aiVoice && processingMode != AppPreferences.PROCESSING_MODE_TRANSCRIBE,
+            aiVoice = settings.aiVoice &&
+                processingMode != AppPreferences.PROCESSING_MODE_TRANSCRIBE &&
+                processingMode != AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION,
             currentLanguage = settings.targetLanguage,
             lastError = null,
             subtitleTranslationAvailable = hasVietnamese,
@@ -1019,7 +1021,7 @@ class TranslationService : LifecycleService() {
         logger.log(
             2,
             "History",
-            "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} showVi=$showVietnamese",
+            "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} videoMode=${loaded.videoDescriptionMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} videoTimelineChars=${loaded.videoTimelineTranscript.length} videoTimelineSrtChars=${loaded.videoTimelineSrt.length} videoSummaryChars=${loaded.videoSummaryText.length} showVi=$showVietnamese",
         )
         return true
     }
@@ -1129,7 +1131,7 @@ class TranslationService : LifecycleService() {
         logger.log(
             2,
             "History",
-            "Bắt đầu phiên nháp id=${currentHistorySession?.id} reason=$reason source=$mode processing=$processingMode media=${selectedFileName ?: "none"}",
+            "Bắt đầu phiên nháp id=${currentHistorySession?.id} reason=$reason source=$mode processing=$processingMode videoMode=$videoDescriptionMode media=${selectedFileName ?: "none"}",
         )
     }
 

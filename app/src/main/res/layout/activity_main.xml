@@ -288,12 +288,29 @@
                 android:textSize="16sp" />
         </ScrollView>
 
-        <Button
-            android:id="@+id/exportButton"
+        <LinearLayout
+            android:id="@+id/subtitleActionLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="Xuất phụ đề" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/exportButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Xuất phụ đề" />
+
+            <Button
+                android:id="@+id/translateToVietnameseButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Dịch sang tiếng Việt"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/settingsButton"

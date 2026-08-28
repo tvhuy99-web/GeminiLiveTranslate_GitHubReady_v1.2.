@@ -1001,16 +1001,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showTextDialog(title: String, text: String) {
-        val view = TextView(this).apply {
-            setText(text)
-            setTextIsSelectable(true)
-            setPadding(24, 20, 24, 20)
-        }
-        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(view) })
-            .setPositiveButton("Đóng", null).show()
-    }
-
     private fun isTranscribeSelected(): Boolean =
         preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_TRANSCRIBE
 

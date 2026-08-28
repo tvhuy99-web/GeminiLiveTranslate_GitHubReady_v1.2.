@@ -485,6 +485,7 @@ class GeminiVideoDescriptionClient(
         var interactionId: String? = null
         var usage: JSONObject? = null
         var lastPreview = ""
+        var completed = false
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 val body = response.body?.string().orEmpty()
@@ -541,11 +542,15 @@ class GeminiVideoDescriptionClient(
                             interactionId = interaction?.optString("id")?.takeIf(String::isNotBlank)
                         }
                         usage = interaction?.optJSONObject("usage") ?: event.optJSONObject("usage")
+                        completed = true
                     }
                 }
             }
         }
         throwIfCancelled()
+        if (!completed) {
+            error("Luồng Gemini bị ngắt trước khi interaction.completed")
+        }
         val finalText = output.toString().trim()
         if (finalText.isBlank()) error("Gemini không trả nội dung mô tả video")
         val root = JSONObject().put("output_text", finalText)

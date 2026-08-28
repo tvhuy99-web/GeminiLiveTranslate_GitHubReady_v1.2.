@@ -1,5 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
@@ -25,6 +26,7 @@ import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
+import com.oai.geminilivetranslate.service.TranslationService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -285,6 +287,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             return
         }
 
+        val previousGeminiKey = keys.load().selected
         runCatching {
             keys.setGeminiKey(geminiValue)
             keys.setProxyKey(proxyValue)
@@ -302,10 +305,17 @@ class ApiSettingsActivity : AppCompatActivity() {
                 )
             )
         }.onSuccess {
+            val currentGeminiKey = keys.load().selected
+            if (previousGeminiKey != currentGeminiKey) {
+                startService(
+                    Intent(this, TranslationService::class.java)
+                        .setAction(TranslationService.ACTION_REFRESH_API_KEY)
+                )
+            }
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()}",
+                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyChanged=${previousGeminiKey != currentGeminiKey}",
             )
             toast("Đã lưu thiết lập API")
             finish()

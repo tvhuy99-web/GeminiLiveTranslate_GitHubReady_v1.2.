@@ -563,7 +563,7 @@ class ApiSettingsActivity : AppCompatActivity() {
     private fun help(textValue: String): TextView = TextView(this).apply {
         text = textValue
         textSize = 12f
-        setTextColor(Color.parseColor("#666666"))
+        alpha = 0.72f
         setPadding(0, 0, 0, dp(4))
     }
 

@@ -218,23 +218,38 @@ class TranslationService : LifecycleService() {
 
     fun setProcessingMode(value: String) {
         if (_state.value.running) return
-        processingMode = when (value) {
+        val next = when (value) {
             AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
             AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
             else -> AppPreferences.PROCESSING_MODE_TRANSLATE
         }
+        if (processingMode == next) return
+        saveCurrentHistoryNow("processing-mode-change")
+        processingMode = next
         preferences.setProcessingMode(processingMode)
+        currentHistorySession = currentHistorySession?.copy(
+            processingMode = processingMode,
+            videoDescriptionMode = videoDescriptionMode,
+        )
+        restoreCurrentHistoryViewForMode()
     }
 
     fun setVideoDescriptionMode(value: String) {
         if (_state.value.running) return
-        videoDescriptionMode = if (value == AppPreferences.VIDEO_DESCRIPTION_SUMMARY) {
+        val next = if (value == AppPreferences.VIDEO_DESCRIPTION_SUMMARY) {
             AppPreferences.VIDEO_DESCRIPTION_SUMMARY
         } else {
             AppPreferences.VIDEO_DESCRIPTION_TIMELINE
         }
+        if (videoDescriptionMode == next) return
+        saveCurrentHistoryNow("video-description-mode-change")
+        videoDescriptionMode = next
         preferences.setVideoDescriptionMode(videoDescriptionMode)
-        _state.update { it.copy(videoDescriptionMode = videoDescriptionMode) }
+        currentHistorySession = currentHistorySession?.copy(
+            processingMode = processingMode,
+            videoDescriptionMode = videoDescriptionMode,
+        )
+        restoreCurrentHistoryViewForMode()
     }
 
     fun setSpeakerDiarization(enabled: Boolean) {
@@ -998,6 +1013,81 @@ class TranslationService : LifecycleService() {
             "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} showVi=$showVietnamese",
         )
         return true
+    }
+
+    private fun restoreCurrentHistoryViewForMode() {
+        subtitles.reset()
+        vietnameseSubtitles.reset()
+        transcribePlainText = ""
+        videoSummaryText = ""
+
+        val saved = currentHistorySession
+        if (saved == null) {
+            _state.update {
+                it.copy(
+                    transcript = "",
+                    subtitleTranslationAvailable = false,
+                    subtitleShowingVietnamese = false,
+                    videoDescriptionMode = videoDescriptionMode,
+                )
+            }
+            return
+        }
+
+        var display = ""
+        var hasVietnamese = false
+        var showVietnamese = false
+        when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY -> {
+                videoSummaryText = saved.videoSummaryText
+                display = videoSummaryText
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> {
+                restoreStoreFromHistory(
+                    subtitles,
+                    saved.videoTimelineSrt,
+                    saved.videoTimelineTranscript,
+                )
+                display = saved.videoTimelineTranscript.ifBlank { subtitles.plainText() }
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE -> {
+                restoreStoreFromHistory(subtitles, saved.primarySrt, saved.primaryTranscript)
+                restoreStoreFromHistory(
+                    vietnameseSubtitles,
+                    saved.vietnameseSrt,
+                    saved.vietnameseTranscript,
+                )
+                transcribePlainText = saved.primaryTranscript.ifBlank { subtitles.plainText() }
+                hasVietnamese = saved.hasVietnamese && vietnameseSubtitles.plainText().isNotBlank()
+                showVietnamese = saved.showingVietnamese && hasVietnamese
+                display = if (showVietnamese) {
+                    saved.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
+                } else {
+                    transcribePlainText
+                }
+            }
+            else -> {
+                restoreStoreFromHistory(subtitles, saved.primarySrt, saved.primaryTranscript)
+                display = saved.primaryTranscript.ifBlank { subtitles.plainText() }
+            }
+        }
+
+        _state.update {
+            it.copy(
+                status = "Sẵn sàng",
+                transcript = display.takeLast(MAX_TRANSCRIPT_CHARS),
+                subtitleTranslationAvailable = hasVietnamese,
+                subtitleTranslationInProgress = false,
+                subtitleShowingVietnamese = showVietnamese,
+                videoDescriptionMode = videoDescriptionMode,
+            )
+        }
+        logger.log(
+            2,
+            "History",
+            "Chuyển nội dung phiên hiện tại processing=$processingMode videoMode=$videoDescriptionMode chars=${display.length} hasVi=$hasVietnamese showVi=$showVietnamese",
+        )
     }
 
     private fun restoreStoreFromHistory(

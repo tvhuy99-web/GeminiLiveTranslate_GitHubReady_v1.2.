@@ -33,7 +33,7 @@ object SrtParser {
                 return@forEach
             }
             val startMs = parseTime(timing[0])
-            val endMs = parseTime(timing[1].substringBefore(' ').trim())
+            val endMs = parseTime(timing[1].trim().substringBefore(' '))
             val text = lines.drop(timingIndex + 1).joinToString("\n").trim()
             if (startMs == null || endMs == null || endMs <= startMs || text.isBlank()) {
                 skipped++

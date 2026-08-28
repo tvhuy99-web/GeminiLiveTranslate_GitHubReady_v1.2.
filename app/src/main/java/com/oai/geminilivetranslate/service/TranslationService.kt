@@ -206,6 +206,7 @@ class TranslationService : LifecycleService() {
 
     fun setSourceMode(mode: SourceMode) {
         if (_state.value.running) return
+        if (currentMode != mode) saveCurrentHistoryNow("source-mode-change")
         currentMode = mode
         _state.update { it.copy(sourceMode = mode) }
     }
@@ -2199,6 +2200,9 @@ class TranslationService : LifecycleService() {
 
     override fun onDestroy() {
         if (_state.value.running) stopTranslation("Dịch vụ đã dừng")
+        historySaveJob?.cancel()
+        historySaveJob = null
+        saveCurrentHistoryNow("service-destroy")
         ttsEngine?.shutdown()
         ttsEngine = null
         ttsReady = false

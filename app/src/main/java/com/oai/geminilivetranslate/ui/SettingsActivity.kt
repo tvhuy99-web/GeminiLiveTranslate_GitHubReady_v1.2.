@@ -48,7 +48,6 @@ class SettingsActivity : AppCompatActivity() {
     private var activeTab = "basic"
     private var original = AppSettings()
     private var draft = AppSettings()
-    private var modelInput: EditText? = null
     private var languageInput: EditText? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +166,6 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         content.removeAllViews()
-        modelInput = null
         languageInput = null
 
         when (key) {
@@ -203,7 +201,6 @@ class SettingsActivity : AppCompatActivity() {
         rowButton("Thiết lập API") {
             startActivity(Intent(this, ApiSettingsActivity::class.java))
         }
-        description("Quản lý Gemini, OpenAI-compatible / Proxy, model, kiểm tra kết nối, streaming và lời nhắc mô tả video.")
 
         title("Cách ứng dụng ưu tiên")
         val profiles = listOf("realtime", "balanced", "stable", "custom")
@@ -228,14 +225,6 @@ class SettingsActivity : AppCompatActivity() {
             draft = draft.copy(uiMode = if (it == 0) "simple" else "advanced")
         }
         description("Chế độ Đơn giản chỉ hiện các nút thường dùng.")
-
-        title("Model dịch trực tiếp")
-        modelInput = labeledEditText(
-            label = "Model dùng cho chế độ Dịch thuật",
-            value = draft.model,
-            hint = "Giữ nguyên nếu không được hướng dẫn thay đổi",
-        )
-        description("Mục này chỉ áp dụng cho chế độ Dịch thuật. Model Mô tả video được cấu hình trong Thiết lập API.")
 
         title("Ngôn ngữ cần dịch sang")
         val currentIndex = LanguageCatalog.codes.indexOf(draft.targetLanguage).coerceAtLeast(0)
@@ -578,7 +567,6 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun captureTextFields() {
-        modelInput?.text?.toString()?.let { draft = draft.copy(model = it) }
         languageInput?.text?.toString()?.let {
             draft = draft.copy(targetLanguage = it)
         }

@@ -396,6 +396,7 @@ class GeminiVideoDescriptionClient(
         val request = Request.Builder()
             .url(INTERACTIONS_ENDPOINT)
             .header("x-goog-api-key", apiKey)
+            .header("Api-Revision", INTERACTIONS_API_REVISION)
             .header("Content-Type", "application/json")
             .post(requestJson.toString().toRequestBody(JSON_MEDIA))
             .build()
@@ -425,12 +426,12 @@ class GeminiVideoDescriptionClient(
             val activeId = interactionId
             for (poll in 0..MAX_INTERACTION_POLLS) {
                 when (root.optString("status").lowercase()) {
-                    "", "completed" -> return InteractionResult(
+                    "completed" -> return InteractionResult(
                         root = root,
                         id = activeId,
                         elapsedMs = SystemClock.elapsedRealtime() - startedAt,
                     )
-                    "failed", "cancelled", "incomplete" -> {
+                    "failed", "cancelled", "incomplete", "budget_exceeded" -> {
                         val message = root.optJSONObject("error")
                             ?.optString("message")
                             ?.takeIf(String::isNotBlank)
@@ -448,6 +449,7 @@ class GeminiVideoDescriptionClient(
                 val pollRequest = Request.Builder()
                     .url("$INTERACTIONS_ENDPOINT/$cleanId")
                     .header("x-goog-api-key", apiKey)
+                    .header("Api-Revision", INTERACTIONS_API_REVISION)
                     .get()
                     .build()
                 root = client.newCall(pollRequest).execute().use { response ->
@@ -481,6 +483,7 @@ class GeminiVideoDescriptionClient(
         val request = Request.Builder()
             .url("$INTERACTIONS_ENDPOINT/$cleanId/cancel")
             .header("x-goog-api-key", apiKey)
+            .header("Api-Revision", INTERACTIONS_API_REVISION)
             .post(ByteArray(0).toRequestBody(null))
             .build()
         runCatching {
@@ -499,6 +502,7 @@ class GeminiVideoDescriptionClient(
         val request = Request.Builder()
             .url("$INTERACTIONS_ENDPOINT/$cleanId")
             .header("x-goog-api-key", apiKey)
+            .header("Api-Revision", INTERACTIONS_API_REVISION)
             .delete()
             .build()
         runCatching {
@@ -906,6 +910,7 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
             "https://generativelanguage.googleapis.com/upload/v1beta/files"
         private const val INTERACTIONS_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/interactions"
+        private const val INTERACTIONS_API_REVISION = "2026-05-20"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

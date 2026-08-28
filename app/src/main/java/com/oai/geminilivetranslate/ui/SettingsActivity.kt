@@ -503,12 +503,6 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun buildSystem() {
-        title("AI và kết nối")
-        description("API Key, nhà cung cấp, model, streaming, tự kết nối lại và kiểm tra kết nối đã được chuyển vào Thiết lập API.")
-        rowButton("Mở Thiết lập API") {
-            startActivity(Intent(this, ApiSettingsActivity::class.java))
-        }
-
         title("Khôi phục và xóa dữ liệu")
         rowButton("Đưa cài đặt về mặc định") { confirmRestoreSettings() }
         rowButton("Xóa các bản ghi âm") { confirmDeleteRecordings() }

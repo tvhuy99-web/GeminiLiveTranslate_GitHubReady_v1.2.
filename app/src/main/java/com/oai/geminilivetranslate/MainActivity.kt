@@ -37,17 +37,14 @@ import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SessionUiState
 import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityMainBinding
-import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
 import com.oai.geminilivetranslate.ui.HistoryActivity
 import com.oai.geminilivetranslate.ui.LogViewerActivity
 import com.oai.geminilivetranslate.ui.MiniBrowserActivity
 import com.oai.geminilivetranslate.ui.SettingsActivity
 import com.oai.geminilivetranslate.ui.SubtitlePlaybackActivity
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 

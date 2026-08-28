@@ -49,14 +49,12 @@ class ApiKeyStore(context: Context) {
     @Synchronized
     fun setGeminiKey(key: String): State {
         val normalized = key.trim()
+        val current = load()
         if (normalized.isBlank()) {
-            val current = load()
-            return save(current.copy(selected = current.keys.firstOrNull()))
+            return save(current.copy(keys = emptyList(), selected = null))
         }
         require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
-        val current = load()
-        val keys = (current.keys + normalized).distinct()
-        return save(current.copy(keys = keys, selected = normalized))
+        return save(current.copy(keys = listOf(normalized), selected = normalized))
     }
 
     @Synchronized
@@ -70,7 +68,12 @@ class ApiKeyStore(context: Context) {
     fun remove(key: String): State {
         val current = load()
         val keys = current.keys.filterNot { it == key }
-        return save(State(keys, if (current.selected == key) keys.firstOrNull() else current.selected))
+        return save(
+            current.copy(
+                keys = keys,
+                selected = if (current.selected == key) keys.firstOrNull() else current.selected,
+            )
+        )
     }
 
     @Synchronized

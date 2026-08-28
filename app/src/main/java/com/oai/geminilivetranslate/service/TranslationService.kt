@@ -1813,7 +1813,7 @@ class TranslationService : LifecycleService() {
             "webm" -> "video/webm"
             "wmv" -> "video/wmv"
             "3gp", "3gpp" -> "video/3gpp"
-            "mkv" -> error("Gemini 3.7 Flash chưa hỗ trợ trực tiếp video MKV. Hãy dùng MP4, WebM, MOV, AVI, MPEG, FLV, WMV hoặc 3GP")
+            "mkv" -> error("Gemini Interactions API chưa hỗ trợ trực tiếp video MKV. Hãy dùng MP4, WebM, MOV, AVI, MPEG, FLV, WMV hoặc 3GP")
             else -> null
         }
         if (extensionMime != null) return extensionMime
@@ -1822,7 +1822,7 @@ class TranslationService : LifecycleService() {
         val candidate = resolverMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
             ?: detectedMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
         return candidate ?: error(
-            "Định dạng video chưa được Gemini 3.7 Flash hỗ trợ trực tiếp"
+            "Định dạng video chưa được Gemini Interactions API hỗ trợ trực tiếp"
         )
     }
 

@@ -208,15 +208,20 @@ class SessionHistoryStore(context: Context) {
             }
         }
 
-        val fromText = transcript
+        val words = transcript
             .replace(Regex("\\s+"), " ")
             .trim()
             .split(' ')
             .filter(String::isNotBlank)
             .take(10)
-            .joinToString(" ")
-            .take(MAX_TITLE_CHARS)
-            .trim()
+        val fromText = buildString {
+            words.forEach { word ->
+                val extra = if (isEmpty()) word.length else word.length + 1
+                if (length + extra > MAX_TITLE_CHARS) return@forEach
+                if (isNotEmpty()) append(' ')
+                append(word)
+            }
+        }.trim()
         if (fromText.isNotBlank()) return fromText
 
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(createdAtMs))

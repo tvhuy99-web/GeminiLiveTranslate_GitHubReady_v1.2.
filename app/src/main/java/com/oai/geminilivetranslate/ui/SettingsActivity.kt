@@ -32,7 +32,6 @@ import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.PublicRecordingStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SettingsPolicy
-import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

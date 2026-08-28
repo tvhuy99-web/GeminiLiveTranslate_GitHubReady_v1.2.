@@ -51,6 +51,8 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var proxyKey: EditText
     private lateinit var proxyModel: EditText
     private lateinit var streamingSwitch: Switch
+    private lateinit var autoReconnectSwitch: Switch
+    private lateinit var reconnectRetriesInput: EditText
     private lateinit var timeoutInput: EditText
     private lateinit var temperatureInput: EditText
     private lateinit var timelinePrompt: EditText
@@ -162,6 +164,22 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
         root.addView(streamingSwitch)
 
+        root.addView(section("Kết nối và tự khôi phục"))
+        autoReconnectSwitch = Switch(this).apply {
+            text = "Tự kết nối lại khi bị gián đoạn"
+            textSize = 16f
+            minimumHeight = dp(48)
+            contentDescription = "Tự kết nối lại khi mạng hoặc dịch vụ bị gián đoạn"
+        }
+        root.addView(autoReconnectSwitch)
+
+        root.addView(label("Số lần thử kết nối lại"))
+        reconnectRetriesInput = numericEdit("3", decimal = false).apply {
+            contentDescription = "Số lần thử kết nối lại, từ 1 đến 10"
+        }
+        root.addView(reconnectRetriesInput)
+        root.addView(help("Áp dụng cho các phiên Gemini trực tiếp cần duy trì kết nối. Khi tắt tự kết nối lại, ứng dụng sẽ không tự nối lại phiên bị gián đoạn."))
+
         root.addView(label("Timeout yêu cầu AI (ms)"))
         timeoutInput = numericEdit("300000", decimal = false).apply {
             contentDescription = "Timeout yêu cầu AI tính bằng mili giây"
@@ -254,6 +272,13 @@ class ApiSettingsActivity : AppCompatActivity() {
         proxyKey.setText(secretState.proxyKey.orEmpty())
         proxyModel.setText(settings.proxyModel)
         streamingSwitch.isChecked = settings.streamingEnabled
+        val appSettings = AppPreferences(this).load()
+        autoReconnectSwitch.isChecked = appSettings.autoReconnect
+        reconnectRetriesInput.setText(appSettings.reconnectMaxRetries.toString())
+        reconnectRetriesInput.isEnabled = appSettings.autoReconnect
+        autoReconnectSwitch.setOnCheckedChangeListener { _, checked ->
+            reconnectRetriesInput.isEnabled = checked
+        }
         timeoutInput.setText(settings.requestTimeoutMs.toString())
         temperatureInput.setText(settings.temperature.toString())
         timelinePrompt.setText(settings.timelinePrompt)
@@ -268,6 +293,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         val proxyUrlValue = proxyUrl.text.toString().trim()
         val timeoutValue = timeoutInput.text.toString().trim().toIntOrNull()
         val temperatureValue = temperatureInput.text.toString().trim().toDoubleOrNull()
+        val reconnectRetriesValue = reconnectRetriesInput.text.toString().trim().toIntOrNull()
 
         if (geminiValue.isNotBlank() && (geminiValue.length < 20 || geminiValue.any(Char::isWhitespace))) {
             toast("Gemini API Key không hợp lệ")
@@ -285,11 +311,22 @@ class ApiSettingsActivity : AppCompatActivity() {
             toast("Nhiệt độ AI phải từ 0.0 đến 2.0")
             return
         }
+        if (reconnectRetriesValue == null || reconnectRetriesValue !in 1..10) {
+            toast("Số lần thử kết nối lại phải từ 1 đến 10")
+            return
+        }
 
         val previousGeminiKey = keys.load().selected
         runCatching {
             keys.setGeminiKey(geminiValue)
             keys.setProxyKey(proxyValue)
+            val appPreferences = AppPreferences(this)
+            appPreferences.save(
+                appPreferences.load().copy(
+                    autoReconnect = autoReconnectSwitch.isChecked,
+                    reconnectMaxRetries = reconnectRetriesValue,
+                )
+            )
             store.save(
                 AiApiSettings(
                     provider = provider,
@@ -314,7 +351,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyChanged=${previousGeminiKey != currentGeminiKey}",
+                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyChanged=${previousGeminiKey != currentGeminiKey}",
             )
             toast("Đã lưu thiết lập API")
             finish()

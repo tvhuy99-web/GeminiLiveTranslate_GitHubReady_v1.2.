@@ -31,6 +31,9 @@
         android:usesCleartextTraffic="false">
 
         <activity
+            android:name=".ui.SubtitlePlaybackActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.LogViewerActivity"
             android:exported="false" />
         <activity

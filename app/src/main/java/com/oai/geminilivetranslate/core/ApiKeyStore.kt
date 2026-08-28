@@ -17,11 +17,11 @@ class ApiKeyStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("gemini_translate_secrets", Context.MODE_PRIVATE)
 
-    data class State(val keys: List<String>, val selected: String?)
+    data class State(val keys: List<String>, val selected: String?, val proxyKey: String? = null)
 
     @Synchronized
     fun load(): State {
-        val payload = prefs.getString(PAYLOAD, null) ?: return State(emptyList(), null)
+        val payload = prefs.getString(PAYLOAD, null) ?: return State(emptyList(), null, null)
         return runCatching {
             val root = JSONObject(decrypt(payload))
             val array = root.optJSONArray("keys") ?: JSONArray()
@@ -32,8 +32,9 @@ class ApiKeyStore(context: Context) {
                 }
             }
             val selected = root.optString("selected").takeIf { it in keys } ?: keys.firstOrNull()
-            State(keys, selected)
-        }.getOrElse { State(emptyList(), null) }
+            val proxyKey = root.optString("proxyKey").trim().takeIf(String::isNotBlank)
+            State(keys, selected, proxyKey)
+        }.getOrElse { State(emptyList(), null, null) }
     }
 
     @Synchronized
@@ -42,7 +43,27 @@ class ApiKeyStore(context: Context) {
         require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
         val current = load()
         val keys = (current.keys + normalized).distinct()
-        return save(State(keys, normalized))
+        return save(current.copy(keys = keys, selected = normalized))
+    }
+
+    @Synchronized
+    fun setGeminiKey(key: String): State {
+        val normalized = key.trim()
+        if (normalized.isBlank()) {
+            val current = load()
+            return save(current.copy(selected = current.keys.firstOrNull()))
+        }
+        require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
+        val current = load()
+        val keys = (current.keys + normalized).distinct()
+        return save(current.copy(keys = keys, selected = normalized))
+    }
+
+    @Synchronized
+    fun setProxyKey(key: String): State {
+        val normalized = key.trim()
+        require(normalized.isBlank() || normalized.none(Char::isWhitespace)) { "API Key Proxy không hợp lệ" }
+        return save(load().copy(proxyKey = normalized.takeIf(String::isNotBlank)))
     }
 
     @Synchronized
@@ -75,7 +96,7 @@ class ApiKeyStore(context: Context) {
     }
 
     private fun save(state: State): State {
-        val root = JSONObject().put("keys", JSONArray(state.keys)).put("selected", state.selected ?: "")
+        val root = JSONObject().put("keys", JSONArray(state.keys)).put("selected", state.selected ?: "").put("proxyKey", state.proxyKey ?: "")
         prefs.edit().putString(PAYLOAD, encrypt(root.toString())).commit()
         invalidateLogRedactionCache()
         return state

@@ -901,7 +901,6 @@ class TranslationService : LifecycleService() {
                     )
                 }
             } finally {
-                client.close()
                 subtitleTranslationJob = null
             }
         }

@@ -18,6 +18,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
+import com.oai.geminilivetranslate.core.AiApiEndpointRules
 import com.oai.geminilivetranslate.core.AiApiSettings
 import com.oai.geminilivetranslate.core.AiApiSettingsStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
@@ -422,7 +423,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         if (!proxyUrlValue.startsWith("https://")) {
             error("URL OpenAI-compatible phải dùng HTTPS")
         }
-        val endpoint = normalizeProxyTestEndpoint(proxyUrlValue)
+        val endpoint = AiApiEndpointRules.proxyChatEndpoint(proxyUrlValue)
         val payload = JSONObject()
             .put("model", modelValue)
             .put(
@@ -449,15 +450,6 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun normalizeProxyTestEndpoint(raw: String): String {
-        val url = raw.trim().removeSuffix("/")
-        return when {
-            url.endsWith("/chat/completions") -> url
-            url.endsWith("/responses") -> url.removeSuffix("/responses") + "/chat/completions"
-            else -> "$url/chat/completions"
-        }
-    }
-
     private fun fetchModelList(
         provider: String,
         keyValue: String,
@@ -466,7 +458,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         val (url, key) = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
             "https://generativelanguage.googleapis.com/v1beta/models" to keyValue
         } else {
-            modelsUrl(proxyUrlValue) to keyValue
+            AiApiEndpointRules.proxyModelsEndpoint(proxyUrlValue) to keyValue
         }
         if (provider == AiApiSettingsStore.PROVIDER_GEMINI && key.isBlank()) {
             error("Hãy nhập Gemini API Key trước")
@@ -507,14 +499,6 @@ class ApiSettingsActivity : AppCompatActivity() {
             }
         }
         return output.distinct().sorted()
-    }
-
-    private fun modelsUrl(raw: String): String {
-        var url = raw.trim().ifBlank { AiApiSettingsStore.DEFAULT_PROXY_URL }
-        url = url.removeSuffix("/")
-        url = url.removeSuffix("/chat/completions")
-        url = url.removeSuffix("/responses")
-        return "$url/models"
     }
 
     private fun currentProvider(): String =

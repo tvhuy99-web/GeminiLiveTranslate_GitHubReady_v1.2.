@@ -276,7 +276,31 @@ class OpenAiCompatibleVideoDescriptionClient(
         val choices = root.optJSONArray("choices")
         if (choices != null && choices.length() > 0) {
             val content = choices.optJSONObject(0)?.optJSONObject("message")?.opt("content")
-            if (content is String) return content.trim()
+            when (content) {
+                is String -> if (content.isNotBlank()) return content.trim()
+                is JSONArray -> {
+                    val parts = ArrayList<String>()
+                    for (i in 0 until content.length()) {
+                        val item = content.optJSONObject(i) ?: continue
+                        item.optString("text").takeIf(String::isNotBlank)?.let(parts::add)
+                    }
+                    if (parts.isNotEmpty()) return parts.joinToString("").trim()
+                }
+            }
+        }
+        val output = root.optJSONArray("output")
+        if (output != null) {
+            val parts = ArrayList<String>()
+            for (i in 0 until output.length()) {
+                val item = output.optJSONObject(i) ?: continue
+                val content = item.optJSONArray("content") ?: continue
+                for (j in 0 until content.length()) {
+                    content.optJSONObject(j)?.optString("text")
+                        ?.takeIf(String::isNotBlank)
+                        ?.let(parts::add)
+                }
+            }
+            if (parts.isNotEmpty()) return parts.joinToString("").trim()
         }
         error("API OpenAI-compatible không trả nội dung")
     }
@@ -285,7 +309,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         outputText: String,
         durationSeconds: Double,
     ): List<GeminiVideoDescriptionClient.TimelineItem> {
-        val root = JSONObject(outputText.trim())
+        val root = JSONObject(stripJsonFence(outputText))
         val array = root.optJSONArray("items") ?: error("Kết quả thiếu trường items")
         val parsed = ArrayList<VideoDescriptionTimelineRules.Item>()
         for (i in 0 until array.length()) {
@@ -316,6 +340,16 @@ class OpenAiCompatibleVideoDescriptionClient(
         }
     }
 
+    private fun stripJsonFence(value: String): String {
+        val trimmed = value.trim()
+        if (!trimmed.startsWith("```")) return trimmed
+        return trimmed
+            .removePrefix("```json")
+            .removePrefix("```JSON")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+    }
     private fun timelinePreview(partialJson: String): String {
         val regex = Regex("""\"text\"\s*:\s*\"((?:\\\\.|[^\"\\\\])*)\"""")
         return regex.findAll(partialJson)

@@ -1,6 +1,5 @@
 package com.oai.geminilivetranslate.core
 
-/** Central source of truth for validation, presets and live-application rules. */
 object SettingsPolicy {
     val validUiModes = setOf("simple", "advanced")
     val validProfiles = setOf("realtime", "balanced", "stable", "custom")
@@ -24,7 +23,7 @@ object SettingsPolicy {
         val target = LanguageCatalog.normalize(input.targetLanguage) ?: "vi"
         val queueMax = input.translatedQueueMax.coerceIn(5, 100)
         return input.copy(
-            model = input.model.trim().removePrefix("models/").ifBlank { AppPreferences.DEFAULT_MODEL },
+            model = AppPreferences.DEFAULT_MODEL,
             targetLanguage = target,
             aiAudioStreamType = input.aiAudioStreamType.takeIf(validAiAudioStreamTypes::contains) ?: "accessibility",
             duckVolumeFactor = input.duckVolumeFactor.coerceIn(0f, 1f),
@@ -92,10 +91,6 @@ object SettingsPolicy {
     })
 
 
-    /**
-     * Persisted settings may contain values that are intentionally deferred until a fresh source session.
-     * Keep the current session coherent instead of changing only half of its audio pipeline.
-     */
     fun activeSessionSettings(before: AppSettings, persistedAfter: AppSettings): AppSettings {
         val old = sanitize(before)
         val next = sanitize(persistedAfter)
@@ -117,7 +112,6 @@ object SettingsPolicy {
         val changed = linkedSetOf<String>()
         fun mark(name: String, valueChanged: Boolean) { if (valueChanged) changed += name }
 
-        mark("model", before.model != after.model)
         mark("targetLanguage", before.targetLanguage != after.targetLanguage)
         mark("echoTargetLanguage", before.echoTargetLanguage != after.echoTargetLanguage)
         mark("aiVoice", before.aiVoice != after.aiVoice)
@@ -153,7 +147,7 @@ object SettingsPolicy {
         mark("micLanguages", before.micLanguages != after.micLanguages)
         mark("micLanguageIndex", before.micLanguageIndex != after.micLanguageIndex)
 
-        val reconnect = changed.intersect(setOf("model", "targetLanguage", "echoTargetLanguage"))
+        val reconnect = changed.intersect(setOf("targetLanguage", "echoTargetLanguage"))
         val playbackRebuild = changed.intersect(setOf(
             "translatedBufferBytes", "translatedQueueMax", "outputJitterTarget", "aiAudioStreamType"
         ))

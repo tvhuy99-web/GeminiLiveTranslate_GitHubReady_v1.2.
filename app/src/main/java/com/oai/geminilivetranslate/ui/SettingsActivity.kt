@@ -23,6 +23,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.oai.geminilivetranslate.audio.TtsPreferences
+import com.oai.geminilivetranslate.core.AiApiSettingsStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -31,7 +32,6 @@ import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.PublicRecordingStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SettingsPolicy
-import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,7 +48,6 @@ class SettingsActivity : AppCompatActivity() {
     private var activeTab = "basic"
     private var original = AppSettings()
     private var draft = AppSettings()
-    private var modelInput: EditText? = null
     private var languageInput: EditText? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +166,6 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         content.removeAllViews()
-        modelInput = null
         languageInput = null
 
         when (key) {
@@ -199,6 +197,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun buildBasic() {
+        title("AI và API")
+        rowButton("Thiết lập API") {
+            startActivity(Intent(this, ApiSettingsActivity::class.java))
+        }
+
         title("Cách ứng dụng ưu tiên")
         val profiles = listOf("realtime", "balanced", "stable", "custom")
         val profileLabels = listOf("Phản hồi nhanh", "Cân bằng", "Ổn định hơn", "Tự điều chỉnh")
@@ -222,14 +225,6 @@ class SettingsActivity : AppCompatActivity() {
             draft = draft.copy(uiMode = if (it == 0) "simple" else "advanced")
         }
         description("Chế độ Đơn giản chỉ hiện các nút thường dùng.")
-
-        title("Bộ máy dịch")
-        modelInput = labeledEditText(
-            label = "Tên bộ máy dịch",
-            value = draft.model,
-            hint = "Giữ nguyên nếu không được hướng dẫn thay đổi",
-        )
-        description("Giữ nguyên lựa chọn này nếu ứng dụng đang dịch bình thường.")
 
         title("Ngôn ngữ cần dịch sang")
         val currentIndex = LanguageCatalog.codes.indexOf(draft.targetLanguage).coerceAtLeast(0)
@@ -497,40 +492,6 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun buildSystem() {
-        title("Khi mất kết nối")
-        check(
-            label = "Tự kết nối lại",
-            checked = draft.autoReconnect,
-            detail = "Ứng dụng sẽ tự thử lại khi mạng hoặc dịch vụ bị gián đoạn.",
-        ) {
-            draft = draft.copy(autoReconnect = it)
-            rebuildActiveTab("Tự kết nối lại")
-        }
-        if (draft.autoReconnect) {
-            slider(
-                label = "Số lần thử lại",
-                current = draft.reconnectMaxRetries,
-                minValue = 1,
-                maxValue = 10,
-                step = 1,
-                unit = " lần",
-            ) {
-                draft = draft.copy(reconnectMaxRetries = it)
-            }
-        }
-
-        title("Kiểm tra kết nối")
-        content.addView(Button(this).apply {
-            text = "Kiểm tra kết nối dịch"
-            isAllCaps = false
-            minHeight = dp(48)
-            contentDescription = "Kiểm tra kết nối dịch"
-            setOnClickListener {
-                captureTextFields()
-                testConnection(this)
-            }
-        })
-
         title("Khôi phục và xóa dữ liệu")
         rowButton("Đưa cài đặt về mặc định") { confirmRestoreSettings() }
         rowButton("Xóa các bản ghi âm") { confirmDeleteRecordings() }
@@ -606,55 +567,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun captureTextFields() {
-        modelInput?.text?.toString()?.let { draft = draft.copy(model = it) }
         languageInput?.text?.toString()?.let {
             draft = draft.copy(targetLanguage = it)
-        }
-    }
-
-    private fun testConnection(button: Button) {
-        val safeDraft = SettingsPolicy.sanitize(draft)
-        val key = apiKeys.load().selected
-        if (key.isNullOrBlank()) {
-            toast("Chưa có khóa truy cập")
-            return
-        }
-
-        button.isEnabled = false
-        button.text = "Đang kiểm tra..."
-        logger.log(
-            2,
-            "Settings",
-            "Bắt đầu kiểm tra API model=${safeDraft.model} target=${safeDraft.targetLanguage}",
-        )
-
-        lifecycleScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    GeminiLiveClient.testConnection(
-                        key,
-                        safeDraft.model,
-                        safeDraft.targetLanguage,
-                        safeDraft.echoTargetLanguage,
-                        logger,
-                    )
-                }
-            }.onSuccess {
-                logger.log(2, "Settings", "Kiểm tra API thành công latencyMs=$it")
-                toast("Kết nối tốt")
-            }.onFailure {
-                logger.log(0, "Settings", "Kiểm tra API thất bại", it)
-                AlertDialog.Builder(this@SettingsActivity)
-                    .setTitle("Không thể kết nối")
-                    .setMessage(
-                        "Hãy kiểm tra mạng, khóa truy cập và bộ máy dịch, rồi thử lại.",
-                    )
-                    .setPositiveButton("Đóng", null)
-                    .show()
-            }
-
-            button.isEnabled = true
-            button.text = "Kiểm tra kết nối dịch"
         }
     }
 
@@ -664,6 +578,7 @@ class SettingsActivity : AppCompatActivity() {
         positive = "Khôi phục",
     ) {
         val restored = preferences.restoreDefaultsPreservingKeys()
+        AiApiSettingsStore(this).clear()
         TtsPreferences(this).reset()
         draft = restored
         original = restored
@@ -725,6 +640,7 @@ class SettingsActivity : AppCompatActivity() {
         apiKeys.clear()
         logger.clear()
         preferences.clear()
+        AiApiSettingsStore(this).clear()
         TtsPreferences(this).clear()
         PublicRecordingStore(this, logger).deleteAll()
         File(cacheDir, "diagnostic-share").deleteRecursively()
@@ -990,7 +906,6 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         private val FRIENDLY_NAMES = mapOf(
-            "model" to "bộ máy dịch",
             "targetLanguage" to "ngôn ngữ cần dịch sang",
             "echoTargetLanguage" to "đọc lại câu đã đúng ngôn ngữ",
             "aiVoice" to "giọng dịch",

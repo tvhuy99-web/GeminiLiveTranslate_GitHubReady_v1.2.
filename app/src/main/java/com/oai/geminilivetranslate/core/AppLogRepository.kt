@@ -21,7 +21,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** Process-wide diagnostics store. Every SessionLogger instance delegates here. */
 class AppLogRepository private constructor(context: Context) {
     data class Entry(
         val sequence: Long,
@@ -181,6 +180,7 @@ class AppLogRepository private constructor(context: Context) {
 
     private fun diagnosticSummary(): String {
         val settings = preferences.load()
+        val aiApi = AiApiSettingsStore(appContext).load()
         val runtime = Runtime.getRuntime()
         val freeStorage = logDir.usableSpace / (1024L * 1024L)
         val logSizes = logFiles().joinToString { "${it.name}=${it.length() / 1024}KB" }.ifBlank { "không có" }
@@ -198,6 +198,8 @@ class AppLogRepository private constructor(context: Context) {
             appendLine()
             appendLine("--- Cài đặt đã khử dữ liệu nhạy cảm ---")
             appendLine("model=${settings.model}")
+            appendLine("videoProvider=${aiApi.provider}, videoGeminiModel=${aiApi.geminiModel}, videoProxyModel=${aiApi.proxyModel}, streaming=${aiApi.streamingEnabled}, timeoutMs=${aiApi.requestTimeoutMs}, temperature=${aiApi.temperature}")
+            appendLine("videoTimelinePromptChars=${aiApi.timelinePrompt.length}, videoSummaryPromptChars=${aiApi.summaryPrompt.length}")
             appendLine("targetLanguage=${settings.targetLanguage}")
             appendLine("echoTargetLanguage=${settings.echoTargetLanguage}")
             appendLine("profile=${settings.performanceProfile}, uiMode=${settings.uiMode}")
@@ -287,7 +289,10 @@ class AppLogRepository private constructor(context: Context) {
         val now = SystemClock.elapsedRealtime()
         if (secretsLoadedAt != 0L && now - secretsLoadedAt < 60_000L) return
         secretsLoadedAt = now
-        cachedSecrets = runCatching { ApiKeyStore(appContext).load().keys }.getOrDefault(emptyList())
+        cachedSecrets = runCatching {
+            val state = ApiKeyStore(appContext).load()
+            (state.keys + listOfNotNull(state.proxyKey)).distinct()
+        }.getOrDefault(emptyList())
     }
 
     companion object {

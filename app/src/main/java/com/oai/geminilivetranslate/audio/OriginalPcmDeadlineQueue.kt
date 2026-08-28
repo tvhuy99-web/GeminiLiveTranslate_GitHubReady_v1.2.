@@ -3,14 +3,6 @@ package com.oai.geminilivetranslate.audio
 import java.util.ArrayDeque
 import kotlin.math.ceil
 
-/**
- * Schedules original-file PCM on a monotonic wall-clock timeline.
- *
- * TranslationService already holds the first original chunk by fileSyncDelayMs. When that hold
- * expires it may release a burst of accumulated PCM. This queue turns that burst back into a
- * per-chunk playback timeline, matching the Lua implementation's delayed FIFO semantics instead
- * of pushing the whole backlog into AudioTrack at once.
- */
 class OriginalPcmDeadlineQueue(
     private val sampleRate: Int,
 ) {
@@ -93,7 +85,7 @@ class OriginalPcmDeadlineQueue(
         if (pausedAtMs == null) pausedAtMs = nowMs
     }
 
-    /** Returns the pause duration that was added to every pending deadline. */
+    
     @Synchronized
     fun resume(nowMs: Long): Long {
         val pausedAt = pausedAtMs ?: return 0L
@@ -106,10 +98,7 @@ class OriginalPcmDeadlineQueue(
         return pausedFor
     }
 
-    /**
-     * Re-space queued chunks when File playback speed changes, while preserving the first pending
-     * chunk's remaining offset. New chunks continue from the retimed tail.
-     */
+    
     @Synchronized
     fun retime(playbackSpeed: Float, nowMs: Long) {
         if (queue.isEmpty()) return
@@ -123,7 +112,7 @@ class OriginalPcmDeadlineQueue(
         nextDueAtMs = cursor
     }
 
-    /** Clears the timeline and advances its generation so a stale ready chunk can be rejected. */
+    
     @Synchronized
     fun clear(): Int {
         val removed = queue.size

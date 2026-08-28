@@ -43,6 +43,9 @@
             android:name=".ui.TtsSettingsActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.ApiSettingsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.SettingsActivity"
             android:exported="false" />
         <activity

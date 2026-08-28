@@ -12,6 +12,7 @@ data class HistorySession(
     val id: String,
     val sourceMode: String,
     val processingMode: String,
+    val videoDescriptionMode: String,
     val title: String,
     val mediaUri: String?,
     val mediaName: String?,
@@ -19,6 +20,9 @@ data class HistorySession(
     val primarySrt: String,
     val vietnameseTranscript: String,
     val vietnameseSrt: String,
+    val videoTimelineTranscript: String,
+    val videoTimelineSrt: String,
+    val videoSummaryText: String,
     val showingVietnamese: Boolean,
     val speakerDiarization: Boolean,
     val createdAtMs: Long,
@@ -28,7 +32,10 @@ data class HistorySession(
         get() = primaryTranscript.isNotBlank() ||
             primarySrt.isNotBlank() ||
             vietnameseTranscript.isNotBlank() ||
-            vietnameseSrt.isNotBlank()
+            vietnameseSrt.isNotBlank() ||
+            videoTimelineTranscript.isNotBlank() ||
+            videoTimelineSrt.isNotBlank() ||
+            videoSummaryText.isNotBlank()
 
     val hasVietnamese: Boolean
         get() = vietnameseTranscript.isNotBlank() || vietnameseSrt.isNotBlank()
@@ -48,11 +55,13 @@ class SessionHistoryStore(context: Context) {
         mediaUri: String?,
         mediaName: String?,
         speakerDiarization: Boolean,
+        videoDescriptionMode: String = AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
         nowMs: Long = System.currentTimeMillis(),
     ): HistorySession = HistorySession(
         id = UUID.randomUUID().toString(),
         sourceMode = sourceMode,
         processingMode = processingMode,
+        videoDescriptionMode = videoDescriptionMode,
         title = deriveTitle(sourceMode, mediaName, "", nowMs),
         mediaUri = mediaUri,
         mediaName = mediaName,
@@ -60,6 +69,9 @@ class SessionHistoryStore(context: Context) {
         primarySrt = "",
         vietnameseTranscript = "",
         vietnameseSrt = "",
+        videoTimelineTranscript = "",
+        videoTimelineSrt = "",
+        videoSummaryText = "",
         showingVietnamese = false,
         speakerDiarization = speakerDiarization,
         createdAtMs = nowMs,
@@ -151,6 +163,7 @@ class SessionHistoryStore(context: Context) {
         .put("id", session.id)
         .put("sourceMode", session.sourceMode)
         .put("processingMode", session.processingMode)
+        .put("videoDescriptionMode", session.videoDescriptionMode)
         .put("title", session.title)
         .put("mediaUri", session.mediaUri ?: JSONObject.NULL)
         .put("mediaName", session.mediaName ?: JSONObject.NULL)
@@ -158,6 +171,9 @@ class SessionHistoryStore(context: Context) {
         .put("primarySrt", session.primarySrt)
         .put("vietnameseTranscript", session.vietnameseTranscript)
         .put("vietnameseSrt", session.vietnameseSrt)
+        .put("videoTimelineTranscript", session.videoTimelineTranscript)
+        .put("videoTimelineSrt", session.videoTimelineSrt)
+        .put("videoSummaryText", session.videoSummaryText)
         .put("showingVietnamese", session.showingVietnamese)
         .put("speakerDiarization", session.speakerDiarization)
         .put("createdAtMs", session.createdAtMs)
@@ -176,6 +192,13 @@ class SessionHistoryStore(context: Context) {
                 "processingMode",
                 AppPreferences.PROCESSING_MODE_TRANSCRIBE,
             ),
+            videoDescriptionMode = json.optString(
+                "videoDescriptionMode",
+                AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
+            ).takeIf {
+                it == AppPreferences.VIDEO_DESCRIPTION_TIMELINE ||
+                    it == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+            } ?: AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
             title = json.optString("title").ifBlank {
                 deriveTitle(
                     sourceMode,
@@ -190,6 +213,9 @@ class SessionHistoryStore(context: Context) {
             primarySrt = json.optString("primarySrt"),
             vietnameseTranscript = vietnameseTranscript,
             vietnameseSrt = json.optString("vietnameseSrt"),
+            videoTimelineTranscript = json.optString("videoTimelineTranscript"),
+            videoTimelineSrt = json.optString("videoTimelineSrt"),
+            videoSummaryText = json.optString("videoSummaryText"),
             showingVietnamese = json.optBoolean("showingVietnamese", false),
             speakerDiarization = json.optBoolean("speakerDiarization", false),
             createdAtMs = created,

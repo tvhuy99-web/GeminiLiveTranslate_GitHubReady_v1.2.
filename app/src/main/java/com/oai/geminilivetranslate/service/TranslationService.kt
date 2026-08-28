@@ -1,7 +1,6 @@
 package com.oai.geminilivetranslate.service
 
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
@@ -22,6 +21,7 @@ import com.oai.geminilivetranslate.audio.MicAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.audio.VideoAudioExtractor
+import com.oai.geminilivetranslate.core.AiApiSettingsStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -40,6 +40,8 @@ import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
+import com.oai.geminilivetranslate.network.GeminiVideoDescriptionClient
+import com.oai.geminilivetranslate.network.OpenAiCompatibleVideoDescriptionClient
 import com.oai.geminilivetranslate.network.SubtitleTranslationClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -93,6 +95,8 @@ class TranslationService : LifecycleService() {
     @Volatile private var client: GeminiLiveClient? = null
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
+    @Volatile private var videoDescriptionClient: GeminiVideoDescriptionClient? = null
+    @Volatile private var proxyVideoDescriptionClient: OpenAiCompatibleVideoDescriptionClient? = null
     private var subtitleTranslationJob: Job? = null
     private var historySaveJob: Job? = null
     private var currentHistorySession: HistorySession? = null
@@ -138,12 +142,14 @@ class TranslationService : LifecycleService() {
     @Volatile private var transcribePlainText = ""
     @Volatile private var liveCommittedTranscript = ""
     @Volatile private var liveInterimTranscript = ""
+    @Volatile private var videoSummaryText = ""
     private var liveInterimEvents = 0L
     private var liveFinalEvents = 0L
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
     @Volatile private var processingMode = AppPreferences.PROCESSING_MODE_TRANSLATE
+    @Volatile private var videoDescriptionMode = AppPreferences.VIDEO_DESCRIPTION_TIMELINE
     @Volatile private var speakerDiarization = false
     private var sessionStartedAt = 0L
     private var totalInputBytes = 0L
@@ -170,12 +176,14 @@ class TranslationService : LifecycleService() {
         historyStore = SessionHistoryStore(this)
         settings = preferences.load()
         processingMode = preferences.loadProcessingMode()
+        videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         _state.update {
             it.copy(
                 aiVoice = settings.aiVoice,
                 currentLanguage = settings.targetLanguage,
-                sourceMode = currentMode
+                sourceMode = currentMode,
+                videoDescriptionMode = videoDescriptionMode,
             )
         }
         if (!settings.aiVoice) ensureTtsInitialized()
@@ -213,12 +221,38 @@ class TranslationService : LifecycleService() {
 
     fun setProcessingMode(value: String) {
         if (_state.value.running) return
-        processingMode = if (value == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            AppPreferences.PROCESSING_MODE_TRANSCRIBE
-        } else {
-            AppPreferences.PROCESSING_MODE_TRANSLATE
+        val next = when (value) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+            else -> AppPreferences.PROCESSING_MODE_TRANSLATE
         }
+        if (processingMode == next) return
+        saveCurrentHistoryNow("processing-mode-change")
+        processingMode = next
         preferences.setProcessingMode(processingMode)
+        currentHistorySession = currentHistorySession?.copy(
+            processingMode = processingMode,
+            videoDescriptionMode = videoDescriptionMode,
+        )
+        restoreCurrentHistoryViewForMode()
+    }
+
+    fun setVideoDescriptionMode(value: String) {
+        if (_state.value.running) return
+        val next = if (value == AppPreferences.VIDEO_DESCRIPTION_SUMMARY) {
+            AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+        } else {
+            AppPreferences.VIDEO_DESCRIPTION_TIMELINE
+        }
+        if (videoDescriptionMode == next) return
+        saveCurrentHistoryNow("video-description-mode-change")
+        videoDescriptionMode = next
+        preferences.setVideoDescriptionMode(videoDescriptionMode)
+        currentHistorySession = currentHistorySession?.copy(
+            processingMode = processingMode,
+            videoDescriptionMode = videoDescriptionMode,
+        )
+        restoreCurrentHistoryViewForMode()
     }
 
     fun setSpeakerDiarization(enabled: Boolean) {
@@ -248,15 +282,29 @@ class TranslationService : LifecycleService() {
         stopping.set(false)
         settings = preferences.load()
         processingMode = preferences.loadProcessingMode()
+        videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
-        val apiKey = keyStore.load().selected
-        if (apiKey.isNullOrBlank()) {
-            updateError("Chưa có API Key")
+        val aiApi = AiApiSettingsStore(this).load()
+        val useProxyVideoDescription =
+            isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
+        val apiKey = if (useProxyVideoDescription) null else keyStore.takeGeminiKey()
+        if (useProxyVideoDescription) {
+            if (aiApi.proxyModel.isBlank()) {
+                updateError("Chưa chọn model OpenAI-compatible")
+                return
+            }
+        } else if (apiKey.isNullOrBlank()) {
+            updateError("Chưa có Gemini API Key")
             return
         }
+        val geminiApiKey = apiKey.orEmpty()
         if (mode == SourceMode.FILE && selectedUri == null) {
-            updateError("Chưa chọn tệp âm thanh/video")
+            updateError(if (isVideoDescriptionMode()) "Chưa chọn video" else "Chưa chọn tệp âm thanh/video")
+            return
+        }
+        if (isVideoDescriptionMode() && mode != SourceMode.FILE) {
+            updateError("Mô tả video chỉ hỗ trợ tệp video")
             return
         }
         if (mode == SourceMode.INTERNAL && (projectionResultCode == null || projectionData == null)) {
@@ -280,6 +328,7 @@ class TranslationService : LifecycleService() {
             } else {
                 currentHistorySession = currentHistory.copy(
                     processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
                     speakerDiarization = speakerDiarization,
                 )
             }
@@ -294,6 +343,7 @@ class TranslationService : LifecycleService() {
             "session.source" to mode.name,
             "session.model" to activeModelName(),
             "session.processingMode" to processingMode,
+            "session.videoDescriptionMode" to videoDescriptionMode,
             "session.speakerDiarization" to speakerDiarization,
             "session.targetLanguage" to settings.targetLanguage,
             "session.filePlaybackSpeed" to filePlaybackSpeed,
@@ -301,7 +351,12 @@ class TranslationService : LifecycleService() {
         ))
         subtitles.reset()
         val initialState = _state.value.copy(
-            status = if (isTranscribeMode()) "Đang khởi động chép lời..." else "Đang khởi động phiên dịch...",
+            status = when {
+                isVideoDescriptionMode() && isVideoDescriptionSummary() -> "Đang khởi động mô tả tổng hợp..."
+                isVideoDescriptionMode() -> "Đang khởi động mô tả theo thời gian..."
+                isTranscribeMode() -> "Đang khởi động chép lời..."
+                else -> "Đang khởi động phiên dịch..."
+            },
             health = "",
             running = true,
             paused = false,
@@ -311,22 +366,31 @@ class TranslationService : LifecycleService() {
             selectedFileName = selectedFileName,
             transcript = "",
             progressPercent = 0,
-            canSeek = mode == SourceMode.FILE && !isTranscribeMode(),
-            aiVoice = settings.aiVoice && !isTranscribeMode(),
+            canSeek = mode == SourceMode.FILE && !isTranscribeMode() && !isVideoDescriptionMode(),
+            aiVoice = settings.aiVoice && !isTranscribeMode() && !isVideoDescriptionMode(),
             currentLanguage = settings.targetLanguage,
             lastError = null,
             subtitleTranslationAvailable = false,
             subtitleTranslationInProgress = false,
             subtitleShowingVietnamese = false,
+            videoDescriptionMode = videoDescriptionMode,
         )
         _state.value = initialState
         notificationController.start(this, initialState)
+
+        if (isVideoDescriptionMode()) {
+            runCatching { acquireWakeLock() }.onFailure {
+                logger.log(0, "VideoDescription", "Không tạo được wake lock", it)
+            }
+            startVideoDescription(geminiApiKey)
+            return
+        }
 
         if (isTranscribeMode() && mode == SourceMode.FILE) {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
             }
-            startFileTranscription(apiKey)
+            startFileTranscription(geminiApiKey)
             return
         }
 
@@ -364,10 +428,17 @@ class TranslationService : LifecycleService() {
             "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
         startHealthMonitor()
-        connectGemini(apiKey)
+        connectGemini(geminiApiKey)
     }
 
-    fun stopTranslation(message: String = if (isTranscribeMode()) "Đã dừng chép lời" else "Đã dừng dịch") {
+    fun stopTranslation(
+        message: String = when {
+            isVideoDescriptionMode() && isVideoDescriptionSummary() -> "Đã dừng mô tả tổng hợp"
+            isVideoDescriptionMode() -> "Đã dừng mô tả theo thời gian"
+            isTranscribeMode() -> "Đã dừng chép lời"
+            else -> "Đã dừng dịch"
+        }
+    ) {
         if (!stopping.compareAndSet(false, true)) return
         val hadActiveSession = _state.value.running || sessionId.isNotBlank()
         finalizeLiveTranscriptionFallback("stop")
@@ -381,6 +452,8 @@ class TranslationService : LifecycleService() {
         transcribeRotationJob?.cancel(); transcribeRotationJob = null
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
+        videoDescriptionClient?.cancel()
+        proxyVideoDescriptionClient?.cancel()
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
         runCatching { mediaProjection?.stop() }
@@ -598,7 +671,7 @@ class TranslationService : LifecycleService() {
             source?.pause()
             clearPendingInputForFreshSession()
             updateState { it.copy(setupComplete = false, status = "Đang áp dụng model/ngôn ngữ mới...") }
-            connectGemini(keyStore.load().selected.orEmpty())
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
         if (running && diff.nextSession.isNotEmpty()) {
             logger.log(1, "Settings", "Đã lưu cho phiên tiếp theo: ${diff.nextSession.joinToString()}; phiên hiện tại giữ queue=$activeInputQueueCapacity quality=${activeAfter.qualityMode}")
@@ -607,7 +680,15 @@ class TranslationService : LifecycleService() {
 
     private fun refreshConnectionWithSelectedApiKey() {
         if (!_state.value.running) return
-        val selectedKey = keyStore.load().selected
+        if (isTranscribeMode() || isVideoDescriptionMode()) {
+            logger.log(
+                2,
+                "ApiKey",
+                "API Key đã thay đổi; phiên hiện tại giữ cấu hình lúc bắt đầu và key mới áp dụng từ phiên tiếp theo processing=$processingMode",
+            )
+            return
+        }
+        val selectedKey = keyStore.takeGeminiKey()
         if (selectedKey.isNullOrBlank()) {
             stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")
             return
@@ -631,12 +712,15 @@ class TranslationService : LifecycleService() {
         if (_state.value.running && currentMode == SourceMode.MICROPHONE) {
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(keyStore.load().selected.orEmpty())
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
         return code
     }
 
     fun subtitleText(format: String = preferences.load().exportFormat): String {
+        if (isVideoDescriptionMode() && isVideoDescriptionSummary()) {
+            return if (format == "txt") videoSummaryText else ""
+        }
         val useVietnamese = _state.value.subtitleTranslationAvailable &&
             _state.value.subtitleShowingVietnamese
         val store = if (useVietnamese) vietnameseSubtitles else subtitles
@@ -675,7 +759,7 @@ class TranslationService : LifecycleService() {
             return
         }
 
-        val apiKey = keyStore.load().selected
+        val apiKey = keyStore.takeGeminiKey()
         if (apiKey.isNullOrBlank()) {
             logger.log(1, "SubtitleTranslate", "Không thể dịch vì chưa có API Key")
             updateState { it.copy(status = "Chưa có API Key để dịch phụ đề") }
@@ -865,12 +949,14 @@ class TranslationService : LifecycleService() {
         subtitles.reset()
         vietnameseSubtitles.reset()
 
-        processingMode = if (loaded.processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            AppPreferences.PROCESSING_MODE_TRANSCRIBE
-        } else {
-            AppPreferences.PROCESSING_MODE_TRANSLATE
+        processingMode = when (loaded.processingMode) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+            else -> AppPreferences.PROCESSING_MODE_TRANSLATE
         }
+        videoDescriptionMode = loaded.videoDescriptionMode
         preferences.setProcessingMode(processingMode)
+        preferences.setVideoDescriptionMode(videoDescriptionMode)
 
         currentMode = runCatching { SourceMode.valueOf(loaded.sourceMode) }
             .getOrDefault(SourceMode.FILE)
@@ -879,7 +965,22 @@ class TranslationService : LifecycleService() {
         selectedUri = loaded.mediaUri?.let(Uri::parse)
         selectedFileName = loaded.mediaName
 
-        restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+        when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY -> {
+                videoSummaryText = loaded.videoSummaryText
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> {
+                restoreStoreFromHistory(
+                    subtitles,
+                    loaded.videoTimelineSrt,
+                    loaded.videoTimelineTranscript,
+                )
+            }
+            else -> {
+                restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+            }
+        }
         restoreStoreFromHistory(
             vietnameseSubtitles,
             loaded.vietnameseSrt,
@@ -894,12 +995,21 @@ class TranslationService : LifecycleService() {
         liveCommittedTranscript = transcribePlainText
         liveInterimTranscript = ""
 
-        val hasVietnamese = loaded.hasVietnamese && vietnameseSubtitles.plainText().isNotBlank()
+        val hasVietnamese =
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE &&
+                loaded.hasVietnamese &&
+                vietnameseSubtitles.plainText().isNotBlank()
         val showVietnamese = loaded.showingVietnamese && hasVietnamese
-        val displayText = if (showVietnamese) {
-            loaded.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
-        } else {
-            loaded.primaryTranscript.ifBlank { subtitles.plainText() }
+        val displayText = when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
+                loaded.videoSummaryText
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION ->
+                loaded.videoTimelineTranscript.ifBlank { subtitles.plainText() }
+            showVietnamese ->
+                loaded.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
+            else ->
+                loaded.primaryTranscript.ifBlank { subtitles.plainText() }
         }
 
         currentHistorySession = loaded
@@ -918,19 +1028,97 @@ class TranslationService : LifecycleService() {
             transcript = displayText.takeLast(MAX_TRANSCRIPT_CHARS),
             progressPercent = 0,
             canSeek = false,
-            aiVoice = settings.aiVoice && processingMode != AppPreferences.PROCESSING_MODE_TRANSCRIBE,
+            aiVoice = settings.aiVoice &&
+                processingMode != AppPreferences.PROCESSING_MODE_TRANSCRIBE &&
+                processingMode != AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION,
             currentLanguage = settings.targetLanguage,
             lastError = null,
             subtitleTranslationAvailable = hasVietnamese,
             subtitleTranslationInProgress = false,
             subtitleShowingVietnamese = showVietnamese,
+            videoDescriptionMode = videoDescriptionMode,
         )
         logger.log(
             2,
             "History",
-            "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} showVi=$showVietnamese",
+            "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} videoMode=${loaded.videoDescriptionMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} videoTimelineChars=${loaded.videoTimelineTranscript.length} videoTimelineSrtChars=${loaded.videoTimelineSrt.length} videoSummaryChars=${loaded.videoSummaryText.length} showVi=$showVietnamese",
         )
         return true
+    }
+
+    private fun restoreCurrentHistoryViewForMode() {
+        subtitles.reset()
+        vietnameseSubtitles.reset()
+        transcribePlainText = ""
+        videoSummaryText = ""
+
+        val saved = currentHistorySession
+        if (saved == null) {
+            _state.update {
+                it.copy(
+                    transcript = "",
+                    subtitleTranslationAvailable = false,
+                    subtitleShowingVietnamese = false,
+                    videoDescriptionMode = videoDescriptionMode,
+                )
+            }
+            return
+        }
+
+        var display = ""
+        var hasVietnamese = false
+        var showVietnamese = false
+        when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY -> {
+                videoSummaryText = saved.videoSummaryText
+                display = videoSummaryText
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> {
+                restoreStoreFromHistory(
+                    subtitles,
+                    saved.videoTimelineSrt,
+                    saved.videoTimelineTranscript,
+                )
+                display = saved.videoTimelineTranscript.ifBlank { subtitles.plainText() }
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE -> {
+                restoreStoreFromHistory(subtitles, saved.primarySrt, saved.primaryTranscript)
+                restoreStoreFromHistory(
+                    vietnameseSubtitles,
+                    saved.vietnameseSrt,
+                    saved.vietnameseTranscript,
+                )
+                transcribePlainText = saved.primaryTranscript.ifBlank { subtitles.plainText() }
+                hasVietnamese = saved.hasVietnamese && vietnameseSubtitles.plainText().isNotBlank()
+                showVietnamese = saved.showingVietnamese && hasVietnamese
+                display = if (showVietnamese) {
+                    saved.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
+                } else {
+                    transcribePlainText
+                }
+            }
+            else -> {
+                restoreStoreFromHistory(subtitles, saved.primarySrt, saved.primaryTranscript)
+                display = saved.primaryTranscript.ifBlank { subtitles.plainText() }
+            }
+        }
+
+        _state.update {
+            it.copy(
+                status = "Sẵn sàng",
+                transcript = display.takeLast(MAX_TRANSCRIPT_CHARS),
+                subtitleTranslationAvailable = hasVietnamese,
+                subtitleTranslationInProgress = false,
+                subtitleShowingVietnamese = showVietnamese,
+                videoDescriptionMode = videoDescriptionMode,
+            )
+        }
+        logger.log(
+            2,
+            "History",
+            "Chuyển nội dung phiên hiện tại processing=$processingMode videoMode=$videoDescriptionMode chars=${display.length} hasVi=$hasVietnamese showVi=$showVietnamese",
+        )
     }
 
     private fun restoreStoreFromHistory(
@@ -958,11 +1146,12 @@ class TranslationService : LifecycleService() {
             mediaUri = if (mode == SourceMode.FILE) selectedUri?.toString() else null,
             mediaName = if (mode == SourceMode.FILE) selectedFileName else null,
             speakerDiarization = speakerDiarization,
+            videoDescriptionMode = videoDescriptionMode,
         )
         logger.log(
             2,
             "History",
-            "Bắt đầu phiên nháp id=${currentHistorySession?.id} reason=$reason source=$mode processing=$processingMode media=${selectedFileName ?: "none"}",
+            "Bắt đầu phiên nháp id=${currentHistorySession?.id} reason=$reason source=$mode processing=$processingMode videoMode=$videoDescriptionMode media=${selectedFileName ?: "none"}",
         )
     }
 
@@ -977,21 +1166,44 @@ class TranslationService : LifecycleService() {
 
     private fun saveCurrentHistoryNow(reason: String) {
         val base = currentHistorySession ?: return
-        val primaryTranscript = if (processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            transcribePlainText.trim().ifBlank { subtitles.plainText() }
-        } else {
-            subtitles.plainText().ifBlank { _state.value.transcript }
-        }
-        val primarySrt = subtitles.srtText()
+        val plain = subtitles.plainText()
+        val srt = subtitles.srtText()
         val viTranscript = vietnameseSubtitles.plainText()
         val viSrt = vietnameseSubtitles.srtText()
-        val candidate = base.copy(
-            primaryTranscript = primaryTranscript,
-            primarySrt = primarySrt,
-            vietnameseTranscript = viTranscript,
-            vietnameseSrt = viSrt,
-            showingVietnamese = _state.value.subtitleShowingVietnamese,
-        )
+        val candidate = when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
+                base.copy(
+                    processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
+                    videoSummaryText = videoSummaryText.trim().ifBlank { _state.value.transcript },
+                    showingVietnamese = false,
+                )
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION ->
+                base.copy(
+                    processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
+                    videoTimelineTranscript = plain.ifBlank { _state.value.transcript },
+                    videoTimelineSrt = srt,
+                    showingVietnamese = false,
+                )
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE ->
+                base.copy(
+                    processingMode = processingMode,
+                    primaryTranscript = transcribePlainText.trim().ifBlank { plain },
+                    primarySrt = srt,
+                    vietnameseTranscript = viTranscript.ifBlank { base.vietnameseTranscript },
+                    vietnameseSrt = viSrt.ifBlank { base.vietnameseSrt },
+                    showingVietnamese = _state.value.subtitleShowingVietnamese,
+                )
+            else ->
+                base.copy(
+                    processingMode = processingMode,
+                    primaryTranscript = plain.ifBlank { _state.value.transcript },
+                    primarySrt = srt,
+                    showingVietnamese = false,
+                )
+        }
         if (!candidate.hasValue) {
             logger.log(3, "History", "Bỏ lưu phiên rỗng id=${base.id} reason=$reason")
             return
@@ -1002,7 +1214,7 @@ class TranslationService : LifecycleService() {
                 logger.log(
                     2,
                     "History",
-                    "Đã lưu phiên id=${saved.id} reason=$reason title=${saved.title} source=${saved.sourceMode} primaryChars=${saved.primaryTranscript.length} primarySrtChars=${saved.primarySrt.length} viChars=${saved.vietnameseTranscript.length} viSrtChars=${saved.vietnameseSrt.length} showVi=${saved.showingVietnamese} historyCount=${historyStore.count()}",
+                    "Đã lưu phiên id=${saved.id} reason=$reason title=${saved.title} source=${saved.sourceMode} processing=${saved.processingMode} videoMode=${saved.videoDescriptionMode} primaryChars=${saved.primaryTranscript.length} primarySrtChars=${saved.primarySrt.length} viChars=${saved.vietnameseTranscript.length} viSrtChars=${saved.vietnameseSrt.length} videoTimelineChars=${saved.videoTimelineTranscript.length} videoTimelineSrtChars=${saved.videoTimelineSrt.length} videoSummaryChars=${saved.videoSummaryText.length} showVi=${saved.showingVietnamese} historyCount=${historyStore.count()}",
                 )
             }
             .onFailure { error ->
@@ -1020,6 +1232,7 @@ class TranslationService : LifecycleService() {
         transcribePlainText = ""
         liveCommittedTranscript = ""
         liveInterimTranscript = ""
+        videoSummaryText = ""
         liveInterimEvents = 0L
         liveFinalEvents = 0L
         transcribeRotationJob?.cancel()
@@ -1102,7 +1315,7 @@ class TranslationService : LifecycleService() {
                             }
                         )
                     }
-                    if (isTranscribeMode()) scheduleTranscribeRotation(apiKey)
+                    if (isTranscribeMode()) scheduleTranscribeRotation()
                     if (sourceStarted) {
                         if (!_state.value.paused) {
                             source?.resume()
@@ -1201,6 +1414,221 @@ class TranslationService : LifecycleService() {
         )
         client = liveClient
         liveClient.connect()
+    }
+
+    private fun startVideoDescription(apiKey: String) {
+        sourceJob?.cancel()
+        sourceJob = serviceScope.launch(Dispatchers.IO) {
+            val uri = selectedUri ?: run {
+                stopTranslation("Chưa chọn video")
+                return@launch
+            }
+            val startedAt = SystemClock.elapsedRealtime()
+            val name = selectedFileName ?: uri.lastPathSegment ?: "video"
+            try {
+                val mimeType = selectedMimeType(uri, name)
+                val isVideo = mimeType.startsWith("video/") || isVideoFileName(name)
+                if (!isVideo) error("Tệp đã chọn không phải video")
+
+                val durationStartedAt = SystemClock.elapsedRealtime()
+                val durationMs = mediaDurationMs(uri)
+                logger.log(
+                    2,
+                    "VideoDescription",
+                    "Đọc metadata name=$name mime=$mimeType durationMs=$durationMs metadataElapsedMs=${SystemClock.elapsedRealtime() - durationStartedAt} sourceBytes=${sourceSizeBytes(uri)} submode=$videoDescriptionMode",
+                )
+                if (durationMs <= 0L) error("Không đọc được thời lượng video")
+                if (durationMs > GeminiVideoDescriptionClient.MAX_VIDEO_DURATION_MS) {
+                    error("Video dài quá 20 phút. Hãy chọn video tối đa 20 phút")
+                }
+
+                val aiApi = AiApiSettingsStore(this@TranslationService).load()
+                val modeValue = if (isVideoDescriptionSummary()) {
+                    GeminiVideoDescriptionClient.Mode.SUMMARY
+                } else {
+                    GeminiVideoDescriptionClient.Mode.TIMELINE
+                }
+                var lastPartialUiUpdateAt = 0L
+                val partial: (String) -> Unit = { text ->
+                    val now = SystemClock.elapsedRealtime()
+                    if (
+                        _state.value.running &&
+                        selectedUri == uri &&
+                        text.isNotBlank() &&
+                        now - lastPartialUiUpdateAt >= VIDEO_DESCRIPTION_PARTIAL_UI_INTERVAL_MS
+                    ) {
+                        lastPartialUiUpdateAt = now
+                        updateState {
+                            it.copy(
+                                transcript = text.takeLast(MAX_TRANSCRIPT_CHARS),
+                                status = if (isVideoDescriptionSummary()) {
+                                    "Đang nhận mô tả tổng hợp..."
+                                } else {
+                                    "Đang nhận mô tả theo thời gian..."
+                                },
+                            )
+                        }
+                    }
+                }
+
+                val result = if (aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+                    val proxyKey = keyStore.load().proxyKey.orEmpty()
+                    val proxy = OpenAiCompatibleVideoDescriptionClient(
+                        apiKey = proxyKey,
+                        endpoint = aiApi.proxyUrl,
+                        model = aiApi.proxyModel,
+                        logger = logger,
+                        includeOutputInLogs = settings.logIncludeTranscript,
+                        timelinePromptTemplate = aiApi.timelinePrompt,
+                        summaryPromptTemplate = aiApi.summaryPrompt,
+                        streamingEnabled = aiApi.streamingEnabled,
+                        requestTimeoutMs = aiApi.requestTimeoutMs,
+                        temperature = aiApi.temperature,
+                    )
+                    proxyVideoDescriptionClient = proxy
+                    try {
+                        updateState {
+                            it.copy(
+                                status = "Đang gửi nguyên video tới API...",
+                                progressPercent = 0,
+                            )
+                        }
+                        proxy.describe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            durationMs = durationMs,
+                            mode = modeValue,
+                            onProgress = { status, percent ->
+                                updateState {
+                                    it.copy(
+                                        status = status,
+                                        progressPercent = percent.coerceIn(0, 98),
+                                    )
+                                }
+                            },
+                            onPartial = partial,
+                        )
+                    } finally {
+                        proxy.close()
+                        if (proxyVideoDescriptionClient === proxy) proxyVideoDescriptionClient = null
+                    }
+                } else {
+                    val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
+                    val gemini = GeminiVideoDescriptionClient(
+                        apiKey = apiKey,
+                        logger = logger,
+                        includeOutputInLogs = settings.logIncludeTranscript,
+                        model = aiApi.geminiModel,
+                        timelinePromptTemplate = aiApi.timelinePrompt,
+                        summaryPromptTemplate = aiApi.summaryPrompt,
+                        streamingEnabled = aiApi.streamingEnabled,
+                        requestTimeoutMs = aiApi.requestTimeoutMs,
+                        temperature = aiApi.temperature,
+                    )
+                    videoDescriptionClient = gemini
+                    try {
+                        updateState {
+                            it.copy(
+                                status = "Đang tải nguyên video lên...",
+                                progressPercent = 0,
+                            )
+                        }
+                        gemini.describe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = resolvedMime,
+                            durationMs = durationMs,
+                            mode = modeValue,
+                            onProgress = { status, percent ->
+                                updateState {
+                                    it.copy(
+                                        status = status,
+                                        progressPercent = percent.coerceIn(0, 98),
+                                    )
+                                }
+                            },
+                            onPartial = partial,
+                        )
+                    } finally {
+                        gemini.close()
+                        if (videoDescriptionClient === gemini) videoDescriptionClient = null
+                    }
+                }
+
+                if (!_state.value.running || selectedUri != uri) {
+                    logger.log(
+                        1,
+                        "VideoDescription",
+                        "Bỏ kết quả đã trả về vì phiên không còn hiện hành running=${_state.value.running} selectedChanged=${selectedUri != uri} name=$name",
+                    )
+                    return@launch
+                }
+
+                if (isVideoDescriptionSummary()) {
+                    subtitles.reset()
+                    videoSummaryText = result.summaryText
+                    updateState {
+                        it.copy(
+                            transcript = videoSummaryText.takeLast(MAX_TRANSCRIPT_CHARS),
+                            status = "Đã hoàn tất mô tả tổng hợp",
+                            progressPercent = 100,
+                        )
+                    }
+                } else {
+                    videoSummaryText = ""
+                    val cues = result.timelineItems.map { item ->
+                        SubtitleStore.Cue(
+                            index = item.index,
+                            startMs = (item.startSeconds * 1_000.0).toLong().coerceAtLeast(0L),
+                            endMs = (item.endSeconds * 1_000.0).toLong().coerceAtLeast(1L),
+                            text = item.text,
+                        )
+                    }
+                    subtitles.replaceTimed(cues)
+                    updateState {
+                        it.copy(
+                            transcript = subtitles.plainText().takeLast(MAX_TRANSCRIPT_CHARS),
+                            status = "Đã hoàn tất mô tả theo thời gian",
+                            progressPercent = 100,
+                        )
+                    }
+                }
+
+                fileInputEnded = true
+                val outputChars = if (isVideoDescriptionSummary()) {
+                    videoSummaryText.length
+                } else {
+                    subtitles.plainText().length
+                }
+                logger.log(
+                    2,
+                    "VideoDescription",
+                    "Áp dụng kết quả thành công mode=$videoDescriptionMode durationMs=$durationMs items=${result.timelineItems.size} chars=$outputChars attempts=${result.attempts} interactionId=${result.interactionId ?: "none"} inputTokens=${result.inputTokens} outputTokens=${result.outputTokens} thoughtTokens=${result.thoughtTokens} totalTokens=${result.totalTokens} clientElapsedMs=${result.elapsedMs} totalElapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                )
+                scheduleHistorySave("video-description-success")
+                stopTranslation(
+                    if (isVideoDescriptionSummary()) {
+                        "Đã hoàn tất mô tả tổng hợp"
+                    } else {
+                        "Đã hoàn tất mô tả theo thời gian"
+                    }
+                )
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) return@launch
+                logger.log(
+                    0,
+                    "VideoDescription",
+                    "Mô tả video thất bại mode=$videoDescriptionMode elapsedMs=${SystemClock.elapsedRealtime() - startedAt} name=$name",
+                    error,
+                )
+                if (_state.value.running) {
+                    stopTranslation("Lỗi mô tả video: ${error.message ?: error.javaClass.simpleName}")
+                }
+            }
+        }
     }
 
     private fun startFileTranscription(apiKey: String) {
@@ -1386,9 +1814,34 @@ class TranslationService : LifecycleService() {
         }
     }
 
+    private fun geminiVideoMimeType(uri: Uri, name: String, detectedMime: String): String {
+        val extensionMime = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp4", "m4v" -> "video/mp4"
+            "mpeg" -> "video/mpeg"
+            "mpg" -> "video/mpg"
+            "mov" -> "video/mov"
+            "avi" -> "video/avi"
+            "flv" -> "video/x-flv"
+            "webm" -> "video/webm"
+            "wmv" -> "video/wmv"
+            "3gp", "3gpp" -> "video/3gpp"
+            "mkv" -> error("Gemini Interactions API chưa hỗ trợ trực tiếp video MKV. Hãy dùng MP4, WebM, MOV, AVI, MPEG, FLV, WMV hoặc 3GP")
+            else -> null
+        }
+        if (extensionMime != null) return extensionMime
+
+        val resolverMime = contentResolver.getType(uri).orEmpty()
+        val candidate = resolverMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
+            ?: detectedMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
+        return candidate ?: error(
+            "Định dạng video chưa được Gemini Interactions API hỗ trợ trực tiếp"
+        )
+    }
+
     private fun isVideoFileName(name: String): Boolean =
         when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "3gpp" -> true
+            "mp4", "m4v", "mpeg", "mpg", "mov", "avi", "flv", "webm", "wmv",
+            "3gp", "3gpp", "mkv" -> true
             else -> false
         }
 
@@ -1813,15 +2266,31 @@ class TranslationService : LifecycleService() {
     private fun handleConnectionError(error: Throwable) {
         logger.log(0, "Gemini", "Mất kết nối", error)
         val apiError = error as? GeminiLiveClient.GeminiApiException
+        val hasMoreKeys = keyStore.load().keys.size > 1
         when (apiError?.code) {
-            400, 401, 403 -> stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key và cấu hình")
+            400 -> stopTranslation("Yêu cầu Gemini không hợp lệ; hãy kiểm tra cấu hình")
+            401, 403 -> {
+                if (hasMoreKeys) {
+                    scheduleReconnect(500L, true, "API Key hiện tại bị từ chối; đang chuyển sang API Key tiếp theo")
+                } else {
+                    stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key")
+                }
+            }
             404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
-            429 -> scheduleReconnect(60_000L, true, "Gemini đang giới hạn lưu lượng")
+            429 -> scheduleReconnect(
+                if (hasMoreKeys) 500L else 60_000L,
+                true,
+                if (hasMoreKeys) {
+                    "API Key hiện tại bị giới hạn; đang chuyển sang API Key tiếp theo"
+                } else {
+                    "Gemini đang giới hạn lưu lượng"
+                },
+            )
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
         }
     }
 
-    private fun scheduleTranscribeRotation(apiKey: String) {
+    private fun scheduleTranscribeRotation() {
         transcribeRotationJob?.cancel()
         transcribeRotationJob = serviceScope.launch {
             delay(TRANSCRIBE_LIVE_ROTATE_MS)
@@ -1830,7 +2299,7 @@ class TranslationService : LifecycleService() {
             finalizeLiveTranscriptionFallback("rotation")
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(apiKey)
+            connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
     }
 
@@ -1858,7 +2327,7 @@ class TranslationService : LifecycleService() {
         }
         reconnectJob = serviceScope.launch {
             delay(delayMs)
-            if (_state.value.running) connectGemini(keyStore.load().selected.orEmpty())
+            if (_state.value.running) connectGemini(keyStore.takeGeminiKey().orEmpty())
         }
     }
 
@@ -1875,7 +2344,7 @@ class TranslationService : LifecycleService() {
         ttsEngine?.stop()
         synchronized(ttsBuffer) { ttsBuffer.clear() }
         updateState { it.copy(transcript = "", status = "Đang tạo phiên Gemini mới sau khi tua...") }
-        connectGemini(keyStore.load().selected.orEmpty())
+        connectGemini(keyStore.takeGeminiKey().orEmpty())
     }
 
     private fun setupPlayers() {
@@ -2188,11 +2657,24 @@ class TranslationService : LifecycleService() {
     private fun isTranscribeMode(): Boolean =
         processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE
 
-    private fun activeModelName(): String = if (isTranscribeMode()) {
-        if (currentMode == SourceMode.FILE) AppPreferences.TRANSCRIBE_FILE_MODEL
-        else AppPreferences.TRANSCRIBE_LIVE_MODEL
-    } else {
-        settings.model
+    private fun isVideoDescriptionMode(): Boolean =
+        processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+
+    private fun isVideoDescriptionSummary(): Boolean =
+        videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+
+    private fun activeModelName(): String = when {
+        isVideoDescriptionMode() -> {
+            val api = AiApiSettingsStore(this).load()
+            if (api.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+                api.proxyModel.ifBlank { "openai-compatible" }
+            } else {
+                api.geminiModel
+            }
+        }
+        isTranscribeMode() && currentMode == SourceMode.FILE -> AppPreferences.TRANSCRIBE_FILE_MODEL
+        isTranscribeMode() -> AppPreferences.TRANSCRIBE_LIVE_MODEL
+        else -> settings.model
     }
 
     private fun elapsedMs(): Long = (SystemClock.elapsedRealtime() - sessionStartedAt).coerceAtLeast(0)
@@ -2214,6 +2696,18 @@ class TranslationService : LifecycleService() {
     }
 
     companion object {
+        private const val VIDEO_DESCRIPTION_PARTIAL_UI_INTERVAL_MS = 250L
+        private val GEMINI_VIDEO_MIME_TYPES = setOf(
+            "video/mp4",
+            "video/mpeg",
+            "video/mpg",
+            "video/mov",
+            "video/avi",
+            "video/x-flv",
+            "video/webm",
+            "video/wmv",
+            "video/3gpp",
+        )
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
         private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
         private const val HISTORY_SAVE_DEBOUNCE_MS = 750L
@@ -2222,6 +2716,6 @@ class TranslationService : LifecycleService() {
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"
         const val ACTION_APPLY_SETTINGS = "com.oai.geminilivetranslate.APPLY_SETTINGS"
         const val ACTION_REFRESH_API_KEY = "com.oai.geminilivetranslate.REFRESH_API_KEY"
-        private const val MAX_TRANSCRIPT_CHARS = 20_000
+        private const val MAX_TRANSCRIPT_CHARS = 120_000
     }
 }

@@ -10,10 +10,6 @@ import android.provider.MediaStore
 import java.io.File
 import java.util.UUID
 
-/**
- * Records to a short-lived cache file, then publishes the completed WAV to the user's public
- * Music/GeminiLiveTranslate folder. API keys, preferences and diagnostic logs remain private.
- */
 class PublicRecordingStore(
     private val context: Context,
     private val logger: SessionLogger,
@@ -48,10 +44,7 @@ class PublicRecordingStore(
         pending?.tempFile?.delete()
     }
 
-    /**
-     * Deletes recordings created by this app from the public Music/GeminiLiveTranslate folder.
-     * Returns the number of removed entries, or -1 when the operation fails.
-     */
+    
     fun deleteAll(): Int = runCatching {
         val deleted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             deleteWithMediaStore()

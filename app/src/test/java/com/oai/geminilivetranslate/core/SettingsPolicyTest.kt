@@ -62,14 +62,14 @@ class SettingsPolicyTest {
     fun diffSeparatesLiveReconnectPlaybackAndNextSessionChanges() {
         val old = AppSettings()
         val changed = old.copy(
-            model = "new-model",
+            targetLanguage = "en",
             translatedBufferBytes = 120_000,
             pacingMaxBuffer = 9,
             logLevel = 3,
         )
         val diff = SettingsPolicy.diff(old, changed)
 
-        assertTrue("model" in diff.reconnect)
+        assertTrue("targetLanguage" in diff.reconnect)
         assertTrue("translatedBufferBytes" in diff.playbackRebuild)
         assertTrue("pacingMaxBuffer" in diff.nextSession)
         assertTrue("logLevel" in diff.immediate)

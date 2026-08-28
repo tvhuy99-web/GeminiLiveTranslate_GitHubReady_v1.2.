@@ -7,7 +7,7 @@ class AppPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun load(): AppSettings = SettingsPolicy.sanitize(AppSettings(
-        model = prefs.getString(KEY_MODEL, DEFAULT_MODEL).orEmpty(),
+        model = DEFAULT_MODEL,
         targetLanguage = prefs.getString(KEY_TARGET_LANGUAGE, "vi").orEmpty(),
         echoTargetLanguage = prefs.getBoolean(KEY_ECHO_TARGET, false),
         aiVoice = prefs.getBoolean(KEY_AI_VOICE, true),
@@ -47,7 +47,7 @@ class AppPreferences(context: Context) {
     fun save(settings: AppSettings) {
         val safe = SettingsPolicy.sanitize(settings)
         prefs.edit()
-            .putString(KEY_MODEL, safe.model)
+            .remove("model")
             .putString(KEY_TARGET_LANGUAGE, safe.targetLanguage)
             .putBoolean(KEY_ECHO_TARGET, safe.echoTargetLanguage)
             .putBoolean(KEY_AI_VOICE, safe.aiVoice)
@@ -100,12 +100,35 @@ class AppPreferences(context: Context) {
 
     fun loadProcessingMode(): String = prefs.getString(KEY_PROCESSING_MODE, PROCESSING_MODE_TRANSLATE)
         .orEmpty()
-        .takeIf { it == PROCESSING_MODE_TRANSLATE || it == PROCESSING_MODE_TRANSCRIBE }
+        .takeIf {
+            it == PROCESSING_MODE_TRANSLATE ||
+                it == PROCESSING_MODE_TRANSCRIBE ||
+                it == PROCESSING_MODE_VIDEO_DESCRIPTION
+        }
         ?: PROCESSING_MODE_TRANSLATE
 
     fun setProcessingMode(value: String) {
-        val safe = if (value == PROCESSING_MODE_TRANSCRIBE) PROCESSING_MODE_TRANSCRIBE else PROCESSING_MODE_TRANSLATE
+        val safe = when (value) {
+            PROCESSING_MODE_TRANSCRIBE -> PROCESSING_MODE_TRANSCRIBE
+            PROCESSING_MODE_VIDEO_DESCRIPTION -> PROCESSING_MODE_VIDEO_DESCRIPTION
+            else -> PROCESSING_MODE_TRANSLATE
+        }
         prefs.edit().putString(KEY_PROCESSING_MODE, safe).apply()
+    }
+
+    fun loadVideoDescriptionMode(): String =
+        prefs.getString(KEY_VIDEO_DESCRIPTION_MODE, VIDEO_DESCRIPTION_TIMELINE)
+            .orEmpty()
+            .takeIf { it == VIDEO_DESCRIPTION_TIMELINE || it == VIDEO_DESCRIPTION_SUMMARY }
+            ?: VIDEO_DESCRIPTION_TIMELINE
+
+    fun setVideoDescriptionMode(value: String) {
+        val safe = if (value == VIDEO_DESCRIPTION_SUMMARY) {
+            VIDEO_DESCRIPTION_SUMMARY
+        } else {
+            VIDEO_DESCRIPTION_TIMELINE
+        }
+        prefs.edit().putString(KEY_VIDEO_DESCRIPTION_MODE, safe).apply()
     }
 
     fun loadSpeakerDiarization(): Boolean = prefs.getBoolean(KEY_SPEAKER_DIARIZATION, false)
@@ -128,7 +151,6 @@ class AppPreferences(context: Context) {
     companion object {
         const val DEFAULT_MODEL = "gemini-3.5-live-translate-preview"
         const val PREFS_NAME = "gemini_translate_prefs"
-        private const val KEY_MODEL = "model"
         private const val KEY_TARGET_LANGUAGE = "targetLanguage"
         private const val KEY_ECHO_TARGET = "echoTargetLanguage"
         private const val KEY_AI_VOICE = "useAIVoice"
@@ -164,11 +186,16 @@ class AppPreferences(context: Context) {
         private const val KEY_MIC_LANGUAGES = "micLanguages"
         private const val KEY_MIC_LANGUAGE_INDEX = "micLanguageIndex"
         private const val KEY_PROCESSING_MODE = "processingMode"
+        private const val KEY_VIDEO_DESCRIPTION_MODE = "videoDescriptionMode"
         private const val KEY_SPEAKER_DIARIZATION = "speakerDiarization"
         const val PROCESSING_MODE_TRANSLATE = "translate"
         const val PROCESSING_MODE_TRANSCRIBE = "transcribe"
+        const val PROCESSING_MODE_VIDEO_DESCRIPTION = "video_description"
+        const val VIDEO_DESCRIPTION_TIMELINE = "timeline"
+        const val VIDEO_DESCRIPTION_SUMMARY = "summary"
         const val TRANSCRIBE_FILE_MODEL = "gemini-3.5-transcribe"
         const val TRANSCRIBE_LIVE_MODEL = "gemini-3.5-transcribe-live"
         const val SUBTITLE_TRANSLATE_MODEL = "gemini-3.5-flash-lite"
+        const val VIDEO_DESCRIPTION_MODEL = "gemini-3.7-flash"
     }
 }

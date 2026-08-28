@@ -14,14 +14,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.OpenableColumns
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,35 +30,32 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.oai.geminilivetranslate.audio.FileAudioSource
-import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SessionUiState
 import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityMainBinding
-import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
 import com.oai.geminilivetranslate.ui.HistoryActivity
 import com.oai.geminilivetranslate.ui.LogViewerActivity
 import com.oai.geminilivetranslate.ui.MiniBrowserActivity
 import com.oai.geminilivetranslate.ui.SettingsActivity
 import com.oai.geminilivetranslate.ui.SubtitlePlaybackActivity
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var preferences: AppPreferences
-    private lateinit var apiKeyStore: ApiKeyStore
     private lateinit var logger: SessionLogger
     private var translationService: TranslationService? = null
     private var bound = false
     private var spinnerReady = false
+    private var processingModeSpinnerReady = false
+    private var videoDescriptionModeSpinnerReady = false
     private var micSpinnerReady = false
     private var aiStreamSpinnerReady = false
     private var pendingStartMode: SourceMode? = null
@@ -101,6 +96,25 @@ class MainActivity : AppCompatActivity() {
         "Giao tiếp bằng giọng nói",
         "Trợ lý Android",
     )
+    private val processingModeValues = listOf(
+        AppPreferences.PROCESSING_MODE_TRANSLATE,
+        AppPreferences.PROCESSING_MODE_TRANSCRIBE,
+        AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION,
+    )
+    private val processingModeLabels = listOf(
+        "Dịch thuật",
+        "Chép lời",
+        "Mô tả video",
+    )
+    private val videoDescriptionModeValues = listOf(
+        AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
+        AppPreferences.VIDEO_DESCRIPTION_SUMMARY,
+    )
+    private val videoDescriptionModeLabels = listOf(
+        "Mô tả theo thời gian",
+        "Mô tả tổng hợp",
+    )
+
     private var pendingExportText: String? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -227,6 +241,7 @@ class MainActivity : AppCompatActivity() {
                 val restoredMode = loadSourceMode()
                 service.setSourceMode(restoredMode)
                 service.setProcessingMode(preferences.loadProcessingMode())
+                service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
                 service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
                 selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
@@ -277,7 +292,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         preferences = AppPreferences(this)
-        apiKeyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
         resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
@@ -317,16 +331,56 @@ class MainActivity : AppCompatActivity() {
         historyButton.setOnClickListener {
             historyLauncher.launch(Intent(this@MainActivity, HistoryActivity::class.java))
         }
-        processingModeButton.setOnClickListener {
-            if (translationService?.state?.value?.running == true) return@setOnClickListener
-            val next = if (isTranscribeSelected()) {
-                AppPreferences.PROCESSING_MODE_TRANSLATE
-            } else {
-                AppPreferences.PROCESSING_MODE_TRANSCRIBE
+        processingModeSpinner.adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_item,
+            processingModeLabels,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        processingModeSpinner.onItemSelectedListener = simpleSelection { position ->
+            if (!processingModeSpinnerReady) return@simpleSelection
+            if (translationService?.state?.value?.running == true) {
+                restoreProcessingModeUi()
+                return@simpleSelection
             }
+            val next = processingModeValues.getOrElse(position) {
+                AppPreferences.PROCESSING_MODE_TRANSLATE
+            }
+            if (preferences.loadProcessingMode() == next) return@simpleSelection
             preferences.setProcessingMode(next)
             translationService?.setProcessingMode(next)
+            if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) {
+                saveSourceMode(SourceMode.FILE)
+                translationService?.setSourceMode(SourceMode.FILE)
+            }
+            logger.log(2, "UI", "Đổi chế độ chính bằng dropdown mode=$next")
             restoreProcessingModeUi()
+            updateModeUi(
+                if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) SourceMode.FILE
+                else SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE },
+                false,
+            )
+        }
+
+        videoDescriptionModeSpinner.adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_item,
+            videoDescriptionModeLabels,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        videoDescriptionModeSpinner.onItemSelectedListener = simpleSelection { position ->
+            if (!videoDescriptionModeSpinnerReady) return@simpleSelection
+            if (translationService?.state?.value?.running == true) {
+                restoreProcessingModeUi()
+                return@simpleSelection
+            }
+            val next = videoDescriptionModeValues.getOrElse(position) {
+                AppPreferences.VIDEO_DESCRIPTION_TIMELINE
+            }
+            if (preferences.loadVideoDescriptionMode() == next) return@simpleSelection
+            preferences.setVideoDescriptionMode(next)
+            translationService?.setVideoDescriptionMode(next)
+            logger.log(2, "UI", "Đổi kiểu mô tả video bằng dropdown mode=$next")
+            restoreProcessingModeUi()
+            updateModeUi(SourceMode.FILE, false)
         }
         speakerDiarizationSwitch.setOnCheckedChangeListener { _, checked ->
             if (speakerDiarizationSwitch.isPressed) {
@@ -357,12 +411,16 @@ class MainActivity : AppCompatActivity() {
 
         selectFileButton.setOnClickListener { launchFilePicker() }
         miniBrowserButton.setOnClickListener { startActivity(Intent(this@MainActivity, MiniBrowserActivity::class.java)) }
-        apiKeyButton.setOnClickListener { showApiKeyManager() }
-        testConnectionButton.setOnClickListener { testConnection() }
         startButton.setOnClickListener {
             val service = translationService
-            if (service?.state?.value?.running == true) service.stopTranslation()
-            else startMode(SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE })
+            if (service?.state?.value?.running == true) {
+                service.stopTranslation()
+            } else {
+                startMode(
+                    if (isVideoDescriptionSelected()) SourceMode.FILE
+                    else SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+                )
+            }
         }
         playPauseButton.setOnClickListener { translationService?.togglePause() }
         rewindButton.setOnClickListener { translationService?.seekBy(-10_000) }
@@ -479,14 +537,31 @@ class MainActivity : AppCompatActivity() {
         subtitleRenderEvents++
         if (transcriptChars != lastRenderedTranscriptChars) {
             logger.log(
-                2,
+                if (isVideoDescriptionSelected() && state.running) 3 else 2,
                 "SubtitleUI",
                 "render event=$subtitleRenderEvents transcriptChars=$transcriptChars previousChars=$lastRenderedTranscriptChars running=${state.running} paused=${state.paused} setup=${state.setupComplete} lifecycle=${lifecycle.currentState}",
             )
             lastRenderedTranscriptChars = transcriptChars
         }
-        val emptyTranscript = if (isTranscribeSelected()) "Chưa có nội dung chép lời" else "Chưa có nội dung dịch"
+        val emptyTranscript = when {
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() -> "Chưa có mô tả tổng hợp"
+            isVideoDescriptionSelected() -> "Chưa có mô tả theo thời gian"
+            isTranscribeSelected() -> "Chưa có nội dung chép lời"
+            else -> "Chưa có nội dung dịch"
+        }
         subtitleText.text = state.transcript.ifBlank { emptyTranscript }
+        subtitleScroll.contentDescription = when {
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() && state.running ->
+                "Nội dung mô tả tổng hợp, đang cập nhật"
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Nội dung mô tả tổng hợp"
+            isVideoDescriptionSelected() && state.running ->
+                "Nội dung mô tả theo thời gian, đang cập nhật"
+            isVideoDescriptionSelected() ->
+                "Nội dung mô tả theo thời gian"
+            isTranscribeSelected() -> "Nội dung chép lời"
+            else -> "Nội dung dịch"
+        }
         val expectedChars = if (transcriptChars == 0) emptyTranscript.length else transcriptChars
         val actualChars = subtitleText.text.length
         if (actualChars != expectedChars) {
@@ -499,14 +574,16 @@ class MainActivity : AppCompatActivity() {
                 "TextView committed stateChars=$transcriptChars viewChars=$actualChars shown=${subtitleText.isShown} visibility=${subtitleText.visibility} alpha=${subtitleText.alpha} width=${subtitleText.width} height=${subtitleText.height}",
             )
         }
-        subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
-        if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
-        progressSeekBar.contentDescription = if (isTranscribeSelected()) {
-            "Tiến trình xử lý: ${state.progressPercent}%"
-        } else {
-            "Tiến trình phát: ${state.progressPercent}%"
+        if (!(isVideoDescriptionSelected() && state.running)) {
+            subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
         }
-        if (!isTranscribeSelected()) aiVoiceSwitch.isChecked = state.aiVoice
+        if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
+        progressSeekBar.contentDescription = when {
+            isVideoDescriptionSelected() -> "Tiến trình mô tả video: ${state.progressPercent}%"
+            isTranscribeSelected() -> "Tiến trình xử lý: ${state.progressPercent}%"
+            else -> "Tiến trình phát: ${state.progressPercent}%"
+        }
+        if (!isTranscribeSelected() && !isVideoDescriptionSelected()) aiVoiceSwitch.isChecked = state.aiVoice
         if (audioSourceSpinner.selectedItemPosition != state.sourceMode.ordinal) {
             spinnerReady = false
             audioSourceSpinner.setSelection(state.sourceMode.ordinal)
@@ -514,8 +591,16 @@ class MainActivity : AppCompatActivity() {
         }
         state.selectedFileName?.let { selectFileButton.text = it }
         startButton.text = when {
+            state.running && isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Dừng mô tả tổng hợp"
+            state.running && isVideoDescriptionSelected() ->
+                "Dừng mô tả theo thời gian"
             state.running && isTranscribeSelected() -> "Dừng chép lời"
             state.running -> "Dừng dịch"
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Bắt đầu mô tả tổng hợp"
+            isVideoDescriptionSelected() ->
+                "Bắt đầu mô tả theo thời gian"
             isTranscribeSelected() -> "Bắt đầu chép lời"
             state.sourceMode == SourceMode.MICROPHONE -> "Bắt đầu thu âm"
             state.sourceMode == SourceMode.INTERNAL -> "Bắt đầu thu nội bộ"
@@ -529,8 +614,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
+        val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
         val hasContent = state.transcript.isNotBlank()
-        subtitlePlaybackButton.isVisible = transcribe
+        subtitlePlaybackButton.isVisible = transcribe || (videoDescription && !videoSummary)
+        subtitlePlaybackButton.isEnabled = !state.running && (hasContent || !videoDescription)
         translateToVietnameseButton.isVisible =
             transcribe && !state.running && (hasContent || state.subtitleTranslationInProgress)
         translateToVietnameseButton.isEnabled =
@@ -543,9 +631,11 @@ class MainActivity : AppCompatActivity() {
         }
         translateToVietnameseButton.contentDescription = translateToVietnameseButton.text
 
-        val format = preferences.load().exportFormat
+        val format = if (videoSummary) "txt" else preferences.load().exportFormat
         val baseExport = if (format == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         exportButton.text = when {
+            videoSummary -> "Xuất mô tả tổng hợp (.txt)"
+            videoDescription -> if (format == "txt") "Xuất mô tả (.txt)" else "Xuất mô tả (.srt)"
             transcribe && state.subtitleTranslationAvailable && state.subtitleShowingVietnamese ->
                 "$baseExport - Tiếng Việt"
             transcribe && state.subtitleTranslationAvailable ->
@@ -575,8 +665,11 @@ class MainActivity : AppCompatActivity() {
         }
         service.setSourceMode(mode)
         service.setProcessingMode(preferences.loadProcessingMode())
+        service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
         service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
-        if (mode == SourceMode.FILE && !isTranscribeSelected()) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        if (mode == SourceMode.FILE && !isTranscribeSelected() && !isVideoDescriptionSelected()) {
+            service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        }
         startService(Intent(this, TranslationService::class.java))
         when (mode) {
             SourceMode.FILE -> service.startTranslation(mode)
@@ -607,13 +700,51 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateModeUi(mode: SourceMode, running: Boolean) = with(binding) {
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
+        val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
         val fileMode = mode == SourceMode.FILE
         val micMode = mode == SourceMode.MICROPHONE
-        processingModeButton.isEnabled = !running
-        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+
+        processingModeSpinner.isEnabled = !running
+        videoDescriptionModeLayout.isVisible = videoDescription
+        videoDescriptionModeSpinner.isEnabled = !running
+
+        if (videoDescription) {
+            audioSourceLabel.isVisible = false
+            audioSourceSpinner.isVisible = false
+            speakerDiarizationSwitch.isVisible = false
+            selectFileButton.isVisible = true
+            selectFileButton.isEnabled = !running
+            if (translationService?.state?.value?.selectedFileName.isNullOrBlank()) {
+                selectFileButton.text = "Chọn tệp âm thanh hoặc video"
+            }
+            miniBrowserButton.isVisible = false
+            fileControls.isVisible = false
+            fileSpeedLayout.isVisible = false
+            progressSeekBar.isVisible = true
+            progressSeekBar.isEnabled = false
+            originalVolumeSeekBar.isVisible = false
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            autoDuckingSwitch.isVisible = false
+            micLanguageLayout.isVisible = false
+            nextLanguageButton.isVisible = false
+            if (!running) {
+                startButton.text =
+                    if (videoSummary) "Bắt đầu mô tả tổng hợp" else "Bắt đầu mô tả theo thời gian"
+            }
+            applyUiMode()
+            return@with
+        }
+
+        audioSourceLabel.isVisible = true
+        audioSourceSpinner.isVisible = true
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode
+        selectFileButton.isEnabled = !running
         miniBrowserButton.isVisible = !transcribe || mode == SourceMode.INTERNAL
         fileControls.isVisible = fileMode && !transcribe
         fileSpeedLayout.isVisible = fileMode && !transcribe
@@ -643,13 +774,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun restorePreferencesUi() = with(binding) {
         val settings = preferences.load()
-        val restoredMode = loadSourceMode()
+        val restoredMode = if (isVideoDescriptionSelected()) SourceMode.FILE else loadSourceMode()
+        if (isVideoDescriptionSelected()) saveSourceMode(SourceMode.FILE)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
         spinnerReady = false
         audioSourceSpinner.setSelection(restoredMode.ordinal)
         audioSourceSpinner.post { spinnerReady = true }
         translationService?.setSourceMode(restoredMode)
         translationService?.setProcessingMode(preferences.loadProcessingMode())
+        translationService?.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
         translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
         translationService?.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         originalVolumeSeekBar.progress = settings.originalVolume
@@ -693,8 +826,23 @@ class MainActivity : AppCompatActivity() {
     private fun applyUiMode() = with(binding) {
         val simple = preferences.load().uiMode == "simple"
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
         val fileMode = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
         logButton.isVisible = !simple
+        if (videoDescription) {
+            autoDuckingSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            fileSpeedLayout.isVisible = false
+            rewindButton.isVisible = false
+            forwardButton.isVisible = false
+            originalVolumeSeekBar.isVisible = false
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            progressSeekBar.isVisible = true
+            progressSeekBar.isEnabled = false
+            return@with
+        }
         if (transcribe) {
             autoDuckingSwitch.isVisible = false
             aiAudioStreamLayout.isVisible = false
@@ -724,119 +872,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showApiKeyManager() {
-        val dialog = AlertDialog.Builder(this).setTitle("Quản lý API Key").create()
-        val scroll = ScrollView(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
-        }
-        fun rebuild() {
-            root.removeAllViews()
-            val state = apiKeyStore.load()
-            if (state.keys.isEmpty()) root.addView(TextView(this).apply { text = "Chưa có API Key nào." })
-            state.keys.forEachIndexed { index, key ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                row.addView(TextView(this).apply {
-                    text = "Key ${index + 1}${if (state.selected == key) " (đang dùng)" else ""}\n${apiKeyStore.masked(key)}"
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                row.addView(Button(this).apply {
-                    text = "Chọn"
-                    setOnClickListener {
-                        val previous = apiKeyStore.load().selected
-                        val updated = if (previous == key) apiKeyStore.load() else apiKeyStore.select(key)
-                        logger.log(2, "ApiKey", "Đã chọn API Key index=${index + 1} changed=${previous != updated.selected}")
-                        applySelectedApiKeyIfRunning(previous, updated.selected)
-                        rebuild()
-                        toast("Đã chọn Key ${index + 1}")
-                    }
-                })
-                row.addView(Button(this).apply {
-                    text = "Xóa"
-                    setOnClickListener {
-                        val previous = apiKeyStore.load().selected
-                        val updated = apiKeyStore.remove(key)
-                        logger.log(1, "ApiKey", "Đã xóa API Key index=${index + 1} selectedChanged=${previous != updated.selected}")
-                        applySelectedApiKeyIfRunning(previous, updated.selected)
-                        rebuild()
-                    }
-                })
-                root.addView(row)
-            }
-            val input = EditText(this).apply {
-                hint = "Nhập API Key mới vào đây..."
-                isSingleLine = true
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
-            root.addView(input)
-            root.addView(Button(this).apply {
-                text = "Thêm mới"
-                setOnClickListener {
-                    runCatching { apiKeyStore.add(input.text.toString()) }
-                        .onSuccess { updated ->
-                            val previous = state.selected
-                            logger.log(2, "ApiKey", "Đã thêm API Key; total=${updated.keys.size}")
-                            applySelectedApiKeyIfRunning(previous, updated.selected)
-                            input.text.clear()
-                            rebuild()
-                            toast("Đã thêm API Key mới")
-                        }
-                        .onFailure { toast(it.message ?: "API Key không hợp lệ") }
-                }
-            })
-            root.addView(Button(this).apply { text = "Đóng"; setOnClickListener { dialog.dismiss() } })
-        }
-        rebuild()
-        scroll.addView(root)
-        dialog.setView(scroll)
-        dialog.show()
-    }
-
-    private fun applySelectedApiKeyIfRunning(previous: String?, current: String?) {
-        if (previous == current || translationService?.state?.value?.running != true) return
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_REFRESH_API_KEY))
-        toast(if (current == null) "API Key đã hết; đang dừng phiên" else "Đang áp dụng API Key mới")
-    }
-
-    private fun testConnection() {
-        val key = apiKeyStore.load().selected
-        if (key.isNullOrBlank()) { toast("Chưa có API Key để kiểm tra"); return }
-        val settings = preferences.load()
-        binding.testConnectionButton.isEnabled = false
-        binding.testConnectionButton.text = "Đang kiểm tra..."
-        binding.statusText.text = "Trạng thái: Đang kiểm tra API Key, model và kết nối Gemini..."
-        lifecycleScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val transcribe = isTranscribeSelected()
-                    GeminiLiveClient.testConnection(
-                        apiKey = key,
-                        model = if (transcribe) AppPreferences.TRANSCRIBE_LIVE_MODEL else settings.model,
-                        targetLanguage = settings.targetLanguage,
-                        echoTargetLanguage = settings.echoTargetLanguage,
-                        logger = logger,
-                        operationMode = if (transcribe) {
-                            GeminiLiveClient.OperationMode.TRANSCRIBE
-                        } else {
-                            GeminiLiveClient.OperationMode.TRANSLATE
-                        },
-                    )
-                }
-            }.onSuccess { elapsed ->
-                logger.log(2, "Settings", "Kiểm tra API từ màn hình chính thành công latencyMs=$elapsed")
-                binding.statusText.text = "Trạng thái: Kiểm tra thành công: API và Gemini hoạt động tốt ($elapsed ms)"
-                toast("Kết nối tốt - $elapsed ms")
-            }.onFailure {
-                logger.log(0, "Settings", "Kiểm tra API từ màn hình chính thất bại", it)
-                binding.statusText.text = "Trạng thái: Kiểm tra thất bại: ${it.message}"
-                toast("Kiểm tra thất bại; mở Nhật ký để xem chi tiết")
-            }
-            binding.testConnectionButton.isEnabled = true
-            binding.testConnectionButton.text = "Kiểm tra API và kết nối"
-        }
-    }
-
     private fun openSubtitlePlayback() {
         val service = translationService
         val state = service?.state?.value
@@ -848,6 +883,7 @@ class MainActivity : AppCompatActivity() {
             state.subtitleShowingVietnamese
         val subtitleName = when {
             subtitleSrt.isBlank() -> null
+            isVideoDescriptionSelected() -> "Mô tả video theo thời gian - phiên hiện tại"
             vietnamese -> "Phụ đề tiếng Việt - phiên hiện tại"
             else -> "Phụ đề bản gốc - phiên hiện tại"
         }
@@ -859,6 +895,10 @@ class MainActivity : AppCompatActivity() {
         )
 
         val intent = Intent(this, SubtitlePlaybackActivity::class.java).apply {
+            putExtra(
+                SubtitlePlaybackActivity.EXTRA_QUEUE_SUBTITLE_TTS,
+                isVideoDescriptionSelected() && !isVideoDescriptionSummarySelected(),
+            )
             mediaUri?.let {
                 putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_URI, it.toString())
                 putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_NAME, mediaName ?: "Media từ phiên hiện tại")
@@ -876,7 +916,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun exportTranscript() {
-        val format = preferences.load().exportFormat
+        val videoSummary = isVideoDescriptionSelected() && isVideoDescriptionSummarySelected()
+        val format = if (videoSummary) "txt" else preferences.load().exportFormat
         val service = translationService
         val text = service?.subtitleText(format).orEmpty()
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
@@ -886,6 +927,8 @@ class MainActivity : AppCompatActivity() {
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
         val prefix = when {
+            isVideoDescriptionSelected() && videoSummary -> "gemini_video_description_summary"
+            isVideoDescriptionSelected() -> "gemini_video_description_timeline"
             isTranscribeSelected() && vietnamese -> "gemini_transcribe_vi"
             isTranscribeSelected() -> "gemini_transcribe_original"
             else -> "gemini_translate"
@@ -893,7 +936,7 @@ class MainActivity : AppCompatActivity() {
         logger.log(
             2,
             "Export",
-            "Chuẩn bị xuất format=$format version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
+            "Chuẩn bị xuất format=$format mode=${preferences.loadProcessingMode()} videoMode=${preferences.loadVideoDescriptionMode()} version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
         )
         exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }
@@ -957,24 +1000,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showTextDialog(title: String, text: String) {
-        val view = TextView(this).apply {
-            setText(text)
-            setTextIsSelectable(true)
-            setPadding(24, 20, 24, 20)
-        }
-        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply { addView(view) })
-            .setPositiveButton("Đóng", null).show()
-    }
-
     private fun isTranscribeSelected(): Boolean =
         preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_TRANSCRIBE
 
+    private fun isVideoDescriptionSelected(): Boolean =
+        preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+
+    private fun isVideoDescriptionSummarySelected(): Boolean =
+        preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+
     private fun restoreProcessingModeUi() = with(binding) {
         val transcribe = isTranscribeSelected()
-        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        val videoDescription = isVideoDescriptionSelected()
+
+        val processingIndex = processingModeValues
+            .indexOf(preferences.loadProcessingMode())
+            .coerceAtLeast(0)
+        processingModeSpinnerReady = false
+        if (processingModeSpinner.selectedItemPosition != processingIndex) {
+            processingModeSpinner.setSelection(processingIndex)
+        }
+        processingModeSpinner.post { processingModeSpinnerReady = true }
+
+        val videoModeIndex = videoDescriptionModeValues
+            .indexOf(preferences.loadVideoDescriptionMode())
+            .coerceAtLeast(0)
+        videoDescriptionModeSpinnerReady = false
+        if (videoDescriptionModeSpinner.selectedItemPosition != videoModeIndex) {
+            videoDescriptionModeSpinner.setSelection(videoModeIndex)
+        }
+        videoDescriptionModeSpinner.post { videoDescriptionModeSpinnerReady = true }
+        videoDescriptionModeLayout.isVisible = videoDescription
+
         speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
-        val mode = SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        val mode = if (videoDescription) {
+            SourceMode.FILE
+        } else {
+            SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        }
         speakerDiarizationSwitch.isVisible = transcribe && mode == SourceMode.FILE
     }
 
@@ -1013,7 +1076,9 @@ class MainActivity : AppCompatActivity() {
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        filePicker.launch(Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video"))
+        filePicker.launch(
+            Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video")
+        )
     }
 
     private fun displayName(uri: Uri): String? = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {

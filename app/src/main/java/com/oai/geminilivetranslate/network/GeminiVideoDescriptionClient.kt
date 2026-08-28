@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.SystemClock
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.core.VideoDescriptionTimelineRules
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -548,56 +549,47 @@ class GeminiVideoDescriptionClient(
         val items = root.optJSONArray("items") ?: error("Kết quả thiếu trường items")
         if (items.length() == 0) error("Gemini không tạo mục mô tả nào")
 
-        val result = ArrayList<TimelineItem>(items.length())
-        val errors = ArrayList<String>()
-        var previousStart = -1.0
-
+        val parsed = ArrayList<VideoDescriptionTimelineRules.Item>(items.length())
+        val structuralErrors = ArrayList<String>()
         for (i in 0 until items.length()) {
             val raw = items.optJSONObject(i)
             if (raw == null) {
-                errors += "item[$i] không phải object"
+                structuralErrors += "item[$i] không phải object"
                 continue
             }
-            val index = raw.optInt("index", Int.MIN_VALUE)
-            val start = raw.optDouble("start_seconds", Double.NaN)
-            val end = raw.optDouble("end_seconds", Double.NaN)
-            val text = raw.optString("text").trim()
-
-            if (index != i + 1) errors += "index=$index expected=${i + 1}"
-            if (!start.isFinite() || start < 0.0) errors += "index=$index start=$start"
-            if (!end.isFinite() || end <= start) errors += "index=$index end=$end start=$start"
-            if (end > durationSeconds + TIMECODE_TOLERANCE_SECONDS) {
-                errors += "index=$index end=$end duration=$durationSeconds"
-            }
-            if (end - start > MAX_ITEM_SECONDS + TIMECODE_TOLERANCE_SECONDS) {
-                errors += "index=$index length=${end - start}"
-            }
-            if (start + TIMECODE_TOLERANCE_SECONDS < previousStart) {
-                errors += "index=$index time-order start=$start previous=$previousStart"
-            }
-            if (text.isBlank()) errors += "index=$index text-blank"
-            previousStart = start
-
-            result += TimelineItem(
-                index = index,
-                startSeconds = start.coerceAtLeast(0.0),
-                endSeconds = end.coerceAtMost(durationSeconds),
-                text = text,
+            parsed += VideoDescriptionTimelineRules.Item(
+                index = raw.optInt("index", Int.MIN_VALUE),
+                startSeconds = raw.optDouble("start_seconds", Double.NaN),
+                endSeconds = raw.optDouble("end_seconds", Double.NaN),
+                text = raw.optString("text").trim(),
             )
         }
 
-        val lastEnd = result.lastOrNull()?.endSeconds ?: 0.0
-        val coverage = if (durationSeconds > 0.0) lastEnd / durationSeconds else 0.0
+        val validation = VideoDescriptionTimelineRules.validate(
+            items = parsed,
+            durationSeconds = durationSeconds,
+            maxItemSeconds = MAX_ITEM_SECONDS,
+            toleranceSeconds = TIMECODE_TOLERANCE_SECONDS,
+        )
+        val errors = structuralErrors + validation.errors
         logger.log(
             if (errors.isEmpty()) 2 else 1,
             TAG_VALIDATE,
-            "Timeline validate returned=${items.length()} parsed=${result.size} errors=${errors.size} firstStart=${result.firstOrNull()?.startSeconds ?: -1.0} lastEnd=$lastEnd duration=$durationSeconds endCoverage=${String.format(java.util.Locale.US, "%.3f", coverage)} errorsPreview=${errors.take(12).joinToString(" | ").ifBlank { "none" }}",
+            "Timeline validate returned=${items.length()} parsed=${parsed.size} errors=${errors.size} firstStart=${parsed.firstOrNull()?.startSeconds ?: -1.0} lastEnd=${validation.lastEndSeconds} duration=$durationSeconds endCoverage=${String.format(java.util.Locale.US, "%.3f", validation.endCoverage)} errorsPreview=${errors.take(12).joinToString(" | ").ifBlank { "none" }}",
         )
 
         if (errors.isNotEmpty()) {
             error("Kết quả mô tả theo thời gian không hợp lệ: ${errors.take(6).joinToString("; ")}")
         }
-        return result
+
+        return parsed.map { item ->
+            TimelineItem(
+                index = item.index,
+                startSeconds = item.startSeconds.coerceAtLeast(0.0),
+                endSeconds = item.endSeconds.coerceAtMost(durationSeconds),
+                text = item.text,
+            )
+        }
     }
 
     private fun parseAndValidateSummary(outputText: String): String {

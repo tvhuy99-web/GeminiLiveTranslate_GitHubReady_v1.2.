@@ -171,6 +171,7 @@ class MainActivity : AppCompatActivity() {
         val service = translationService
         if (service != null) {
             if (service.restoreHistorySession(sessionId)) {
+                saveSourceMode(service.state.value.sourceMode)
                 restorePreferencesUi()
                 toast("Đã mở phiên lịch sử")
             }
@@ -216,7 +217,12 @@ class MainActivity : AppCompatActivity() {
             }
             pendingHistorySessionId?.let { historyId ->
                 pendingHistorySessionId = null
-                translationService?.restoreHistorySession(historyId)
+                translationService?.let { service ->
+                    if (service.restoreHistorySession(historyId)) {
+                        saveSourceMode(service.state.value.sourceMode)
+                        restorePreferencesUi()
+                    }
+                }
             }
             observeService()
             pendingStartMode?.let { mode ->

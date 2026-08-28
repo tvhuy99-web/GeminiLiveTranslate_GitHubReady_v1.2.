@@ -111,31 +111,41 @@ class ApiSettingsActivity : AppCompatActivity() {
 
         geminiFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         geminiFields.addView(label("Gemini API Key"))
-        geminiKey = edit("Nhập Gemini API Key", password = true)
+        geminiKey = edit("Nhập Gemini API Key", password = true).apply {
+            contentDescription = "Gemini API Key"
+        }
         geminiFields.addView(geminiKey)
         geminiFields.addView(modelRow(
             title = "Model Gemini",
             onLoad = { fetchModels(AiApiSettingsStore.PROVIDER_GEMINI) },
         ))
-        geminiModel = edit("Ví dụ: gemini-3.7-flash")
+        geminiModel = edit("Ví dụ: gemini-3.7-flash").apply {
+            contentDescription = "Model Gemini"
+        }
         geminiFields.addView(geminiModel)
         root.addView(geminiFields)
 
         proxyFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         proxyFields.addView(label("OpenAI-compatible URL"))
-        proxyUrl = edit(".../v1 hoặc .../v1/chat/completions")
+        proxyUrl = edit(".../v1 hoặc .../v1/chat/completions").apply {
+            contentDescription = "OpenAI-compatible URL"
+        }
         proxyFields.addView(proxyUrl)
         proxyFields.addView(
             help("Mô tả video dùng chuẩn chat/completions + video_url. Có thể nhập base URL; ứng dụng sẽ tự nối endpoint.")
         )
         proxyFields.addView(label("OpenAI-compatible API Key"))
-        proxyKey = edit("Bearer key", password = true)
+        proxyKey = edit("Bearer key", password = true).apply {
+            contentDescription = "OpenAI-compatible API Key"
+        }
         proxyFields.addView(proxyKey)
         proxyFields.addView(modelRow(
             title = "Model OpenAI-compatible",
             onLoad = { fetchModels(AiApiSettingsStore.PROVIDER_OPENAI) },
         ))
-        proxyModel = edit("Nhập model")
+        proxyModel = edit("Nhập model").apply {
+            contentDescription = "Model OpenAI-compatible"
+        }
         proxyFields.addView(proxyModel)
         root.addView(proxyFields)
 
@@ -147,16 +157,22 @@ class ApiSettingsActivity : AppCompatActivity() {
         root.addView(streamingSwitch)
 
         root.addView(label("Timeout yêu cầu AI (ms)"))
-        timeoutInput = numericEdit("300000", decimal = false)
+        timeoutInput = numericEdit("300000", decimal = false).apply {
+            contentDescription = "Timeout yêu cầu AI tính bằng mili giây"
+        }
         root.addView(timeoutInput)
 
         root.addView(label("Nhiệt độ AI (0.0 - 2.0)"))
-        temperatureInput = numericEdit("0.2", decimal = true)
+        temperatureInput = numericEdit("0.2", decimal = true).apply {
+            contentDescription = "Nhiệt độ AI từ 0.0 đến 2.0"
+        }
         root.addView(temperatureInput)
 
         root.addView(section("Lời nhắc: Mô tả theo thời gian"))
         root.addView(help("Biến có thể dùng: {{VIDEO_DURATION_SECONDS}}. Ứng dụng sẽ thay biến này bằng thời lượng video tính theo giây."))
-        timelinePrompt = promptEdit()
+        timelinePrompt = promptEdit().apply {
+            contentDescription = "Lời nhắc mô tả theo thời gian"
+        }
         root.addView(timelinePrompt)
         root.addView(Button(this).apply {
             text = "Khôi phục lời nhắc theo thời gian mặc định"
@@ -170,7 +186,9 @@ class ApiSettingsActivity : AppCompatActivity() {
 
         root.addView(section("Lời nhắc: Mô tả tổng hợp"))
         root.addView(help("Biến có thể dùng: {{VIDEO_DURATION_SECONDS}}. Có thể chỉnh toàn bộ lời nhắc theo nhu cầu."))
-        summaryPrompt = promptEdit()
+        summaryPrompt = promptEdit().apply {
+            contentDescription = "Lời nhắc mô tả tổng hợp"
+        }
         root.addView(summaryPrompt)
         root.addView(Button(this).apply {
             text = "Khôi phục lời nhắc tổng hợp mặc định"
@@ -525,6 +543,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             })
             addView(Button(this@ApiSettingsActivity).apply {
                 text = "TẢI DS"
+                contentDescription = "Tải danh sách $title"
                 textSize = 12f
                 minimumHeight = dp(48)
                 setOnClickListener { onLoad() }

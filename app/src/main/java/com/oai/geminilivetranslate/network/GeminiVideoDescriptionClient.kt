@@ -72,6 +72,7 @@ class GeminiVideoDescriptionClient(
         .writeTimeout(0, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
+    @Volatile private var cancelled = false
 
     fun describe(
         resolver: ContentResolver,
@@ -147,6 +148,7 @@ class GeminiVideoDescriptionClient(
 
             var lastError: Throwable? = null
             for (attempt in 1..MAX_ATTEMPTS) {
+                throwIfCancelled()
                 val attemptStartedAt = SystemClock.elapsedRealtime()
                 try {
                     onProgress(
@@ -210,6 +212,9 @@ class GeminiVideoDescriptionClient(
                         totalTokens = totalTokens,
                     )
                 } catch (error: Throwable) {
+                    if (cancelled) throw java.util.concurrent.CancellationException(
+                        "Đã hủy mô tả video"
+                    )
                     lastError = error
                     logger.log(
                         if (attempt < MAX_ATTEMPTS) 1 else 0,
@@ -226,6 +231,7 @@ class GeminiVideoDescriptionClient(
     }
 
     fun cancel() {
+        cancelled = true
         client.dispatcher.cancelAll()
     }
 
@@ -335,6 +341,7 @@ class GeminiVideoDescriptionClient(
         val clean = name.removePrefix("/")
         val startedAt = SystemClock.elapsedRealtime()
         for (poll in 1..MAX_FILE_POLLS) {
+            throwIfCancelled()
             val request = Request.Builder()
                 .url("https://generativelanguage.googleapis.com/v1beta/$clean")
                 .header("x-goog-api-key", apiKey)
@@ -366,6 +373,7 @@ class GeminiVideoDescriptionClient(
             }
             onProgress("Gemini đang chuẩn bị video...", (45 + poll / 6).coerceAtMost(55))
             Thread.sleep(FILE_POLL_INTERVAL_MS)
+            throwIfCancelled()
         }
         error("Hết thời gian chờ Gemini chuẩn bị video")
     }
@@ -428,6 +436,7 @@ class GeminiVideoDescriptionClient(
                 ?: error("Gemini không trả interaction id cho tác vụ nền")
             val activeId = interactionId
             for (poll in 0..MAX_INTERACTION_POLLS) {
+                throwIfCancelled()
                 when (root.optString("status").lowercase()) {
                     "completed" -> return InteractionResult(
                         root = root,
@@ -444,6 +453,7 @@ class GeminiVideoDescriptionClient(
                 }
                 if (poll >= MAX_INTERACTION_POLLS) break
                 Thread.sleep(INTERACTION_POLL_INTERVAL_MS)
+                throwIfCancelled()
                 onProgress(
                     if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
                     (58 + poll / 5).coerceAtMost(96),
@@ -858,6 +868,10 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
         }.onFailure {
             logger.log(1, TAG, "Không xóa được video tạm Gemini name=$clean", it)
         }
+    }
+
+    private fun throwIfCancelled() {
+        if (cancelled) throw java.util.concurrent.CancellationException("Đã hủy mô tả video")
     }
 
     private fun sanitizeForLog(value: String, limit: Int): String =

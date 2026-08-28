@@ -301,7 +301,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             return
         }
         if (temperatureValue == null || temperatureValue !in 0.0..2.0) {
-            toast("Nhiệt độ AI phải từ 0.0 đến 2.0")
+            toast("Nhiệt độ Proxy phải từ 0.0 đến 2.0")
             return
         }
         if (reconnectRetriesValue == null || reconnectRetriesValue !in 1..10) {
@@ -348,7 +348,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyCount=${currentGeminiKeys.size} geminiKeysChanged=${previousGeminiKeys != currentGeminiKeys}",
+                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue proxyTemperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyCount=${currentGeminiKeys.size} geminiKeysChanged=${previousGeminiKeys != currentGeminiKeys}",
             )
             toast("Đã lưu thiết lập API")
             finish()

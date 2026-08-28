@@ -302,6 +302,7 @@ class TranslationService : LifecycleService() {
             updateError("Chưa có Gemini API Key")
             return
         }
+        val geminiApiKey = apiKey.orEmpty()
         if (mode == SourceMode.FILE && selectedUri == null) {
             updateError(if (isVideoDescriptionMode()) "Chưa chọn video" else "Chưa chọn tệp âm thanh/video")
             return
@@ -385,7 +386,7 @@ class TranslationService : LifecycleService() {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "VideoDescription", "Không tạo được wake lock", it)
             }
-            startVideoDescription(apiKey.orEmpty())
+            startVideoDescription(geminiApiKey)
             return
         }
 
@@ -393,7 +394,7 @@ class TranslationService : LifecycleService() {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
             }
-            startFileTranscription(apiKey)
+            startFileTranscription(geminiApiKey)
             return
         }
 
@@ -431,7 +432,7 @@ class TranslationService : LifecycleService() {
             "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
         startHealthMonitor()
-        connectGemini(apiKey)
+        connectGemini(geminiApiKey)
     }
 
     fun stopTranslation(

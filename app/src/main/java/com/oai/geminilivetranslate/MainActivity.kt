@@ -41,6 +41,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityMainBinding
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
+import com.oai.geminilivetranslate.ui.HistoryActivity
 import com.oai.geminilivetranslate.ui.LogViewerActivity
 import com.oai.geminilivetranslate.ui.MiniBrowserActivity
 import com.oai.geminilivetranslate.ui.SettingsActivity
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingProjectionData: Intent? = null
     private var pendingSelectedUri: Uri? = null
     private var pendingSelectedFileName: String? = null
+    private var pendingHistorySessionId: String? = null
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
@@ -103,6 +105,17 @@ class MainActivity : AppCompatActivity() {
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
         val uri = result.data?.data ?: return@registerForActivityResult
+        val flags = result.data?.flags ?: 0
+        if (flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }.onFailure {
+                logger.log(1, "History", "Không giữ được quyền đọc lâu dài uriScheme=${uri.scheme}", it)
+            }
+        }
         val name = displayName(uri)
         logger.log(2, "UI", "Đã chọn tệp name=${name ?: uri.lastPathSegment} uriScheme=${uri.scheme}")
         val service = translationService
@@ -149,6 +162,23 @@ class MainActivity : AppCompatActivity() {
         } else toast("Bạn chưa cấp quyền thu âm thanh nội bộ")
     }
 
+    private val historyLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val sessionId = result.data?.getStringExtra(HistoryActivity.EXTRA_SESSION_ID)
+            ?.takeIf(String::isNotBlank)
+            ?: return@registerForActivityResult
+        logger.log(2, "History", "Nhận yêu cầu mở phiên id=$sessionId serviceBound=${translationService != null}")
+        val service = translationService
+        if (service != null) {
+            if (service.restoreHistorySession(sessionId)) {
+                restorePreferencesUi()
+                toast("Đã mở phiên lịch sử")
+            }
+        } else {
+            pendingHistorySessionId = sessionId
+        }
+    }
+
     private val exportDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         val text = pendingExportText
         pendingExportText = null
@@ -183,6 +213,10 @@ class MainActivity : AppCompatActivity() {
                 translationService?.setSelectedFile(uri, pendingSelectedFileName)
                 pendingSelectedUri = null
                 pendingSelectedFileName = null
+            }
+            pendingHistorySessionId?.let { historyId ->
+                pendingHistorySessionId = null
+                translationService?.restoreHistorySession(historyId)
             }
             observeService()
             pendingStartMode?.let { mode ->
@@ -244,6 +278,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUi() = with(binding) {
         titleText.text = "Gemini Live Translate v${BuildConfig.VERSION_NAME}"
+        historyButton.setOnClickListener {
+            historyLauncher.launch(Intent(this@MainActivity, HistoryActivity::class.java))
+        }
         processingModeButton.setOnClickListener {
             if (translationService?.state?.value?.running == true) return@setOnClickListener
             val next = if (isTranscribeSelected()) {

@@ -674,6 +674,9 @@ class TranslationService : LifecycleService() {
     }
 
     fun subtitleText(format: String = preferences.load().exportFormat): String {
+        if (isVideoDescriptionMode() && isVideoDescriptionSummary()) {
+            return if (format == "txt") videoSummaryText else ""
+        }
         val useVietnamese = _state.value.subtitleTranslationAvailable &&
             _state.value.subtitleShowingVietnamese
         val store = if (useVietnamese) vietnameseSubtitles else subtitles
@@ -902,12 +905,14 @@ class TranslationService : LifecycleService() {
         subtitles.reset()
         vietnameseSubtitles.reset()
 
-        processingMode = if (loaded.processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            AppPreferences.PROCESSING_MODE_TRANSCRIBE
-        } else {
-            AppPreferences.PROCESSING_MODE_TRANSLATE
+        processingMode = when (loaded.processingMode) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+            else -> AppPreferences.PROCESSING_MODE_TRANSLATE
         }
+        videoDescriptionMode = loaded.videoDescriptionMode
         preferences.setProcessingMode(processingMode)
+        preferences.setVideoDescriptionMode(videoDescriptionMode)
 
         currentMode = runCatching { SourceMode.valueOf(loaded.sourceMode) }
             .getOrDefault(SourceMode.FILE)
@@ -916,7 +921,14 @@ class TranslationService : LifecycleService() {
         selectedUri = loaded.mediaUri?.let(Uri::parse)
         selectedFileName = loaded.mediaName
 
-        restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+        if (
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+            videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+        ) {
+            videoSummaryText = loaded.primaryTranscript
+        } else {
+            restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+        }
         restoreStoreFromHistory(
             vietnameseSubtitles,
             loaded.vietnameseSrt,
@@ -961,6 +973,7 @@ class TranslationService : LifecycleService() {
             subtitleTranslationAvailable = hasVietnamese,
             subtitleTranslationInProgress = false,
             subtitleShowingVietnamese = showVietnamese,
+            videoDescriptionMode = videoDescriptionMode,
         )
         logger.log(
             2,
@@ -995,6 +1008,7 @@ class TranslationService : LifecycleService() {
             mediaUri = if (mode == SourceMode.FILE) selectedUri?.toString() else null,
             mediaName = if (mode == SourceMode.FILE) selectedFileName else null,
             speakerDiarization = speakerDiarization,
+            videoDescriptionMode = videoDescriptionMode,
         )
         logger.log(
             2,
@@ -1014,12 +1028,18 @@ class TranslationService : LifecycleService() {
 
     private fun saveCurrentHistoryNow(reason: String) {
         val base = currentHistorySession ?: return
-        val primaryTranscript = if (processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            transcribePlainText.trim().ifBlank { subtitles.plainText() }
-        } else {
-            subtitles.plainText().ifBlank { _state.value.transcript }
+        val primaryTranscript = when {
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE ->
+                transcribePlainText.trim().ifBlank { subtitles.plainText() }
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
+                videoSummaryText.trim().ifBlank { _state.value.transcript }
+            else -> subtitles.plainText().ifBlank { _state.value.transcript }
         }
-        val primarySrt = subtitles.srtText()
+        val primarySrt = if (
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+            videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+        ) "" else subtitles.srtText()
         val viTranscript = vietnameseSubtitles.plainText()
         val viSrt = vietnameseSubtitles.srtText()
         val candidate = base.copy(
@@ -1057,6 +1077,7 @@ class TranslationService : LifecycleService() {
         transcribePlainText = ""
         liveCommittedTranscript = ""
         liveInterimTranscript = ""
+        videoSummaryText = ""
         liveInterimEvents = 0L
         liveFinalEvents = 0L
         transcribeRotationJob?.cancel()
@@ -2360,11 +2381,17 @@ class TranslationService : LifecycleService() {
     private fun isTranscribeMode(): Boolean =
         processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE
 
-    private fun activeModelName(): String = if (isTranscribeMode()) {
-        if (currentMode == SourceMode.FILE) AppPreferences.TRANSCRIBE_FILE_MODEL
-        else AppPreferences.TRANSCRIBE_LIVE_MODEL
-    } else {
-        settings.model
+    private fun isVideoDescriptionMode(): Boolean =
+        processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+
+    private fun isVideoDescriptionSummary(): Boolean =
+        videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+
+    private fun activeModelName(): String = when {
+        isVideoDescriptionMode() -> AppPreferences.VIDEO_DESCRIPTION_MODEL
+        isTranscribeMode() && currentMode == SourceMode.FILE -> AppPreferences.TRANSCRIBE_FILE_MODEL
+        isTranscribeMode() -> AppPreferences.TRANSCRIBE_LIVE_MODEL
+        else -> settings.model
     }
 
     private fun elapsedMs(): Long = (SystemClock.elapsedRealtime() - sessionStartedAt).coerceAtLeast(0)
@@ -2394,6 +2421,6 @@ class TranslationService : LifecycleService() {
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"
         const val ACTION_APPLY_SETTINGS = "com.oai.geminilivetranslate.APPLY_SETTINGS"
         const val ACTION_REFRESH_API_KEY = "com.oai.geminilivetranslate.REFRESH_API_KEY"
-        private const val MAX_TRANSCRIPT_CHARS = 20_000
+        private const val MAX_TRANSCRIPT_CHARS = 120_000
     }
 }

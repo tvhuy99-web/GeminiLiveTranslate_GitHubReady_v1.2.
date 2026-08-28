@@ -1,5 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
+import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -45,6 +46,8 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var proxyKey: EditText
     private lateinit var proxyModel: EditText
     private lateinit var streamingSwitch: Switch
+    private lateinit var timeoutInput: EditText
+    private lateinit var temperatureInput: EditText
     private lateinit var timelinePrompt: EditText
     private lateinit var summaryPrompt: EditText
 
@@ -81,6 +84,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(12), dp(18), dp(12))
+            setBackgroundColor(Color.WHITE)
         }
         root.addView(TextView(this).apply {
             text = "THIẾT LẬP API"
@@ -137,6 +141,14 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
         root.addView(streamingSwitch)
 
+        root.addView(label("Timeout yêu cầu AI (ms)"))
+        timeoutInput = numericEdit("300000", decimal = false)
+        root.addView(timeoutInput)
+
+        root.addView(label("Nhiệt độ AI (0.0 - 2.0)"))
+        temperatureInput = numericEdit("0.2", decimal = true)
+        root.addView(temperatureInput)
+
         root.addView(section("Lời nhắc: Mô tả theo thời gian"))
         root.addView(help("Biến có thể dùng: {{VIDEO_DURATION_SECONDS}}. Ứng dụng sẽ thay biến này bằng thời lượng video tính theo giây."))
         timelinePrompt = promptEdit()
@@ -175,6 +187,8 @@ class ApiSettingsActivity : AppCompatActivity() {
         actions.addView(Button(this).apply {
             text = "LƯU"
             minimumHeight = dp(58)
+            setBackgroundColor(Color.parseColor("#34C759"))
+            setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { saveAndClose() }
         })
@@ -211,6 +225,8 @@ class ApiSettingsActivity : AppCompatActivity() {
         proxyKey.setText(secretState.proxyKey.orEmpty())
         proxyModel.setText(settings.proxyModel)
         streamingSwitch.isChecked = settings.streamingEnabled
+        timeoutInput.setText(settings.requestTimeoutMs.toString())
+        temperatureInput.setText(settings.temperature.toString())
         timelinePrompt.setText(settings.timelinePrompt)
         summaryPrompt.setText(settings.summaryPrompt)
         refreshProviderFields()
@@ -221,6 +237,8 @@ class ApiSettingsActivity : AppCompatActivity() {
         val geminiValue = geminiKey.text.toString().trim()
         val proxyValue = proxyKey.text.toString().trim()
         val proxyUrlValue = proxyUrl.text.toString().trim()
+        val timeoutValue = timeoutInput.text.toString().trim().toIntOrNull()
+        val temperatureValue = temperatureInput.text.toString().trim().toDoubleOrNull()
 
         if (geminiValue.isNotBlank() && (geminiValue.length < 20 || geminiValue.any(Char::isWhitespace))) {
             toast("Gemini API Key không hợp lệ")
@@ -230,9 +248,17 @@ class ApiSettingsActivity : AppCompatActivity() {
             toast("URL OpenAI-compatible phải dùng HTTPS")
             return
         }
+        if (timeoutValue == null || timeoutValue !in 30_000..900_000) {
+            toast("Timeout phải từ 30000 đến 900000 ms")
+            return
+        }
+        if (temperatureValue == null || temperatureValue !in 0.0..2.0) {
+            toast("Nhiệt độ AI phải từ 0.0 đến 2.0")
+            return
+        }
 
         runCatching {
-            if (geminiValue.isNotBlank()) keys.setGeminiKey(geminiValue)
+            keys.setGeminiKey(geminiValue)
             keys.setProxyKey(proxyValue)
             store.save(
                 AiApiSettings(
@@ -241,6 +267,8 @@ class ApiSettingsActivity : AppCompatActivity() {
                     proxyUrl = proxyUrlValue,
                     proxyModel = proxyModel.text.toString(),
                     streamingEnabled = streamingSwitch.isChecked,
+                    requestTimeoutMs = timeoutValue,
+                    temperature = temperatureValue,
                     timelinePrompt = timelinePrompt.text.toString(),
                     summaryPrompt = summaryPrompt.text.toString(),
                 )
@@ -249,7 +277,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()}",
+                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()}",
             )
             toast("Đã lưu thiết lập API")
             finish()
@@ -425,14 +453,15 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun section(textValue: String): TextView = TextView(this).apply {
         text = textValue
-        textSize = 16f
+        textSize = 15f
+        setTextColor(Color.parseColor("#007AFF"))
         setPadding(0, dp(14), 0, dp(3))
     }
 
     private fun help(textValue: String): TextView = TextView(this).apply {
         text = textValue
         textSize = 12f
-        alpha = 0.72f
+        setTextColor(Color.parseColor("#666666"))
         setPadding(0, 0, 0, dp(4))
     }
 
@@ -444,6 +473,15 @@ class ApiSettingsActivity : AppCompatActivity() {
             if (password) {
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             }
+        }
+
+    private fun numericEdit(hintValue: String, decimal: Boolean): EditText =
+        EditText(this).apply {
+            hint = hintValue
+            isSingleLine = true
+            minimumHeight = dp(48)
+            inputType = InputType.TYPE_CLASS_NUMBER or
+                if (decimal) InputType.TYPE_NUMBER_FLAG_DECIMAL else 0
         }
 
     private fun promptEdit(): EditText = EditText(this).apply {

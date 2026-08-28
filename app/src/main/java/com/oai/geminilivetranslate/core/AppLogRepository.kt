@@ -287,7 +287,10 @@ class AppLogRepository private constructor(context: Context) {
         val now = SystemClock.elapsedRealtime()
         if (secretsLoadedAt != 0L && now - secretsLoadedAt < 60_000L) return
         secretsLoadedAt = now
-        cachedSecrets = runCatching { ApiKeyStore(appContext).load().keys }.getOrDefault(emptyList())
+        cachedSecrets = runCatching {
+            val state = ApiKeyStore(appContext).load()
+            (state.keys + listOfNotNull(state.proxyKey)).distinct()
+        }.getOrDefault(emptyList())
     }
 
     companion object {

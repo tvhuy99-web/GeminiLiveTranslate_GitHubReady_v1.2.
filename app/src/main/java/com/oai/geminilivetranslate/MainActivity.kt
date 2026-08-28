@@ -678,6 +678,7 @@ class MainActivity : AppCompatActivity() {
             audioSourceSpinner.isVisible = false
             speakerDiarizationSwitch.isVisible = false
             selectFileButton.isVisible = true
+            selectFileButton.isEnabled = !running
             if (translationService?.state?.value?.selectedFileName.isNullOrBlank()) {
                 selectFileButton.text = "Chọn video"
             }
@@ -710,6 +711,7 @@ class MainActivity : AppCompatActivity() {
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode
+        selectFileButton.isEnabled = !running
         miniBrowserButton.isVisible = !transcribe || mode == SourceMode.INTERNAL
         fileControls.isVisible = fileMode && !transcribe
         fileSpeedLayout.isVisible = fileMode && !transcribe

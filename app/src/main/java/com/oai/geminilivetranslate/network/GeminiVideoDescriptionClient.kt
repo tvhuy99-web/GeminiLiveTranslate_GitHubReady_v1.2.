@@ -93,7 +93,7 @@ class GeminiVideoDescriptionClient(
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
         require(mimeType in SUPPORTED_VIDEO_MIME_TYPES) {
-            "Định dạng video chưa được Gemini 3.7 Flash hỗ trợ trực tiếp: $mimeType"
+            "Định dạng video chưa được Gemini Interactions API hỗ trợ trực tiếp: $mimeType"
         }
         require(durationMs in 1..MAX_VIDEO_DURATION_MS) {
             "Video phải dài tối đa 20 phút"

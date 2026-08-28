@@ -123,8 +123,11 @@ class ApiSettingsActivity : AppCompatActivity() {
 
         proxyFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         proxyFields.addView(label("OpenAI-compatible URL"))
-        proxyUrl = edit(".../v1/chat/completions")
+        proxyUrl = edit(".../v1 hoặc .../v1/chat/completions")
         proxyFields.addView(proxyUrl)
+        proxyFields.addView(
+            help("Mô tả video dùng chuẩn chat/completions + video_url. Có thể nhập base URL; ứng dụng sẽ tự nối endpoint.")
+        )
         proxyFields.addView(label("OpenAI-compatible API Key"))
         proxyKey = edit("Bearer key", password = true)
         proxyFields.addView(proxyKey)
@@ -402,23 +405,16 @@ class ApiSettingsActivity : AppCompatActivity() {
             error("URL OpenAI-compatible phải dùng HTTPS")
         }
         val endpoint = normalizeProxyTestEndpoint(proxyUrlValue)
-        val responsesStyle = endpoint.endsWith("/responses")
-        val payload = if (responsesStyle) {
-            JSONObject()
-                .put("model", modelValue)
-                .put("input", "Chỉ trả lời đúng một từ: OK")
-        } else {
-            JSONObject()
-                .put("model", modelValue)
-                .put(
-                    "messages",
-                    org.json.JSONArray().put(
-                        JSONObject()
-                            .put("role", "user")
-                            .put("content", "Chỉ trả lời đúng một từ: OK")
-                    )
+        val payload = JSONObject()
+            .put("model", modelValue)
+            .put(
+                "messages",
+                org.json.JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", "Chỉ trả lời đúng một từ: OK")
                 )
-        }
+            )
         val builder = Request.Builder()
             .url(endpoint)
             .header("Content-Type", "application/json")
@@ -439,7 +435,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         val url = raw.trim().removeSuffix("/")
         return when {
             url.endsWith("/chat/completions") -> url
-            url.endsWith("/responses") -> url
+            url.endsWith("/responses") -> url.removeSuffix("/responses") + "/chat/completions"
             else -> "$url/chat/completions"
         }
     }

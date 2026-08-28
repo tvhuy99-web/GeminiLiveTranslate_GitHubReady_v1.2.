@@ -28,7 +28,6 @@ class GeminiVideoDescriptionClient(
     private val summaryPromptTemplate: String = VideoDescriptionPromptDefaults.SUMMARY,
     private val streamingEnabled: Boolean = true,
     private val requestTimeoutMs: Int = 300_000,
-    private val temperature: Double = 0.2,
 ) {
     enum class Mode {
         TIMELINE,
@@ -132,7 +131,7 @@ class GeminiVideoDescriptionClient(
         logger.log(
             2,
             TAG,
-            "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled timeoutMs=$requestTimeoutMs temperature=$temperature",
+            "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled timeoutMs=$requestTimeoutMs",
         )
 
         var uploadedName: String? = null
@@ -229,6 +228,7 @@ class GeminiVideoDescriptionClient(
                     if (cancelled) throw java.util.concurrent.CancellationException(
                         "Đã hủy mô tả video"
                     )
+                    if (GeminiApiErrorClassifier.requiresKeyFailover(error)) throw error
                     lastError = error
                     logger.log(
                         if (attempt < MAX_ATTEMPTS) 1 else 0,
@@ -573,10 +573,6 @@ class GeminiVideoDescriptionClient(
         val request = JSONObject()
             .put("model", model)
             .put("store", false)
-            .put(
-                "generation_config",
-                JSONObject().put("temperature", temperature.coerceIn(0.0, 2.0))
-            )
             .put(
                 "input",
                 JSONArray()

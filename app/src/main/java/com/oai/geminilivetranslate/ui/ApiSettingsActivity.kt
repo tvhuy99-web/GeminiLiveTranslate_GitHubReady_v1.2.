@@ -14,6 +14,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.oai.geminilivetranslate.core.AiApiSettings
@@ -87,7 +88,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, dp(14))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            accessibilityHeading = true
+            ViewCompat.setAccessibilityHeading(this, true)
         })
 
         root.addView(label("Nhà cung cấp AI"))

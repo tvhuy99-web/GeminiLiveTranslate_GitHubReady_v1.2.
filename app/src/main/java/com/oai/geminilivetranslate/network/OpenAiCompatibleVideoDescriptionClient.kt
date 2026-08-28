@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Base64
+import com.oai.geminilivetranslate.core.AiApiEndpointRules
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
 import com.oai.geminilivetranslate.core.VideoDescriptionTimelineRules
@@ -150,7 +151,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         stream: Boolean,
     ): String {
         throwIfCancelled()
-        val url = normalizeEndpoint(endpoint)
+        val url = AiApiEndpointRules.proxyChatEndpoint(endpoint)
         val request = Request.Builder()
             .url(url)
             .header("Content-Type", "application/json")
@@ -303,15 +304,6 @@ class OpenAiCompatibleVideoDescriptionClient(
             }
             .filter(String::isNotBlank)
             .joinToString("\n")
-    }
-
-    private fun normalizeEndpoint(raw: String): String {
-        val url = raw.trim().removeSuffix("/")
-        return when {
-            url.endsWith("/chat/completions") -> url
-            url.endsWith("/responses") -> url.removeSuffix("/responses") + "/chat/completions"
-            else -> "$url/chat/completions"
-        }
     }
 
     private fun sanitizeUrl(raw: String): String = raw.substringBefore('?').take(180)

@@ -1448,8 +1448,16 @@ class TranslationService : LifecycleService() {
                 } else {
                     GeminiVideoDescriptionClient.Mode.TIMELINE
                 }
+                var lastPartialUiUpdateAt = 0L
                 val partial: (String) -> Unit = { text ->
-                    if (_state.value.running && selectedUri == uri && text.isNotBlank()) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (
+                        _state.value.running &&
+                        selectedUri == uri &&
+                        text.isNotBlank() &&
+                        now - lastPartialUiUpdateAt >= VIDEO_DESCRIPTION_PARTIAL_UI_INTERVAL_MS
+                    ) {
+                        lastPartialUiUpdateAt = now
                         updateState {
                             it.copy(
                                 transcript = text.takeLast(MAX_TRANSCRIPT_CHARS),
@@ -2672,6 +2680,7 @@ class TranslationService : LifecycleService() {
     }
 
     companion object {
+        private const val VIDEO_DESCRIPTION_PARTIAL_UI_INTERVAL_MS = 250L
         private val GEMINI_VIDEO_MIME_TYPES = setOf(
             "video/mp4",
             "video/mpeg",

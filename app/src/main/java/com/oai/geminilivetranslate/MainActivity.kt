@@ -701,16 +701,9 @@ class MainActivity : AppCompatActivity() {
         val fileMode = mode == SourceMode.FILE
         val micMode = mode == SourceMode.MICROPHONE
 
-        processingModeButton.isEnabled = !running
-        processingModeButton.text = when {
-            videoDescription -> "Chế độ: Mô tả video"
-            transcribe -> "Chế độ: Chép lời"
-            else -> "Chế độ: Dịch thuật"
-        }
-        videoDescriptionModeButton.isVisible = videoDescription
-        videoDescriptionModeButton.isEnabled = !running
-        videoDescriptionModeButton.text =
-            if (videoSummary) "Mô tả tổng hợp" else "Mô tả theo thời gian"
+        processingModeSpinner.isEnabled = !running
+        videoDescriptionModeLayout.isVisible = videoDescription
+        videoDescriptionModeSpinner.isEnabled = !running
 
         if (videoDescription) {
             apiKeyButton.isEnabled = !running
@@ -720,7 +713,7 @@ class MainActivity : AppCompatActivity() {
             selectFileButton.isVisible = true
             selectFileButton.isEnabled = !running
             if (translationService?.state?.value?.selectedFileName.isNullOrBlank()) {
-                selectFileButton.text = "Chọn video"
+                selectFileButton.text = "Chọn tệp âm thanh hoặc video"
             }
             miniBrowserButton.isVisible = false
             testConnectionButton.isVisible = false
@@ -1142,14 +1135,26 @@ class MainActivity : AppCompatActivity() {
     private fun restoreProcessingModeUi() = with(binding) {
         val transcribe = isTranscribeSelected()
         val videoDescription = isVideoDescriptionSelected()
-        processingModeButton.text = when {
-            videoDescription -> "Chế độ: Mô tả video"
-            transcribe -> "Chế độ: Chép lời"
-            else -> "Chế độ: Dịch thuật"
+
+        val processingIndex = processingModeValues
+            .indexOf(preferences.loadProcessingMode())
+            .coerceAtLeast(0)
+        processingModeSpinnerReady = false
+        if (processingModeSpinner.selectedItemPosition != processingIndex) {
+            processingModeSpinner.setSelection(processingIndex)
         }
-        videoDescriptionModeButton.isVisible = videoDescription
-        videoDescriptionModeButton.text =
-            if (isVideoDescriptionSummarySelected()) "Mô tả tổng hợp" else "Mô tả theo thời gian"
+        processingModeSpinner.post { processingModeSpinnerReady = true }
+
+        val videoModeIndex = videoDescriptionModeValues
+            .indexOf(preferences.loadVideoDescriptionMode())
+            .coerceAtLeast(0)
+        videoDescriptionModeSpinnerReady = false
+        if (videoDescriptionModeSpinner.selectedItemPosition != videoModeIndex) {
+            videoDescriptionModeSpinner.setSelection(videoModeIndex)
+        }
+        videoDescriptionModeSpinner.post { videoDescriptionModeSpinnerReady = true }
+        videoDescriptionModeLayout.isVisible = videoDescription
+
         speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
         val mode = if (videoDescription) {
             SourceMode.FILE

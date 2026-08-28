@@ -513,7 +513,12 @@ class MainActivity : AppCompatActivity() {
             )
             lastRenderedTranscriptChars = transcriptChars
         }
-        val emptyTranscript = if (isTranscribeSelected()) "Chưa có nội dung chép lời" else "Chưa có nội dung dịch"
+        val emptyTranscript = when {
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() -> "Chưa có mô tả tổng hợp"
+            isVideoDescriptionSelected() -> "Chưa có mô tả theo thời gian"
+            isTranscribeSelected() -> "Chưa có nội dung chép lời"
+            else -> "Chưa có nội dung dịch"
+        }
         subtitleText.text = state.transcript.ifBlank { emptyTranscript }
         val expectedChars = if (transcriptChars == 0) emptyTranscript.length else transcriptChars
         val actualChars = subtitleText.text.length
@@ -529,12 +534,12 @@ class MainActivity : AppCompatActivity() {
         }
         subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
         if (!progressSeekBar.isPressed) progressSeekBar.progress = state.progressPercent
-        progressSeekBar.contentDescription = if (isTranscribeSelected()) {
-            "Tiến trình xử lý: ${state.progressPercent}%"
-        } else {
-            "Tiến trình phát: ${state.progressPercent}%"
+        progressSeekBar.contentDescription = when {
+            isVideoDescriptionSelected() -> "Tiến trình mô tả video: ${state.progressPercent}%"
+            isTranscribeSelected() -> "Tiến trình xử lý: ${state.progressPercent}%"
+            else -> "Tiến trình phát: ${state.progressPercent}%"
         }
-        if (!isTranscribeSelected()) aiVoiceSwitch.isChecked = state.aiVoice
+        if (!isTranscribeSelected() && !isVideoDescriptionSelected()) aiVoiceSwitch.isChecked = state.aiVoice
         if (audioSourceSpinner.selectedItemPosition != state.sourceMode.ordinal) {
             spinnerReady = false
             audioSourceSpinner.setSelection(state.sourceMode.ordinal)
@@ -542,8 +547,16 @@ class MainActivity : AppCompatActivity() {
         }
         state.selectedFileName?.let { selectFileButton.text = it }
         startButton.text = when {
+            state.running && isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Dừng mô tả tổng hợp"
+            state.running && isVideoDescriptionSelected() ->
+                "Dừng mô tả theo thời gian"
             state.running && isTranscribeSelected() -> "Dừng chép lời"
             state.running -> "Dừng dịch"
+            isVideoDescriptionSelected() && isVideoDescriptionSummarySelected() ->
+                "Bắt đầu mô tả tổng hợp"
+            isVideoDescriptionSelected() ->
+                "Bắt đầu mô tả theo thời gian"
             isTranscribeSelected() -> "Bắt đầu chép lời"
             state.sourceMode == SourceMode.MICROPHONE -> "Bắt đầu thu âm"
             state.sourceMode == SourceMode.INTERNAL -> "Bắt đầu thu nội bộ"
@@ -557,8 +570,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
+        val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
         val hasContent = state.transcript.isNotBlank()
-        subtitlePlaybackButton.isVisible = transcribe
+        subtitlePlaybackButton.isVisible = transcribe || (videoDescription && !videoSummary)
+        subtitlePlaybackButton.isEnabled = !state.running && (hasContent || !videoDescription)
         translateToVietnameseButton.isVisible =
             transcribe && !state.running && (hasContent || state.subtitleTranslationInProgress)
         translateToVietnameseButton.isEnabled =
@@ -571,9 +587,11 @@ class MainActivity : AppCompatActivity() {
         }
         translateToVietnameseButton.contentDescription = translateToVietnameseButton.text
 
-        val format = preferences.load().exportFormat
+        val format = if (videoSummary) "txt" else preferences.load().exportFormat
         val baseExport = if (format == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         exportButton.text = when {
+            videoSummary -> "Xuất mô tả tổng hợp (.txt)"
+            videoDescription -> if (format == "txt") "Xuất mô tả (.txt)" else "Xuất mô tả (.srt)"
             transcribe && state.subtitleTranslationAvailable && state.subtitleShowingVietnamese ->
                 "$baseExport - Tiếng Việt"
             transcribe && state.subtitleTranslationAvailable ->

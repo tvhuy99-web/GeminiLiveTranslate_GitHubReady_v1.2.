@@ -277,6 +277,11 @@ class TranslationService : LifecycleService() {
                 currentHistory.mediaUri != selected
             ) {
                 beginHistorySession(SourceMode.FILE, "file-start")
+            } else {
+                currentHistorySession = currentHistory.copy(
+                    processingMode = processingMode,
+                    speakerDiarization = speakerDiarization,
+                )
             }
         }
 
@@ -979,16 +984,11 @@ class TranslationService : LifecycleService() {
         val viTranscript = vietnameseSubtitles.plainText()
         val viSrt = vietnameseSubtitles.srtText()
         val candidate = base.copy(
-            sourceMode = currentMode.name,
-            processingMode = processingMode,
-            mediaUri = if (currentMode == SourceMode.FILE) selectedUri?.toString() else null,
-            mediaName = if (currentMode == SourceMode.FILE) selectedFileName else null,
             primaryTranscript = primaryTranscript,
             primarySrt = primarySrt,
             vietnameseTranscript = viTranscript,
             vietnameseSrt = viSrt,
             showingVietnamese = _state.value.subtitleShowingVietnamese,
-            speakerDiarization = speakerDiarization,
         )
         if (!candidate.hasValue) {
             logger.log(3, "History", "Bỏ lưu phiên rỗng id=${base.id} reason=$reason")

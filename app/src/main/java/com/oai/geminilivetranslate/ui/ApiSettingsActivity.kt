@@ -121,11 +121,11 @@ class ApiSettingsActivity : AppCompatActivity() {
 
         geminiFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         geminiFields.addView(modelRow(
-            title = "Model Gemini",
+            title = "Model Gemini cho Mô tả video",
             onLoad = { fetchModels(AiApiSettingsStore.PROVIDER_GEMINI) },
         ))
         geminiModel = edit("Ví dụ: gemini-3.7-flash").apply {
-            contentDescription = "Model Gemini"
+            contentDescription = "Model Gemini cho Mô tả video"
         }
         geminiFields.addView(geminiModel)
         root.addView(geminiFields)
@@ -145,11 +145,11 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
         proxyFields.addView(proxyKey)
         proxyFields.addView(modelRow(
-            title = "Model OpenAI-compatible",
+            title = "Model OpenAI-compatible cho Mô tả video",
             onLoad = { fetchModels(AiApiSettingsStore.PROVIDER_OPENAI) },
         ))
         proxyModel = edit("Nhập model").apply {
-            contentDescription = "Model OpenAI-compatible"
+            contentDescription = "Model OpenAI-compatible cho Mô tả video"
         }
         proxyFields.addView(proxyModel)
         root.addView(proxyFields)

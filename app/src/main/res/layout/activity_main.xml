@@ -313,6 +313,14 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/subtitlePlaybackButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="Nghe với phụ đề"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/settingsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

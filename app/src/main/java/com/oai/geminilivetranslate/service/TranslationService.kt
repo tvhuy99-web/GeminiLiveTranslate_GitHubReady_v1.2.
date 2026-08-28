@@ -290,10 +290,6 @@ class TranslationService : LifecycleService() {
         val apiKey = secretState.selected
         val aiApi = AiApiSettingsStore(this).load()
         if (isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
-            if (secretState.proxyKey.isNullOrBlank()) {
-                updateError("Chưa có OpenAI-compatible API Key")
-                return
-            }
             if (aiApi.proxyModel.isBlank()) {
                 updateError("Chưa chọn model OpenAI-compatible")
                 return

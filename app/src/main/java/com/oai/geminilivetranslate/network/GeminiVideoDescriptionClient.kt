@@ -496,7 +496,8 @@ class GeminiVideoDescriptionClient(
         var previousStart = -1.0
 
         for (i in 0 until items.length()) {
-            val raw = items.optJSONObject(i) ?: run {
+            val raw = items.optJSONObject(i)
+            if (raw == null) {
                 errors += "item[$i] không phải object"
                 continue
             }

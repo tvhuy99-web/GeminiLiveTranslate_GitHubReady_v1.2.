@@ -673,6 +673,7 @@ class MainActivity : AppCompatActivity() {
             if (videoSummary) "Mô tả tổng hợp" else "Mô tả theo thời gian"
 
         if (videoDescription) {
+            apiKeyButton.isEnabled = !running
             audioSourceLabel.isVisible = false
             audioSourceSpinner.isVisible = false
             speakerDiarizationSwitch.isVisible = false
@@ -702,6 +703,7 @@ class MainActivity : AppCompatActivity() {
             return@with
         }
 
+        apiKeyButton.isEnabled = true
         audioSourceLabel.isVisible = true
         audioSourceSpinner.isVisible = true
         testConnectionButton.isVisible = true

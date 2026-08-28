@@ -734,13 +734,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun restorePreferencesUi() = with(binding) {
         val settings = preferences.load()
-        val restoredMode = loadSourceMode()
+        val restoredMode = if (isVideoDescriptionSelected()) SourceMode.FILE else loadSourceMode()
+        if (isVideoDescriptionSelected()) saveSourceMode(SourceMode.FILE)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
         spinnerReady = false
         audioSourceSpinner.setSelection(restoredMode.ordinal)
         audioSourceSpinner.post { spinnerReady = true }
         translationService?.setSourceMode(restoredMode)
         translationService?.setProcessingMode(preferences.loadProcessingMode())
+        translationService?.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
         translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
         translationService?.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         originalVolumeSeekBar.progress = settings.originalVolume

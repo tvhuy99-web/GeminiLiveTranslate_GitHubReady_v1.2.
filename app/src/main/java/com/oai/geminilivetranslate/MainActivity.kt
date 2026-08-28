@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.OpenableColumns
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
@@ -32,7 +31,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.oai.geminilivetranslate.audio.FileAudioSource
-import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.SessionLogger
@@ -56,7 +54,6 @@ import kotlin.math.roundToInt
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var preferences: AppPreferences
-    private lateinit var apiKeyStore: ApiKeyStore
     private lateinit var logger: SessionLogger
     private var translationService: TranslationService? = null
     private var bound = false
@@ -299,7 +296,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         preferences = AppPreferences(this)
-        apiKeyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
         resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
@@ -864,81 +860,6 @@ class MainActivity : AppCompatActivity() {
                 originalVolumeSeekBar.isVisible = true
             }
         }
-    }
-
-    private fun showApiKeyManager() {
-        val dialog = AlertDialog.Builder(this).setTitle("Quản lý API Key").create()
-        val scroll = ScrollView(this)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(30, 20, 30, 20)
-        }
-        fun rebuild() {
-            root.removeAllViews()
-            val state = apiKeyStore.load()
-            if (state.keys.isEmpty()) root.addView(TextView(this).apply { text = "Chưa có API Key nào." })
-            state.keys.forEachIndexed { index, key ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                row.addView(TextView(this).apply {
-                    text = "Key ${index + 1}${if (state.selected == key) " (đang dùng)" else ""}\n${apiKeyStore.masked(key)}"
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                row.addView(Button(this).apply {
-                    text = "Chọn"
-                    setOnClickListener {
-                        val previous = apiKeyStore.load().selected
-                        val updated = if (previous == key) apiKeyStore.load() else apiKeyStore.select(key)
-                        logger.log(2, "ApiKey", "Đã chọn API Key index=${index + 1} changed=${previous != updated.selected}")
-                        applySelectedApiKeyIfRunning(previous, updated.selected)
-                        rebuild()
-                        toast("Đã chọn Key ${index + 1}")
-                    }
-                })
-                row.addView(Button(this).apply {
-                    text = "Xóa"
-                    setOnClickListener {
-                        val previous = apiKeyStore.load().selected
-                        val updated = apiKeyStore.remove(key)
-                        logger.log(1, "ApiKey", "Đã xóa API Key index=${index + 1} selectedChanged=${previous != updated.selected}")
-                        applySelectedApiKeyIfRunning(previous, updated.selected)
-                        rebuild()
-                    }
-                })
-                root.addView(row)
-            }
-            val input = EditText(this).apply {
-                hint = "Nhập API Key mới vào đây..."
-                isSingleLine = true
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
-            root.addView(input)
-            root.addView(Button(this).apply {
-                text = "Thêm mới"
-                setOnClickListener {
-                    runCatching { apiKeyStore.add(input.text.toString()) }
-                        .onSuccess { updated ->
-                            val previous = state.selected
-                            logger.log(2, "ApiKey", "Đã thêm API Key; total=${updated.keys.size}")
-                            applySelectedApiKeyIfRunning(previous, updated.selected)
-                            input.text.clear()
-                            rebuild()
-                            toast("Đã thêm API Key mới")
-                        }
-                        .onFailure { toast(it.message ?: "API Key không hợp lệ") }
-                }
-            })
-            root.addView(Button(this).apply { text = "Đóng"; setOnClickListener { dialog.dismiss() } })
-        }
-        rebuild()
-        scroll.addView(root)
-        dialog.setView(scroll)
-        dialog.show()
-    }
-
-    private fun applySelectedApiKeyIfRunning(previous: String?, current: String?) {
-        if (previous == current || translationService?.state?.value?.running != true) return
-        startService(Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_REFRESH_API_KEY))
-        toast(if (current == null) "API Key đã hết; đang dừng phiên" else "Đang áp dụng API Key mới")
     }
 
     private fun openSubtitlePlayback() {

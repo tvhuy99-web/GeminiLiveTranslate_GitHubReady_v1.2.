@@ -507,6 +507,8 @@ class TranslationService : LifecycleService() {
 
     fun selectedMediaName(): String? = selectedFileName
 
+    fun currentHistorySessionId(): String? = currentHistorySession?.id
+
     fun setAiVoice(enabled: Boolean) {
         preferences.setAiVoice(enabled)
         settings = settings.copy(aiVoice = enabled)

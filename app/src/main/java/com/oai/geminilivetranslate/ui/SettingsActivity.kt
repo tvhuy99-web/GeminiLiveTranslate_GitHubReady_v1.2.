@@ -503,39 +503,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun buildSystem() {
-        title("Khi mất kết nối")
-        check(
-            label = "Tự kết nối lại",
-            checked = draft.autoReconnect,
-            detail = "Ứng dụng sẽ tự thử lại khi mạng hoặc dịch vụ bị gián đoạn.",
-        ) {
-            draft = draft.copy(autoReconnect = it)
-            rebuildActiveTab("Tự kết nối lại")
+        title("AI và kết nối")
+        description("API Key, nhà cung cấp, model, streaming, tự kết nối lại và kiểm tra kết nối đã được chuyển vào Thiết lập API.")
+        rowButton("Mở Thiết lập API") {
+            startActivity(Intent(this, ApiSettingsActivity::class.java))
         }
-        if (draft.autoReconnect) {
-            slider(
-                label = "Số lần thử lại",
-                current = draft.reconnectMaxRetries,
-                minValue = 1,
-                maxValue = 10,
-                step = 1,
-                unit = " lần",
-            ) {
-                draft = draft.copy(reconnectMaxRetries = it)
-            }
-        }
-
-        title("Kiểm tra kết nối")
-        content.addView(Button(this).apply {
-            text = "Kiểm tra kết nối dịch"
-            isAllCaps = false
-            minHeight = dp(48)
-            contentDescription = "Kiểm tra kết nối dịch"
-            setOnClickListener {
-                captureTextFields()
-                testConnection(this)
-            }
-        })
 
         title("Khôi phục và xóa dữ liệu")
         rowButton("Đưa cài đặt về mặc định") { confirmRestoreSettings() }

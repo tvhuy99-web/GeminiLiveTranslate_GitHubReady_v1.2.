@@ -29,20 +29,54 @@
             android:minHeight="48dp"
             android:text="Lịch sử" />
 
-        <Button
-            android:id="@+id/processingModeButton"
+        <LinearLayout
+            android:id="@+id/processingModeLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="Chế độ: Dịch thuật" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/videoDescriptionModeButton"
+            <TextView
+                android:id="@+id/processingModeLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:labelFor="@id/processingModeSpinner"
+                android:text="Chế độ:"
+                android:textSize="16sp" />
+
+            <com.oai.geminilivetranslate.ui.AccessibleSpinner
+                android:id="@+id/processingModeSpinner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:contentDescription="Chọn chế độ"
+                android:minHeight="48dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/videoDescriptionModeLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:text="Mô tả theo thời gian"
-            android:visibility="gone" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/videoDescriptionModeLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:labelFor="@id/videoDescriptionModeSpinner"
+                android:text="Kiểu mô tả:"
+                android:textSize="16sp" />
+
+            <com.oai.geminilivetranslate.ui.AccessibleSpinner
+                android:id="@+id/videoDescriptionModeSpinner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:contentDescription="Chọn kiểu mô tả video"
+                android:minHeight="48dp" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/apiKeyButton"

@@ -419,7 +419,14 @@ class TranslationService : LifecycleService() {
         connectGemini(apiKey)
     }
 
-    fun stopTranslation(message: String = if (isTranscribeMode()) "Đã dừng chép lời" else "Đã dừng dịch") {
+    fun stopTranslation(
+        message: String = when {
+            isVideoDescriptionMode() && isVideoDescriptionSummary() -> "Đã dừng mô tả tổng hợp"
+            isVideoDescriptionMode() -> "Đã dừng mô tả theo thời gian"
+            isTranscribeMode() -> "Đã dừng chép lời"
+            else -> "Đã dừng dịch"
+        }
+    ) {
         if (!stopping.compareAndSet(false, true)) return
         val hadActiveSession = _state.value.running || sessionId.isNotBlank()
         finalizeLiveTranscriptionFallback("stop")

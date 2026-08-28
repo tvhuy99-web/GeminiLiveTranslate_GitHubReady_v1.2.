@@ -218,12 +218,23 @@ class TranslationService : LifecycleService() {
 
     fun setProcessingMode(value: String) {
         if (_state.value.running) return
-        processingMode = if (value == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
-            AppPreferences.PROCESSING_MODE_TRANSCRIBE
-        } else {
-            AppPreferences.PROCESSING_MODE_TRANSLATE
+        processingMode = when (value) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+            else -> AppPreferences.PROCESSING_MODE_TRANSLATE
         }
         preferences.setProcessingMode(processingMode)
+    }
+
+    fun setVideoDescriptionMode(value: String) {
+        if (_state.value.running) return
+        videoDescriptionMode = if (value == AppPreferences.VIDEO_DESCRIPTION_SUMMARY) {
+            AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+        } else {
+            AppPreferences.VIDEO_DESCRIPTION_TIMELINE
+        }
+        preferences.setVideoDescriptionMode(videoDescriptionMode)
+        _state.update { it.copy(videoDescriptionMode = videoDescriptionMode) }
     }
 
     fun setSpeakerDiarization(enabled: Boolean) {
@@ -253,6 +264,7 @@ class TranslationService : LifecycleService() {
         stopping.set(false)
         settings = preferences.load()
         processingMode = preferences.loadProcessingMode()
+        videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
         val apiKey = keyStore.load().selected
@@ -261,7 +273,11 @@ class TranslationService : LifecycleService() {
             return
         }
         if (mode == SourceMode.FILE && selectedUri == null) {
-            updateError("Chưa chọn tệp âm thanh/video")
+            updateError(if (isVideoDescriptionMode()) "Chưa chọn video" else "Chưa chọn tệp âm thanh/video")
+            return
+        }
+        if (isVideoDescriptionMode() && mode != SourceMode.FILE) {
+            updateError("Mô tả video chỉ hỗ trợ tệp video")
             return
         }
         if (mode == SourceMode.INTERNAL && (projectionResultCode == null || projectionData == null)) {

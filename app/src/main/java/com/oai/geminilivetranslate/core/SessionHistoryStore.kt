@@ -35,9 +35,11 @@ data class HistorySession(
 }
 
 class SessionHistoryStore(context: Context) {
-    private val directory = File(context.applicationContext.filesDir, DIRECTORY_NAME).apply {
+    private val appContext = context.applicationContext
+    private val directory = File(appContext.filesDir, DIRECTORY_NAME).apply {
         mkdirs()
     }
+    private val meta = appContext.getSharedPreferences(META_PREFS, Context.MODE_PRIVATE)
 
     @Synchronized
     fun newSession(
@@ -66,7 +68,7 @@ class SessionHistoryStore(context: Context) {
 
     @Synchronized
     fun save(session: HistorySession): HistorySession {
-        if (!session.hasValue) return session
+        if (!session.hasValue || isDeleted(session.id)) return session
         val normalized = session.copy(
             title = deriveTitle(
                 sourceMode = session.sourceMode,
@@ -106,6 +108,9 @@ class SessionHistoryStore(context: Context) {
     @Synchronized
     fun delete(id: String): Boolean {
         val safeId = sanitizeId(id) ?: return false
+        val deletedIds = meta.getStringSet(KEY_DELETED_IDS, emptySet()).orEmpty().toMutableSet()
+        deletedIds += safeId
+        meta.edit().putStringSet(KEY_DELETED_IDS, deletedIds.takeLast(MAX_TOMBSTONES).toSet()).apply()
         val file = fileFor(safeId)
         return !file.exists() || file.delete()
     }
@@ -232,13 +237,19 @@ class SessionHistoryStore(context: Context) {
         }
     }
 
+    private fun isDeleted(id: String): Boolean =
+        id in meta.getStringSet(KEY_DELETED_IDS, emptySet()).orEmpty()
+
     private fun sanitizeId(id: String): String? =
         id.trim().takeIf { it.matches(Regex("[A-Za-z0-9-]{8,80}")) }
 
     companion object {
         const val MAX_SESSIONS = 10
         private const val DIRECTORY_NAME = "session_history"
+        private const val META_PREFS = "session_history_meta"
+        private const val KEY_DELETED_IDS = "deletedIds"
         private const val FORMAT_VERSION = 1
         private const val MAX_TITLE_CHARS = 80
+        private const val MAX_TOMBSTONES = 100
     }
 }

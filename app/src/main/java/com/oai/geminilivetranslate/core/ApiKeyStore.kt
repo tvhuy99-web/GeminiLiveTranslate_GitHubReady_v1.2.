@@ -51,9 +51,34 @@ class ApiKeyStore(context: Context) {
         val normalized = key.trim()
         val current = load()
         if (normalized.isBlank()) return current
-        require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
+        requireValidGeminiKey(normalized)
         val keys = (current.keys + normalized).distinct()
         return save(current.copy(keys = keys, selected = normalized))
+    }
+
+    @Synchronized
+    fun setGeminiKeys(values: List<String>): State {
+        val normalized = values
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .onEach(::requireValidGeminiKey)
+            .distinct()
+        val current = load()
+        val selected = current.selected?.takeIf { it in normalized } ?: normalized.firstOrNull()
+        return save(current.copy(keys = normalized, selected = selected))
+    }
+
+    @Synchronized
+    fun takeGeminiKey(): String? {
+        val current = load()
+        if (current.keys.isEmpty()) return null
+        val selected = current.selected?.takeIf { it in current.keys } ?: current.keys.first()
+        if (current.keys.size > 1) {
+            val index = current.keys.indexOf(selected)
+            val next = current.keys[(index + 1) % current.keys.size]
+            save(current.copy(selected = next))
+        }
+        return selected
     }
 
     @Synchronized
@@ -95,6 +120,10 @@ class ApiKeyStore(context: Context) {
     fun masked(key: String): String = when {
         key.length <= 6 -> "••••••"
         else -> key.take(4) + "••••••" + key.takeLast(2)
+    }
+
+    private fun requireValidGeminiKey(key: String) {
+        require(key.length >= 20 && key.none(Char::isWhitespace)) { "API Key không hợp lệ" }
     }
 
     private fun save(state: State): State {

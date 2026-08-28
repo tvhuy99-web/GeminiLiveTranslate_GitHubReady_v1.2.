@@ -706,7 +706,7 @@ class MainActivity : AppCompatActivity() {
         videoDescriptionModeSpinner.isEnabled = !running
 
         if (videoDescription) {
-            apiKeyButton.isEnabled = !running
+            apiKeyButton.isVisible = false
             audioSourceLabel.isVisible = false
             audioSourceSpinner.isVisible = false
             speakerDiarizationSwitch.isVisible = false
@@ -737,10 +737,10 @@ class MainActivity : AppCompatActivity() {
             return@with
         }
 
-        apiKeyButton.isEnabled = true
+        apiKeyButton.isVisible = false
         audioSourceLabel.isVisible = true
         audioSourceSpinner.isVisible = true
-        testConnectionButton.isVisible = true
+        testConnectionButton.isVisible = false
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode

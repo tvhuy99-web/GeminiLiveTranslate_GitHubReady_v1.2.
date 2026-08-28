@@ -2336,9 +2336,10 @@ class TranslationService : LifecycleService() {
     private fun handleConnectionError(error: Throwable) {
         logger.log(0, "Gemini", "Mất kết nối", error)
         val apiError = error as? GeminiLiveClient.GeminiApiException
-        when (apiError?.code) {
+        val code = apiError?.code
+        when (code) {
             400 -> stopTranslation("Yêu cầu Gemini không hợp lệ; hãy kiểm tra cấu hình")
-            401, 403, 429 -> handleLiveKeyFailure(apiError.code)
+            401, 403, 429 -> handleLiveKeyFailure(code)
             404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
         }

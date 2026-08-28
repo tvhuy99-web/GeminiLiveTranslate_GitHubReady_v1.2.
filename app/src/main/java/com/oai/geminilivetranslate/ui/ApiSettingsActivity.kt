@@ -89,7 +89,6 @@ class ApiSettingsActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(12), dp(18), dp(12))
-            setBackgroundColor(Color.WHITE)
         }
         root.addView(TextView(this).apply {
             text = "THIẾT LẬP API"

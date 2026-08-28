@@ -43,7 +43,7 @@ class HistoryActivity : AppCompatActivity() {
 
         sessions.forEachIndexed { index, session ->
             val button = Button(this).apply {
-                isAllCaps = false
+                setAllCaps(false)
                 minHeight = dp(48)
                 text = session.title
                 contentDescription = buildDescription(index, session)

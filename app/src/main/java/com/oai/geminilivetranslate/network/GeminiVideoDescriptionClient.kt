@@ -223,8 +223,9 @@ class GeminiVideoDescriptionClient(
     }
 
     fun close() {
-        client.dispatcher.executorService.shutdown()
+        client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
+        client.dispatcher.executorService.shutdown()
     }
 
     private fun upload(
@@ -373,7 +374,8 @@ class GeminiVideoDescriptionClient(
         val startedAt = SystemClock.elapsedRealtime()
         val requestJson = JSONObject()
             .put("model", AppPreferences.VIDEO_DESCRIPTION_MODEL)
-            .put("store", false)
+            .put("store", true)
+            .put("background", true)
             .put(
                 "input",
                 JSONArray()
@@ -394,71 +396,115 @@ class GeminiVideoDescriptionClient(
             .post(requestJson.toString().toRequestBody(JSON_MEDIA))
             .build()
 
-        var root = client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            val requestId = response.header("x-request-id")
-                ?: response.header("x-goog-request-id")
-                ?: "none"
-            logger.log(
-                if (response.isSuccessful) 2 else 0,
-                TAG,
-                "Interactions POST mode=$mode HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
-            )
-            if (!response.isSuccessful) {
-                throw IllegalStateException(
-                    "Gemini HTTP ${response.code}: ${sanitizeForLog(body, 1_000)}"
-                )
-            }
-            JSONObject(body)
-        }
-
-        val interactionId = root.optString("id").takeIf(String::isNotBlank)
-        for (poll in 0..MAX_INTERACTION_POLLS) {
-            when (root.optString("status").lowercase()) {
-                "", "completed" -> return InteractionResult(
-                    root = root,
-                    id = interactionId,
-                    elapsedMs = SystemClock.elapsedRealtime() - startedAt,
-                )
-                "failed", "cancelled", "incomplete" -> {
-                    val message = root.optJSONObject("error")
-                        ?.optString("message")
-                        ?.takeIf(String::isNotBlank)
-                        ?: "Gemini kết thúc với status=${root.optString("status")}"
-                    throw IllegalStateException(message)
-                }
-            }
-            if (poll >= MAX_INTERACTION_POLLS) break
-            val id = interactionId ?: error("Gemini chưa hoàn tất nhưng không trả interaction id")
-            Thread.sleep(INTERACTION_POLL_INTERVAL_MS)
-            onProgress(
-                if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
-                (58 + poll / 5).coerceAtMost(96),
-            )
-            val cleanId = id.substringAfterLast('/')
-            val pollRequest = Request.Builder()
-                .url("$INTERACTIONS_ENDPOINT/$cleanId")
-                .header("x-goog-api-key", apiKey)
-                .get()
-                .build()
-            root = client.newCall(pollRequest).execute().use { response ->
+        var interactionId: String? = null
+        try {
+            var root = client.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
+                val requestId = response.header("x-request-id")
+                    ?: response.header("x-goog-request-id")
+                    ?: "none"
+                logger.log(
+                    if (response.isSuccessful) 2 else 0,
+                    TAG,
+                    "Interactions POST background=true mode=$mode HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                )
                 if (!response.isSuccessful) {
                     throw IllegalStateException(
-                        "Không đọc được tiến trình Gemini: HTTP ${response.code} ${sanitizeForLog(body, 500)}"
+                        "Gemini HTTP ${response.code}: ${sanitizeForLog(body, 1_000)}"
                     )
                 }
                 JSONObject(body)
             }
-            if (poll == 0 || (poll + 1) % 10 == 0 || root.optString("status") == "completed") {
+
+            interactionId = root.optString("id").takeIf(String::isNotBlank)
+                ?: error("Gemini không trả interaction id cho tác vụ nền")
+            for (poll in 0..MAX_INTERACTION_POLLS) {
+                when (root.optString("status").lowercase()) {
+                    "", "completed" -> return InteractionResult(
+                        root = root,
+                        id = interactionId,
+                        elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+                    )
+                    "failed", "cancelled", "incomplete" -> {
+                        val message = root.optJSONObject("error")
+                            ?.optString("message")
+                            ?.takeIf(String::isNotBlank)
+                            ?: "Gemini kết thúc với status=${root.optString("status")}"
+                        throw IllegalStateException(message)
+                    }
+                }
+                if (poll >= MAX_INTERACTION_POLLS) break
+                Thread.sleep(INTERACTION_POLL_INTERVAL_MS)
+                onProgress(
+                    if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
+                    (58 + poll / 5).coerceAtMost(96),
+                )
+                val cleanId = interactionId.substringAfterLast('/')
+                val pollRequest = Request.Builder()
+                    .url("$INTERACTIONS_ENDPOINT/$cleanId")
+                    .header("x-goog-api-key", apiKey)
+                    .get()
+                    .build()
+                root = client.newCall(pollRequest).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException(
+                            "Không đọc được tiến trình Gemini: HTTP ${response.code} ${sanitizeForLog(body, 500)}"
+                        )
+                    }
+                    JSONObject(body)
+                }
+                if (poll == 0 || (poll + 1) % 10 == 0 || root.optString("status") == "completed") {
+                    logger.log(
+                        3,
+                        TAG,
+                        "Interaction poll=${poll + 1} mode=$mode status=${root.optString("status")} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                    )
+                }
+            }
+            error("Hết thời gian chờ Gemini phân tích video")
+        } catch (error: Throwable) {
+            interactionId?.let(::cancelInteraction)
+            throw error
+        } finally {
+            interactionId?.let(::deleteInteraction)
+        }
+    }
+
+    private fun cancelInteraction(id: String) {
+        val cleanId = id.substringAfterLast('/')
+        val request = Request.Builder()
+            .url("$INTERACTIONS_ENDPOINT/$cleanId/cancel")
+            .header("x-goog-api-key", apiKey)
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        runCatching {
+            client.newCall(request).execute().use { response ->
                 logger.log(
-                    3,
+                    if (response.isSuccessful) 3 else 1,
                     TAG,
-                    "Interaction poll=${poll + 1} mode=$mode status=${root.optString("status")} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                    "Hủy interaction id=${cleanId.take(24)} HTTP=${response.code}",
                 )
             }
         }
-        error("Hết thời gian chờ Gemini phân tích video")
+    }
+
+    private fun deleteInteraction(id: String) {
+        val cleanId = id.substringAfterLast('/')
+        val request = Request.Builder()
+            .url("$INTERACTIONS_ENDPOINT/$cleanId")
+            .header("x-goog-api-key", apiKey)
+            .delete()
+            .build()
+        runCatching {
+            client.newCall(request).execute().use { response ->
+                logger.log(
+                    if (response.isSuccessful) 3 else 1,
+                    TAG,
+                    "Xóa interaction tạm id=${cleanId.take(24)} HTTP=${response.code}",
+                )
+            }
+        }
     }
 
     private fun extractOutputText(root: JSONObject): String {

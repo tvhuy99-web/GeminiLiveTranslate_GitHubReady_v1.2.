@@ -1437,42 +1437,108 @@ class TranslationService : LifecycleService() {
                     error("Video dài quá 20 phút. Hãy chọn video tối đa 20 phút")
                 }
 
-                val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
-                val client = GeminiVideoDescriptionClient(
-                    apiKey = apiKey,
-                    logger = logger,
-                    includeOutputInLogs = settings.logIncludeTranscript,
-                )
-                videoDescriptionClient = client
-                val result = try {
-                    updateState {
-                        it.copy(
-                            status = "Đang tải nguyên video lên...",
-                            progressPercent = 0,
-                        )
-                    }
-                    client.describe(
-                        resolver = contentResolver,
-                        uri = uri,
-                        displayName = name,
-                        mimeType = resolvedMime,
-                        durationMs = durationMs,
-                        mode = if (isVideoDescriptionSummary()) {
-                            GeminiVideoDescriptionClient.Mode.SUMMARY
-                        } else {
-                            GeminiVideoDescriptionClient.Mode.TIMELINE
-                        },
-                    ) { status, percent ->
+                val aiApi = AiApiSettingsStore(this@TranslationService).load()
+                val modeValue = if (isVideoDescriptionSummary()) {
+                    GeminiVideoDescriptionClient.Mode.SUMMARY
+                } else {
+                    GeminiVideoDescriptionClient.Mode.TIMELINE
+                }
+                val partial: (String) -> Unit = { text ->
+                    if (_state.value.running && selectedUri == uri && text.isNotBlank()) {
                         updateState {
                             it.copy(
-                                status = status,
-                                progressPercent = percent.coerceIn(0, 98),
+                                transcript = text.takeLast(MAX_TRANSCRIPT_CHARS),
+                                status = if (isVideoDescriptionSummary()) {
+                                    "Đang nhận mô tả tổng hợp..."
+                                } else {
+                                    "Đang nhận mô tả theo thời gian..."
+                                },
                             )
                         }
                     }
-                } finally {
-                    client.close()
-                    if (videoDescriptionClient === client) videoDescriptionClient = null
+                }
+
+                val result = if (aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+                    val proxyKey = keyStore.load().proxyKey.orEmpty()
+                    val proxy = OpenAiCompatibleVideoDescriptionClient(
+                        apiKey = proxyKey,
+                        endpoint = aiApi.proxyUrl,
+                        model = aiApi.proxyModel,
+                        logger = logger,
+                        includeOutputInLogs = settings.logIncludeTranscript,
+                        timelinePromptTemplate = aiApi.timelinePrompt,
+                        summaryPromptTemplate = aiApi.summaryPrompt,
+                        streamingEnabled = aiApi.streamingEnabled,
+                    )
+                    proxyVideoDescriptionClient = proxy
+                    try {
+                        updateState {
+                            it.copy(
+                                status = "Đang gửi nguyên video tới API...",
+                                progressPercent = 0,
+                            )
+                        }
+                        proxy.describe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            durationMs = durationMs,
+                            mode = modeValue,
+                            onProgress = { status, percent ->
+                                updateState {
+                                    it.copy(
+                                        status = status,
+                                        progressPercent = percent.coerceIn(0, 98),
+                                    )
+                                }
+                            },
+                            onPartial = partial,
+                        )
+                    } finally {
+                        proxy.close()
+                        if (proxyVideoDescriptionClient === proxy) proxyVideoDescriptionClient = null
+                    }
+                } else {
+                    val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
+                    val gemini = GeminiVideoDescriptionClient(
+                        apiKey = apiKey,
+                        logger = logger,
+                        includeOutputInLogs = settings.logIncludeTranscript,
+                        model = aiApi.geminiModel,
+                        timelinePromptTemplate = aiApi.timelinePrompt,
+                        summaryPromptTemplate = aiApi.summaryPrompt,
+                        streamingEnabled = aiApi.streamingEnabled,
+                    )
+                    videoDescriptionClient = gemini
+                    try {
+                        updateState {
+                            it.copy(
+                                status = "Đang tải nguyên video lên...",
+                                progressPercent = 0,
+                            )
+                        }
+                        gemini.describe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = resolvedMime,
+                            durationMs = durationMs,
+                            mode = modeValue,
+                            onProgress = { status, percent ->
+                                updateState {
+                                    it.copy(
+                                        status = status,
+                                        progressPercent = percent.coerceIn(0, 98),
+                                    )
+                                }
+                            },
+                            onPartial = partial,
+                        )
+                    } finally {
+                        gemini.close()
+                        if (videoDescriptionClient === gemini) videoDescriptionClient = null
+                    }
                 }
 
                 if (!_state.value.running || selectedUri != uri) {

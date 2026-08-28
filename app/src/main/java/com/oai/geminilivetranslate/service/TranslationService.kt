@@ -94,6 +94,7 @@ class TranslationService : LifecycleService() {
     @Volatile private var client: GeminiLiveClient? = null
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
+    @Volatile private var videoDescriptionClient: GeminiVideoDescriptionClient? = null
     private var subtitleTranslationJob: Job? = null
     private var historySaveJob: Job? = null
     private var currentHistorySession: HistorySession? = null
@@ -440,6 +441,7 @@ class TranslationService : LifecycleService() {
         transcribeRotationJob?.cancel(); transcribeRotationJob = null
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
+        videoDescriptionClient?.close(); videoDescriptionClient = null
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
         runCatching { mediaProjection?.stop() }
@@ -1433,6 +1435,7 @@ class TranslationService : LifecycleService() {
                     logger = logger,
                     includeOutputInLogs = settings.logIncludeTranscript,
                 )
+                videoDescriptionClient = client
                 val result = try {
                     updateState {
                         it.copy(
@@ -1461,6 +1464,7 @@ class TranslationService : LifecycleService() {
                     }
                 } finally {
                     client.close()
+                    if (videoDescriptionClient === client) videoDescriptionClient = null
                 }
 
                 if (!_state.value.running || selectedUri != uri) {

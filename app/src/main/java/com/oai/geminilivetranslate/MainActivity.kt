@@ -786,8 +786,23 @@ class MainActivity : AppCompatActivity() {
     private fun applyUiMode() = with(binding) {
         val simple = preferences.load().uiMode == "simple"
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
         val fileMode = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
         logButton.isVisible = !simple
+        if (videoDescription) {
+            autoDuckingSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            fileSpeedLayout.isVisible = false
+            rewindButton.isVisible = false
+            forwardButton.isVisible = false
+            originalVolumeSeekBar.isVisible = false
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            progressSeekBar.isVisible = true
+            progressSeekBar.isEnabled = false
+            return@with
+        }
         if (transcribe) {
             autoDuckingSwitch.isVisible = false
             aiAudioStreamLayout.isVisible = false

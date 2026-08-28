@@ -199,6 +199,12 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun buildBasic() {
+        title("AI và API")
+        rowButton("Thiết lập API") {
+            startActivity(Intent(this, ApiSettingsActivity::class.java))
+        }
+        description("Quản lý Gemini, OpenAI-compatible / Proxy, model, kiểm tra kết nối, streaming và lời nhắc mô tả video.")
+
         title("Cách ứng dụng ưu tiên")
         val profiles = listOf("realtime", "balanced", "stable", "custom")
         val profileLabels = listOf("Phản hồi nhanh", "Cân bằng", "Ổn định hơn", "Tự điều chỉnh")

@@ -1240,6 +1240,141 @@ class TranslationService : LifecycleService() {
         liveClient.connect()
     }
 
+    private fun startVideoDescription(apiKey: String) {
+        sourceJob?.cancel()
+        sourceJob = serviceScope.launch(Dispatchers.IO) {
+            val uri = selectedUri ?: run {
+                stopTranslation("Chưa chọn video")
+                return@launch
+            }
+            val startedAt = SystemClock.elapsedRealtime()
+            val name = selectedFileName ?: uri.lastPathSegment ?: "video"
+            try {
+                val mimeType = selectedMimeType(uri, name)
+                val isVideo = mimeType.startsWith("video/") || isVideoFileName(name)
+                if (!isVideo) error("Tệp đã chọn không phải video")
+
+                val durationStartedAt = SystemClock.elapsedRealtime()
+                val durationMs = mediaDurationMs(uri)
+                logger.log(
+                    2,
+                    "VideoDescription",
+                    "Đọc metadata name=$name mime=$mimeType durationMs=$durationMs metadataElapsedMs=${SystemClock.elapsedRealtime() - durationStartedAt} sourceBytes=${sourceSizeBytes(uri)} submode=$videoDescriptionMode",
+                )
+                if (durationMs <= 0L) error("Không đọc được thời lượng video")
+                if (durationMs > GeminiVideoDescriptionClient.MAX_VIDEO_DURATION_MS) {
+                    error("Video dài quá 20 phút. Hãy chọn video tối đa 20 phút")
+                }
+
+                val resolvedMime = if (mimeType.startsWith("video/")) {
+                    mimeType
+                } else {
+                    when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+                        "webm" -> "video/webm"
+                        "3gp", "3gpp" -> "video/3gpp"
+                        "mkv" -> "video/x-matroska"
+                        else -> "video/mp4"
+                    }
+                }
+                val client = GeminiVideoDescriptionClient(
+                    apiKey = apiKey,
+                    logger = logger,
+                    includeOutputInLogs = settings.logIncludeTranscript,
+                )
+                val result = try {
+                    updateState {
+                        it.copy(
+                            status = "Đang tải nguyên video lên...",
+                            progressPercent = 0,
+                        )
+                    }
+                    client.describe(
+                        resolver = contentResolver,
+                        uri = uri,
+                        displayName = name,
+                        mimeType = resolvedMime,
+                        durationMs = durationMs,
+                        mode = if (isVideoDescriptionSummary()) {
+                            GeminiVideoDescriptionClient.Mode.SUMMARY
+                        } else {
+                            GeminiVideoDescriptionClient.Mode.TIMELINE
+                        },
+                    ) { status, percent ->
+                        updateState {
+                            it.copy(
+                                status = status,
+                                progressPercent = percent.coerceIn(0, 98),
+                            )
+                        }
+                    }
+                } finally {
+                    client.close()
+                }
+
+                if (isVideoDescriptionSummary()) {
+                    subtitles.reset()
+                    videoSummaryText = result.summaryText
+                    updateState {
+                        it.copy(
+                            transcript = videoSummaryText.takeLast(MAX_TRANSCRIPT_CHARS),
+                            status = "Đã hoàn tất mô tả tổng hợp",
+                            progressPercent = 100,
+                        )
+                    }
+                } else {
+                    videoSummaryText = ""
+                    val cues = result.timelineItems.map { item ->
+                        SubtitleStore.Cue(
+                            index = item.index,
+                            startMs = (item.startSeconds * 1_000.0).toLong().coerceAtLeast(0L),
+                            endMs = (item.endSeconds * 1_000.0).toLong().coerceAtLeast(1L),
+                            text = item.text,
+                        )
+                    }
+                    subtitles.replaceTimed(cues)
+                    updateState {
+                        it.copy(
+                            transcript = subtitles.plainText().takeLast(MAX_TRANSCRIPT_CHARS),
+                            status = "Đã hoàn tất mô tả theo thời gian",
+                            progressPercent = 100,
+                        )
+                    }
+                }
+
+                fileInputEnded = true
+                val outputChars = if (isVideoDescriptionSummary()) {
+                    videoSummaryText.length
+                } else {
+                    subtitles.plainText().length
+                }
+                logger.log(
+                    2,
+                    "VideoDescription",
+                    "Áp dụng kết quả thành công mode=$videoDescriptionMode durationMs=$durationMs items=${result.timelineItems.size} chars=$outputChars attempts=${result.attempts} interactionId=${result.interactionId ?: "none"} inputTokens=${result.inputTokens} outputTokens=${result.outputTokens} thoughtTokens=${result.thoughtTokens} totalTokens=${result.totalTokens} clientElapsedMs=${result.elapsedMs} totalElapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+                )
+                scheduleHistorySave("video-description-success")
+                stopTranslation(
+                    if (isVideoDescriptionSummary()) {
+                        "Đã hoàn tất mô tả tổng hợp"
+                    } else {
+                        "Đã hoàn tất mô tả theo thời gian"
+                    }
+                )
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) return@launch
+                logger.log(
+                    0,
+                    "VideoDescription",
+                    "Mô tả video thất bại mode=$videoDescriptionMode elapsedMs=${SystemClock.elapsedRealtime() - startedAt} name=$name",
+                    error,
+                )
+                if (_state.value.running) {
+                    stopTranslation("Lỗi mô tả video: ${error.message ?: error.javaClass.simpleName}")
+                }
+            }
+        }
+    }
+
     private fun startFileTranscription(apiKey: String) {
         sourceJob?.cancel()
         sourceJob = serviceScope.launch(Dispatchers.IO) {

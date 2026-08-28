@@ -46,6 +46,8 @@ class SubtitleStore {
         }
     }
 
+    fun snapshot(): List<Cue> = cues.toList()
+
     fun plainText(): String = cues.joinToString("\n") { it.text }
 
     fun srtText(): String = cues.joinToString("\n\n") {

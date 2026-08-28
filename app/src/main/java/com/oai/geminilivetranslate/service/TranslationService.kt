@@ -921,13 +921,21 @@ class TranslationService : LifecycleService() {
         selectedUri = loaded.mediaUri?.let(Uri::parse)
         selectedFileName = loaded.mediaName
 
-        if (
+        when {
             processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
-            videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
-        ) {
-            videoSummaryText = loaded.primaryTranscript
-        } else {
-            restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY -> {
+                videoSummaryText = loaded.videoSummaryText
+            }
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> {
+                restoreStoreFromHistory(
+                    subtitles,
+                    loaded.videoTimelineSrt,
+                    loaded.videoTimelineTranscript,
+                )
+            }
+            else -> {
+                restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+            }
         }
         restoreStoreFromHistory(
             vietnameseSubtitles,
@@ -943,12 +951,21 @@ class TranslationService : LifecycleService() {
         liveCommittedTranscript = transcribePlainText
         liveInterimTranscript = ""
 
-        val hasVietnamese = loaded.hasVietnamese && vietnameseSubtitles.plainText().isNotBlank()
+        val hasVietnamese =
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE &&
+                loaded.hasVietnamese &&
+                vietnameseSubtitles.plainText().isNotBlank()
         val showVietnamese = loaded.showingVietnamese && hasVietnamese
-        val displayText = if (showVietnamese) {
-            loaded.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
-        } else {
-            loaded.primaryTranscript.ifBlank { subtitles.plainText() }
+        val displayText = when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
+                loaded.videoSummaryText
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION ->
+                loaded.videoTimelineTranscript.ifBlank { subtitles.plainText() }
+            showVietnamese ->
+                loaded.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
+            else ->
+                loaded.primaryTranscript.ifBlank { subtitles.plainText() }
         }
 
         currentHistorySession = loaded
@@ -1028,27 +1045,44 @@ class TranslationService : LifecycleService() {
 
     private fun saveCurrentHistoryNow(reason: String) {
         val base = currentHistorySession ?: return
-        val primaryTranscript = when {
-            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE ->
-                transcribePlainText.trim().ifBlank { subtitles.plainText() }
-            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
-                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
-                videoSummaryText.trim().ifBlank { _state.value.transcript }
-            else -> subtitles.plainText().ifBlank { _state.value.transcript }
-        }
-        val primarySrt = if (
-            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
-            videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
-        ) "" else subtitles.srtText()
+        val plain = subtitles.plainText()
+        val srt = subtitles.srtText()
         val viTranscript = vietnameseSubtitles.plainText()
         val viSrt = vietnameseSubtitles.srtText()
-        val candidate = base.copy(
-            primaryTranscript = primaryTranscript,
-            primarySrt = primarySrt,
-            vietnameseTranscript = viTranscript,
-            vietnameseSrt = viSrt,
-            showingVietnamese = _state.value.subtitleShowingVietnamese,
-        )
+        val candidate = when {
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY ->
+                base.copy(
+                    processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
+                    videoSummaryText = videoSummaryText.trim().ifBlank { _state.value.transcript },
+                    showingVietnamese = false,
+                )
+            processingMode == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION ->
+                base.copy(
+                    processingMode = processingMode,
+                    videoDescriptionMode = videoDescriptionMode,
+                    videoTimelineTranscript = plain.ifBlank { _state.value.transcript },
+                    videoTimelineSrt = srt,
+                    showingVietnamese = false,
+                )
+            processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE ->
+                base.copy(
+                    processingMode = processingMode,
+                    primaryTranscript = transcribePlainText.trim().ifBlank { plain },
+                    primarySrt = srt,
+                    vietnameseTranscript = viTranscript.ifBlank { base.vietnameseTranscript },
+                    vietnameseSrt = viSrt.ifBlank { base.vietnameseSrt },
+                    showingVietnamese = _state.value.subtitleShowingVietnamese,
+                )
+            else ->
+                base.copy(
+                    processingMode = processingMode,
+                    primaryTranscript = plain.ifBlank { _state.value.transcript },
+                    primarySrt = srt,
+                    showingVietnamese = false,
+                )
+        }
         if (!candidate.hasValue) {
             logger.log(3, "History", "Bỏ lưu phiên rỗng id=${base.id} reason=$reason")
             return
@@ -1059,7 +1093,7 @@ class TranslationService : LifecycleService() {
                 logger.log(
                     2,
                     "History",
-                    "Đã lưu phiên id=${saved.id} reason=$reason title=${saved.title} source=${saved.sourceMode} primaryChars=${saved.primaryTranscript.length} primarySrtChars=${saved.primarySrt.length} viChars=${saved.vietnameseTranscript.length} viSrtChars=${saved.vietnameseSrt.length} showVi=${saved.showingVietnamese} historyCount=${historyStore.count()}",
+                    "Đã lưu phiên id=${saved.id} reason=$reason title=${saved.title} source=${saved.sourceMode} processing=${saved.processingMode} videoMode=${saved.videoDescriptionMode} primaryChars=${saved.primaryTranscript.length} primarySrtChars=${saved.primarySrt.length} viChars=${saved.vietnameseTranscript.length} viSrtChars=${saved.vietnameseSrt.length} videoTimelineChars=${saved.videoTimelineTranscript.length} videoTimelineSrtChars=${saved.videoTimelineSrt.length} videoSummaryChars=${saved.videoSummaryText.length} showVi=${saved.showingVietnamese} historyCount=${historyStore.count()}",
                 )
             }
             .onFailure { error ->

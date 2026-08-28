@@ -434,7 +434,7 @@ class GeminiVideoDescriptionClient(
 
             interactionId = root.optString("id").takeIf(String::isNotBlank)
                 ?: error("Gemini không trả interaction id cho tác vụ nền")
-            val activeId = interactionId
+            val activeId = requireNotNull(interactionId)
             for (poll in 0..MAX_INTERACTION_POLLS) {
                 throwIfCancelled()
                 when (root.optString("status").lowercase()) {

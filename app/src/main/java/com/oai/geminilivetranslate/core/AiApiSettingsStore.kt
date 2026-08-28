@@ -48,6 +48,8 @@ class AiApiSettingsStore(context: Context) {
             .ifBlank { VideoDescriptionPromptDefaults.SUMMARY },
     )
 
+    fun clear(): Boolean = prefs.edit().clear().commit()
+
     fun save(settings: AiApiSettings) {
         val provider = settings.provider.takeIf { it == PROVIDER_GEMINI || it == PROVIDER_OPENAI }
             ?: PROVIDER_GEMINI

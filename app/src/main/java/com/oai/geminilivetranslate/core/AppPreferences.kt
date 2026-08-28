@@ -7,7 +7,7 @@ class AppPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun load(): AppSettings = SettingsPolicy.sanitize(AppSettings(
-        model = prefs.getString(KEY_MODEL, DEFAULT_MODEL).orEmpty(),
+        model = DEFAULT_MODEL,
         targetLanguage = prefs.getString(KEY_TARGET_LANGUAGE, "vi").orEmpty(),
         echoTargetLanguage = prefs.getBoolean(KEY_ECHO_TARGET, false),
         aiVoice = prefs.getBoolean(KEY_AI_VOICE, true),
@@ -47,7 +47,7 @@ class AppPreferences(context: Context) {
     fun save(settings: AppSettings) {
         val safe = SettingsPolicy.sanitize(settings)
         prefs.edit()
-            .putString(KEY_MODEL, safe.model)
+            .putString(KEY_MODEL, DEFAULT_MODEL)
             .putString(KEY_TARGET_LANGUAGE, safe.targetLanguage)
             .putBoolean(KEY_ECHO_TARGET, safe.echoTargetLanguage)
             .putBoolean(KEY_AI_VOICE, safe.aiVoice)

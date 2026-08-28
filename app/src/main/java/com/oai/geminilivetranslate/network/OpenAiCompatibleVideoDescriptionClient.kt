@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Base64
+import android.util.Base64OutputStream
 import com.oai.geminilivetranslate.core.AiApiEndpointRules
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
@@ -352,15 +353,19 @@ class OpenAiCompatibleVideoDescriptionClient(
 
         override fun writeTo(sink: BufferedSink) {
             sink.write(prefix)
+            val base64Out = Base64OutputStream(
+                sink.outputStream(),
+                Base64.NO_WRAP or Base64.NO_CLOSE,
+            )
             source.open().use { input ->
-                val buffer = ByteArray(48 * 1024)
+                val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val read = input.read(buffer)
                     if (read <= 0) break
-                    val bytes = if (read == buffer.size) buffer else buffer.copyOf(read)
-                    sink.writeUtf8(Base64.encodeToString(bytes, Base64.NO_WRAP))
+                    base64Out.write(buffer, 0, read)
                 }
             }
+            base64Out.close()
             sink.write(suffix)
         }
     }

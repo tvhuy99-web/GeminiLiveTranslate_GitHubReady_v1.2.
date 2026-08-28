@@ -102,13 +102,10 @@ class ApiSettingsActivity : AppCompatActivity() {
         })
 
         root.addView(label("Gemini API Key"))
-        geminiKey = edit("Nhập Gemini API Key", password = true).apply {
-            contentDescription = "Gemini API Key"
+        geminiKey = multiKeyEdit().apply {
+            contentDescription = "Gemini API Key. Mỗi dòng một khóa"
         }
         root.addView(geminiKey)
-        root.addView(
-            help("Khóa Gemini dùng cho Dịch thuật, Chép lời và Mô tả video khi nhà cung cấp mô tả là Google Gemini.")
-        )
 
         root.addView(label("Nhà cung cấp cho Mô tả video"))
         providerSpinner = AccessibleSpinner(this).apply {
@@ -139,9 +136,6 @@ class ApiSettingsActivity : AppCompatActivity() {
             contentDescription = "OpenAI-compatible URL"
         }
         proxyFields.addView(proxyUrl)
-        proxyFields.addView(
-            help("Mô tả video dùng chuẩn chat/completions + video_url. Có thể nhập base URL; ứng dụng sẽ tự nối endpoint.")
-        )
         proxyFields.addView(label("OpenAI-compatible API Key"))
         proxyKey = edit("Bearer key, có thể để trống", password = true).apply {
             contentDescription = "OpenAI-compatible API Key"
@@ -178,7 +172,6 @@ class ApiSettingsActivity : AppCompatActivity() {
             contentDescription = "Số lần thử kết nối lại, từ 1 đến 10"
         }
         root.addView(reconnectRetriesInput)
-        root.addView(help("Áp dụng cho các phiên Gemini trực tiếp cần duy trì kết nối. Khi tắt tự kết nối lại, ứng dụng sẽ không tự nối lại phiên bị gián đoạn."))
 
         root.addView(label("Timeout yêu cầu AI (ms)"))
         timeoutInput = numericEdit("300000", decimal = false).apply {
@@ -193,7 +186,6 @@ class ApiSettingsActivity : AppCompatActivity() {
         root.addView(temperatureInput)
 
         root.addView(section("Lời nhắc: Mô tả theo thời gian"))
-        root.addView(help("Biến có thể dùng: {{VIDEO_DURATION_SECONDS}}. Ứng dụng sẽ thay biến này bằng thời lượng video tính theo giây."))
         timelinePrompt = promptEdit().apply {
             contentDescription = "Lời nhắc mô tả theo thời gian"
         }
@@ -209,7 +201,6 @@ class ApiSettingsActivity : AppCompatActivity() {
         })
 
         root.addView(section("Lời nhắc: Mô tả tổng hợp"))
-        root.addView(help("Biến có thể dùng: {{VIDEO_DURATION_SECONDS}}. Có thể chỉnh toàn bộ lời nhắc theo nhu cầu."))
         summaryPrompt = promptEdit().apply {
             contentDescription = "Lời nhắc mô tả tổng hợp"
         }
@@ -266,7 +257,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         providerSpinner.setSelection(
             if (settings.provider == AiApiSettingsStore.PROVIDER_OPENAI) 1 else 0
         )
-        geminiKey.setText(secretState.selected.orEmpty())
+        geminiKey.setText(secretState.keys.joinToString("\n"))
         geminiModel.setText(settings.geminiModel)
         proxyUrl.setText(settings.proxyUrl)
         proxyKey.setText(secretState.proxyKey.orEmpty())
@@ -288,15 +279,18 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun saveAndClose() {
         val provider = currentProvider()
-        val geminiValue = geminiKey.text.toString().trim()
+        val geminiValues = geminiKeysFromUi()
         val proxyValue = proxyKey.text.toString().trim()
         val proxyUrlValue = proxyUrl.text.toString().trim()
         val timeoutValue = timeoutInput.text.toString().trim().toIntOrNull()
         val temperatureValue = temperatureInput.text.toString().trim().toDoubleOrNull()
         val reconnectRetriesValue = reconnectRetriesInput.text.toString().trim().toIntOrNull()
 
-        if (geminiValue.isNotBlank() && (geminiValue.length < 20 || geminiValue.any(Char::isWhitespace))) {
-            toast("Gemini API Key không hợp lệ")
+        val invalidGeminiKey = geminiValues.firstOrNull {
+            it.length < 20 || it.any(Char::isWhitespace)
+        }
+        if (invalidGeminiKey != null) {
+            toast("Có Gemini API Key không hợp lệ")
             return
         }
         if (provider == AiApiSettingsStore.PROVIDER_OPENAI && !proxyUrlValue.startsWith("https://")) {
@@ -316,9 +310,9 @@ class ApiSettingsActivity : AppCompatActivity() {
             return
         }
 
-        val previousGeminiKey = keys.load().selected
+        val previousGeminiKeys = keys.load().keys
         runCatching {
-            keys.setGeminiKey(geminiValue)
+            keys.setGeminiKeys(geminiValues)
             keys.setProxyKey(proxyValue)
             val appPreferences = AppPreferences(this)
             appPreferences.save(
@@ -341,12 +335,12 @@ class ApiSettingsActivity : AppCompatActivity() {
                 )
             )
         }.onSuccess {
-            val currentGeminiKey = keys.load().selected
+            val currentGeminiKeys = keys.load().keys
             startService(
                 Intent(this, TranslationService::class.java)
                     .setAction(TranslationService.ACTION_APPLY_SETTINGS)
             )
-            if (previousGeminiKey != currentGeminiKey) {
+            if (previousGeminiKeys != currentGeminiKeys) {
                 startService(
                     Intent(this, TranslationService::class.java)
                         .setAction(TranslationService.ACTION_REFRESH_API_KEY)
@@ -355,7 +349,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyChanged=${previousGeminiKey != currentGeminiKey}",
+                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue temperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyCount=${currentGeminiKeys.size} geminiKeysChanged=${previousGeminiKeys != currentGeminiKeys}",
             )
             toast("Đã lưu thiết lập API")
             finish()
@@ -367,7 +361,7 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun fetchModels(provider: String) {
         val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            geminiKey.text.toString().trim()
+            geminiKeysFromUi().firstOrNull().orEmpty()
         } else {
             proxyKey.text.toString().trim()
         }
@@ -403,7 +397,7 @@ class ApiSettingsActivity : AppCompatActivity() {
     private fun testConnection() {
         val provider = currentProvider()
         val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            geminiKey.text.toString().trim()
+            geminiKeysFromUi().firstOrNull().orEmpty()
         } else {
             proxyKey.text.toString().trim()
         }
@@ -601,13 +595,6 @@ class ApiSettingsActivity : AppCompatActivity() {
         setPadding(0, dp(14), 0, dp(3))
     }
 
-    private fun help(textValue: String): TextView = TextView(this).apply {
-        text = textValue
-        textSize = 12f
-        alpha = 0.72f
-        setPadding(0, 0, 0, dp(4))
-    }
-
     private fun edit(hintValue: String, password: Boolean = false): EditText =
         EditText(this).apply {
             hint = hintValue
@@ -617,6 +604,26 @@ class ApiSettingsActivity : AppCompatActivity() {
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             }
         }
+
+    private fun multiKeyEdit(): EditText = EditText(this).apply {
+        hint = "Mỗi dòng một API Key"
+        minLines = 3
+        maxLines = 8
+        gravity = Gravity.TOP
+        minimumHeight = dp(96)
+        inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_VARIATION_PASSWORD or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        setHorizontallyScrolling(false)
+    }
+
+    private fun geminiKeysFromUi(): List<String> =
+        geminiKey.text.toString()
+            .lineSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+            .toList()
 
     private fun numericEdit(hintValue: String, decimal: Boolean): EditText =
         EditText(this).apply {

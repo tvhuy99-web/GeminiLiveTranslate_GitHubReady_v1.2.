@@ -27,10 +27,13 @@ import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
 import com.oai.geminilivetranslate.core.DiagnosticContext
 import com.oai.geminilivetranslate.core.LanguageCatalog
+import com.oai.geminilivetranslate.core.HistorySession
 import com.oai.geminilivetranslate.core.PublicRecordingStore
+import com.oai.geminilivetranslate.core.SessionHistoryStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SessionUiState
 import com.oai.geminilivetranslate.core.SettingsPolicy
+import com.oai.geminilivetranslate.core.SrtParser
 import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
@@ -82,6 +85,7 @@ class TranslationService : LifecycleService() {
     private lateinit var logger: SessionLogger
     private lateinit var notificationController: NotificationController
     private lateinit var recordingStore: PublicRecordingStore
+    private lateinit var historyStore: SessionHistoryStore
     private val subtitles = SubtitleStore()
     private val vietnameseSubtitles = SubtitleStore()
 
@@ -90,6 +94,8 @@ class TranslationService : LifecycleService() {
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
     private var subtitleTranslationJob: Job? = null
+    private var historySaveJob: Job? = null
+    private var currentHistorySession: HistorySession? = null
     private var reconnectJob: Job? = null
     private var healthJob: Job? = null
     private var fileFinishFallbackJob: Job? = null
@@ -161,6 +167,7 @@ class TranslationService : LifecycleService() {
         logger = SessionLogger(this, preferences)
         notificationController = NotificationController(this)
         recordingStore = PublicRecordingStore(this, logger)
+        historyStore = SessionHistoryStore(this)
         settings = preferences.load()
         processingMode = preferences.loadProcessingMode()
         speakerDiarization = preferences.loadSpeakerDiarization()

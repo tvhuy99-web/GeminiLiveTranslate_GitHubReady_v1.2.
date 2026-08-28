@@ -181,6 +181,7 @@ class AppLogRepository private constructor(context: Context) {
 
     private fun diagnosticSummary(): String {
         val settings = preferences.load()
+        val aiApi = AiApiSettingsStore(appContext).load()
         val runtime = Runtime.getRuntime()
         val freeStorage = logDir.usableSpace / (1024L * 1024L)
         val logSizes = logFiles().joinToString { "${it.name}=${it.length() / 1024}KB" }.ifBlank { "không có" }
@@ -198,6 +199,8 @@ class AppLogRepository private constructor(context: Context) {
             appendLine()
             appendLine("--- Cài đặt đã khử dữ liệu nhạy cảm ---")
             appendLine("model=${settings.model}")
+            appendLine("videoProvider=${aiApi.provider}, videoGeminiModel=${aiApi.geminiModel}, videoProxyModel=${aiApi.proxyModel}, streaming=${aiApi.streamingEnabled}")
+            appendLine("videoTimelinePromptChars=${aiApi.timelinePrompt.length}, videoSummaryPromptChars=${aiApi.summaryPrompt.length}")
             appendLine("targetLanguage=${settings.targetLanguage}")
             appendLine("echoTargetLanguage=${settings.echoTargetLanguage}")
             appendLine("profile=${settings.performanceProfile}, uiMode=${settings.uiMode}")

@@ -341,6 +341,19 @@ class MainActivity : AppCompatActivity() {
         }
         autoDuckingSwitch.setOnCheckedChangeListener { _, checked -> translationService?.setAutoDucking(checked) ?: preferences.setAutoDucking(checked) }
         exportButton.setOnClickListener { exportTranscript() }
+        translateToVietnameseButton.setOnClickListener {
+            val service = translationService
+            if (service == null) {
+                toast("Dịch vụ chưa sẵn sàng")
+                return@setOnClickListener
+            }
+            val state = service.state.value
+            if (state.subtitleTranslationAvailable) {
+                service.toggleSubtitleLanguage()
+            } else {
+                service.translateSubtitlesToVietnamese()
+            }
+        }
         settingsButton.setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
         logButton.setOnClickListener { startActivity(Intent(this@MainActivity, LogViewerActivity::class.java)) }
         manageLanguagesButton.setOnClickListener { showMicLanguageManager() }
@@ -436,6 +449,34 @@ class MainActivity : AppCompatActivity() {
         playPauseButton.text = if (state.paused) "Phát" else "Tạm dừng"
         playPauseButton.isEnabled = state.running && state.setupComplete
         updateModeUi(state.sourceMode, state.running)
+        updateSubtitleActionUi(state)
+    }
+
+    private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
+        val transcribe = isTranscribeSelected()
+        val hasContent = state.transcript.isNotBlank()
+        translateToVietnameseButton.isVisible =
+            transcribe && !state.running && (hasContent || state.subtitleTranslationInProgress)
+        translateToVietnameseButton.isEnabled =
+            transcribe && !state.running && hasContent && !state.subtitleTranslationInProgress
+        translateToVietnameseButton.text = when {
+            state.subtitleTranslationInProgress -> "Đang dịch..."
+            state.subtitleTranslationAvailable && state.subtitleShowingVietnamese -> "Xem bản gốc"
+            state.subtitleTranslationAvailable -> "Xem bản dịch"
+            else -> "Dịch sang tiếng Việt"
+        }
+        translateToVietnameseButton.contentDescription = translateToVietnameseButton.text
+
+        val format = preferences.load().exportFormat
+        val baseExport = if (format == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
+        exportButton.text = when {
+            transcribe && state.subtitleTranslationAvailable && state.subtitleShowingVietnamese ->
+                "$baseExport - Tiếng Việt"
+            transcribe && state.subtitleTranslationAvailable ->
+                "$baseExport - Bản gốc"
+            else -> baseExport
+        }
+        exportButton.contentDescription = exportButton.text
     }
 
     private fun startMode(mode: SourceMode) {
@@ -722,11 +763,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun exportTranscript() {
         val format = preferences.load().exportFormat
-        val text = translationService?.subtitleText(format).orEmpty()
+        val service = translationService
+        val text = service?.subtitleText(format).orEmpty()
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
+        val state = service?.state?.value
+        val vietnamese = state?.subtitleTranslationAvailable == true &&
+            state.subtitleShowingVietnamese
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
-        val prefix = if (isTranscribeSelected()) "gemini_transcribe" else "gemini_translate"
+        val prefix = when {
+            isTranscribeSelected() && vietnamese -> "gemini_transcribe_vi"
+            isTranscribeSelected() -> "gemini_transcribe_original"
+            else -> "gemini_translate"
+        }
+        logger.log(
+            2,
+            "Export",
+            "Chuẩn bị xuất format=$format version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
+        )
         exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }
 

@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootScroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/titleText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityHeading="true"
+            android:gravity="center"
+            android:padding="8dp"
+            android:text="Nghe với phụ đề"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/selectMediaButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Chọn video / âm thanh" />
+
+            <Button
+                android:id="@+id/selectSubtitleButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Chọn phụ đề" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="none"
+            android:focusable="true"
+            android:padding="8dp"
+            android:text="Trạng thái: Hãy chọn media và phụ đề"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:id="@+id/fileControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/rewindButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Lùi 10 giây" />
+
+            <Button
+                android:id="@+id/playPauseButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Phát" />
+
+            <Button
+                android:id="@+id/forwardButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="Tiến 10 giây" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/fileSpeedLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@id/fileSpeedSeekBar"
+            android:text="Tốc độ phát: 1.0×"
+            android:textSize="15sp" />
+
+        <SeekBar
+            android:id="@+id/fileSpeedSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Tốc độ phát: 1.0 lần"
+            android:max="20"
+            android:minHeight="48dp"
+            android:progress="0" />
+
+        <SeekBar
+            android:id="@+id/progressSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Vị trí đang phát: 0%"
+            android:max="100"
+            android:minHeight="48dp" />
+
+        <TextView
+            android:id="@+id/originalVolumeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@id/originalVolumeSeekBar"
+            android:text="Âm lượng âm thanh gốc"
+            android:textSize="15sp" />
+
+        <SeekBar
+            android:id="@+id/originalVolumeSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Âm lượng âm thanh gốc: 50%"
+            android:max="100"
+            android:minHeight="48dp"
+            android:progress="50" />
+
+        <TextView
+            android:id="@+id/ttsVolumeLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:labelFor="@id/ttsVolumeSeekBar"
+            android:text="Âm lượng giọng đọc phụ đề"
+            android:textSize="15sp" />
+
+        <SeekBar
+            android:id="@+id/ttsVolumeSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Âm lượng giọng đọc phụ đề: 100%"
+            android:max="100"
+            android:minHeight="48dp"
+            android:progress="100" />
+
+        <Switch
+            android:id="@+id/autoDuckingSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="Tự giảm âm gốc khi đọc phụ đề" />
+
+        <ScrollView
+            android:id="@+id/subtitleScroll"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:contentDescription="Phụ đề đang đọc"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/subtitleText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="4dp"
+                android:text="Chưa có phụ đề"
+                android:textIsSelectable="true"
+                android:textSize="16sp" />
+        </ScrollView>
+    </LinearLayout>
+</ScrollView>

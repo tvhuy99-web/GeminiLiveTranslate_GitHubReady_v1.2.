@@ -538,7 +538,7 @@ class MainActivity : AppCompatActivity() {
         subtitleRenderEvents++
         if (transcriptChars != lastRenderedTranscriptChars) {
             logger.log(
-                2,
+                if (isVideoDescriptionSelected() && state.running) 3 else 2,
                 "SubtitleUI",
                 "render event=$subtitleRenderEvents transcriptChars=$transcriptChars previousChars=$lastRenderedTranscriptChars running=${state.running} paused=${state.paused} setup=${state.setupComplete} lifecycle=${lifecycle.currentState}",
             )

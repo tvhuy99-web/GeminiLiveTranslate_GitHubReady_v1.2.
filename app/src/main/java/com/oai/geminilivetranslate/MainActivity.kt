@@ -941,44 +941,6 @@ class MainActivity : AppCompatActivity() {
         toast(if (current == null) "API Key đã hết; đang dừng phiên" else "Đang áp dụng API Key mới")
     }
 
-    private fun testConnection() {
-        val key = apiKeyStore.load().selected
-        if (key.isNullOrBlank()) { toast("Chưa có API Key để kiểm tra"); return }
-        val settings = preferences.load()
-        binding.testConnectionButton.isEnabled = false
-        binding.testConnectionButton.text = "Đang kiểm tra..."
-        binding.statusText.text = "Trạng thái: Đang kiểm tra API Key, model và kết nối Gemini..."
-        lifecycleScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val transcribe = isTranscribeSelected()
-                    GeminiLiveClient.testConnection(
-                        apiKey = key,
-                        model = if (transcribe) AppPreferences.TRANSCRIBE_LIVE_MODEL else settings.model,
-                        targetLanguage = settings.targetLanguage,
-                        echoTargetLanguage = settings.echoTargetLanguage,
-                        logger = logger,
-                        operationMode = if (transcribe) {
-                            GeminiLiveClient.OperationMode.TRANSCRIBE
-                        } else {
-                            GeminiLiveClient.OperationMode.TRANSLATE
-                        },
-                    )
-                }
-            }.onSuccess { elapsed ->
-                logger.log(2, "Settings", "Kiểm tra API từ màn hình chính thành công latencyMs=$elapsed")
-                binding.statusText.text = "Trạng thái: Kiểm tra thành công: API và Gemini hoạt động tốt ($elapsed ms)"
-                toast("Kết nối tốt - $elapsed ms")
-            }.onFailure {
-                logger.log(0, "Settings", "Kiểm tra API từ màn hình chính thất bại", it)
-                binding.statusText.text = "Trạng thái: Kiểm tra thất bại: ${it.message}"
-                toast("Kiểm tra thất bại; mở Nhật ký để xem chi tiết")
-            }
-            binding.testConnectionButton.isEnabled = true
-            binding.testConnectionButton.text = "Kiểm tra API và kết nối"
-        }
-    }
-
     private fun openSubtitlePlayback() {
         val service = translationService
         val state = service?.state?.value

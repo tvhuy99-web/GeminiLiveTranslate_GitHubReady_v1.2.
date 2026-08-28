@@ -164,7 +164,8 @@ class GeminiVideoDescriptionClient(
                         if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
                         58,
                     )
-                    logger.log(2, TAG, "Gửi Interactions attempt=$attempt/$MAX_ATTEMPTS mode=$mode")
+                    val useStreaming = streamingEnabled && attempt == 1
+                    logger.log(2, TAG, "Gửi Interactions attempt=$attempt/$MAX_ATTEMPTS mode=$mode stream=$useStreaming")
                     val interaction = createAndAwait(
                         fileUri = uploaded.uri,
                         mimeType = uploaded.mimeType,
@@ -173,6 +174,7 @@ class GeminiVideoDescriptionClient(
                         mode = mode,
                         onProgress = onProgress,
                         onPartial = onPartial,
+                        useStreaming = useStreaming,
                     )
                     val outputText = extractOutputText(interaction.root)
                     val usage = interaction.root.optJSONObject("usage")
@@ -396,8 +398,9 @@ class GeminiVideoDescriptionClient(
         mode: Mode,
         onProgress: (String, Int) -> Unit,
         onPartial: (String) -> Unit,
+        useStreaming: Boolean,
     ): InteractionResult {
-        if (streamingEnabled) {
+        if (useStreaming) {
             return createStreaming(
                 fileUri = fileUri,
                 mimeType = mimeType,

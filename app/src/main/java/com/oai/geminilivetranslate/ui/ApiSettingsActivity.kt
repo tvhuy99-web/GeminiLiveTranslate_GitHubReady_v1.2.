@@ -140,7 +140,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             help("Mô tả video dùng chuẩn chat/completions + video_url. Có thể nhập base URL; ứng dụng sẽ tự nối endpoint.")
         )
         proxyFields.addView(label("OpenAI-compatible API Key"))
-        proxyKey = edit("Bearer key", password = true).apply {
+        proxyKey = edit("Bearer key, có thể để trống", password = true).apply {
             contentDescription = "OpenAI-compatible API Key"
         }
         proxyFields.addView(proxyKey)
@@ -574,7 +574,7 @@ class ApiSettingsActivity : AppCompatActivity() {
             isSingleLine = true
             minimumHeight = dp(48)
             inputType = InputType.TYPE_CLASS_NUMBER or
-                if (decimal) InputType.TYPE_NUMBER_FLAG_DECIMAL else 0
+                (if (decimal) InputType.TYPE_NUMBER_FLAG_DECIMAL else 0)
         }
 
     private fun promptEdit(): EditText = EditText(this).apply {
@@ -589,6 +589,7 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
     companion object {
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }

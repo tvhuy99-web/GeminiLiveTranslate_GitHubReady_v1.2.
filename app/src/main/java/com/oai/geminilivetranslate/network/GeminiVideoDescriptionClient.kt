@@ -386,11 +386,11 @@ class GeminiVideoDescriptionClient(
         mode: Mode,
         onProgress: (String, Int) -> Unit,
     ): InteractionResult {
+        throwIfCancelled()
         val startedAt = SystemClock.elapsedRealtime()
         val requestJson = JSONObject()
             .put("model", AppPreferences.VIDEO_DESCRIPTION_MODEL)
-            .put("store", true)
-            .put("background", true)
+            .put("store", false)
             .put(
                 "input",
                 JSONArray()
@@ -404,129 +404,41 @@ class GeminiVideoDescriptionClient(
             )
             .put("response_format", responseFormat)
 
+        onProgress(
+            if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
+            58,
+        )
         val request = Request.Builder()
             .url(INTERACTIONS_ENDPOINT)
             .header("x-goog-api-key", apiKey)
-            .header("Api-Revision", INTERACTIONS_API_REVISION)
             .header("Content-Type", "application/json")
             .post(requestJson.toString().toRequestBody(JSON_MEDIA))
             .build()
 
-        var interactionId: String? = null
-        try {
-            var root = client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                val requestId = response.header("x-request-id")
-                    ?: response.header("x-goog-request-id")
-                    ?: "none"
-                logger.log(
-                    if (response.isSuccessful) 2 else 0,
-                    TAG,
-                    "Interactions POST background=true mode=$mode HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+        val root = client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            val requestId = response.header("x-request-id")
+                ?: response.header("x-goog-request-id")
+                ?: "none"
+            logger.log(
+                if (response.isSuccessful) 2 else 0,
+                TAG,
+                "Interactions POST direct=true background=false store=false mode=$mode HTTP=${response.code} requestId=$requestId bodyChars=${body.length} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+            )
+            if (!response.isSuccessful) {
+                throw IllegalStateException(
+                    "Gemini HTTP ${response.code}: ${sanitizeForLog(body, 1_000)}"
                 )
-                if (!response.isSuccessful) {
-                    throw IllegalStateException(
-                        "Gemini HTTP ${response.code}: ${sanitizeForLog(body, 1_000)}"
-                    )
-                }
-                JSONObject(body)
             }
-
-            interactionId = root.optString("id").takeIf(String::isNotBlank)
-                ?: error("Gemini không trả interaction id cho tác vụ nền")
-            val activeId = requireNotNull(interactionId)
-            for (poll in 0..MAX_INTERACTION_POLLS) {
-                throwIfCancelled()
-                when (root.optString("status").lowercase()) {
-                    "completed" -> return InteractionResult(
-                        root = root,
-                        id = activeId,
-                        elapsedMs = SystemClock.elapsedRealtime() - startedAt,
-                    )
-                    "failed", "cancelled", "incomplete", "budget_exceeded" -> {
-                        val message = root.optJSONObject("error")
-                            ?.optString("message")
-                            ?.takeIf(String::isNotBlank)
-                            ?: "Gemini kết thúc với status=${root.optString("status")}"
-                        throw IllegalStateException(message)
-                    }
-                }
-                if (poll >= MAX_INTERACTION_POLLS) break
-                Thread.sleep(INTERACTION_POLL_INTERVAL_MS)
-                throwIfCancelled()
-                onProgress(
-                    if (mode == Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
-                    (58 + poll / 5).coerceAtMost(96),
-                )
-                val cleanId = activeId.substringAfterLast('/')
-                val pollRequest = Request.Builder()
-                    .url("$INTERACTIONS_ENDPOINT/$cleanId")
-                    .header("x-goog-api-key", apiKey)
-                    .header("Api-Revision", INTERACTIONS_API_REVISION)
-                    .get()
-                    .build()
-                root = client.newCall(pollRequest).execute().use { response ->
-                    val body = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        throw IllegalStateException(
-                            "Không đọc được tiến trình Gemini: HTTP ${response.code} ${sanitizeForLog(body, 500)}"
-                        )
-                    }
-                    JSONObject(body)
-                }
-                if (poll == 0 || (poll + 1) % 10 == 0 || root.optString("status") == "completed") {
-                    logger.log(
-                        3,
-                        TAG,
-                        "Interaction poll=${poll + 1} mode=$mode status=${root.optString("status")} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
-                    )
-                }
-            }
-            error("Hết thời gian chờ Gemini phân tích video")
-        } catch (error: Throwable) {
-            interactionId?.let(::cancelInteraction)
-            throw error
-        } finally {
-            interactionId?.let(::deleteInteraction)
+            JSONObject(body)
         }
-    }
-
-    private fun cancelInteraction(id: String) {
-        val cleanId = id.substringAfterLast('/')
-        val request = Request.Builder()
-            .url("$INTERACTIONS_ENDPOINT/$cleanId/cancel")
-            .header("x-goog-api-key", apiKey)
-            .header("Api-Revision", INTERACTIONS_API_REVISION)
-            .post(ByteArray(0).toRequestBody(null))
-            .build()
-        runCatching {
-            client.newCall(request).execute().use { response ->
-                logger.log(
-                    if (response.isSuccessful) 3 else 1,
-                    TAG,
-                    "Hủy interaction id=${cleanId.take(24)} HTTP=${response.code}",
-                )
-            }
-        }
-    }
-
-    private fun deleteInteraction(id: String) {
-        val cleanId = id.substringAfterLast('/')
-        val request = Request.Builder()
-            .url("$INTERACTIONS_ENDPOINT/$cleanId")
-            .header("x-goog-api-key", apiKey)
-            .header("Api-Revision", INTERACTIONS_API_REVISION)
-            .delete()
-            .build()
-        runCatching {
-            client.newCall(request).execute().use { response ->
-                logger.log(
-                    if (response.isSuccessful) 3 else 1,
-                    TAG,
-                    "Xóa interaction tạm id=${cleanId.take(24)} HTTP=${response.code}",
-                )
-            }
-        }
+        throwIfCancelled()
+        onProgress("Đang tạo kết quả...", 96)
+        return InteractionResult(
+            root = root,
+            id = root.optString("id").takeIf(String::isNotBlank),
+            elapsedMs = SystemClock.elapsedRealtime() - startedAt,
+        )
     }
 
     private fun extractOutputText(root: JSONObject): String {
@@ -920,9 +832,7 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
         private const val TIMECODE_TOLERANCE_SECONDS = 0.10
         private const val MAX_ATTEMPTS = 2
         private const val MAX_FILE_POLLS = 180
-        private const val MAX_INTERACTION_POLLS = 300
         private const val FILE_POLL_INTERVAL_MS = 2_000L
-        private const val INTERACTION_POLL_INTERVAL_MS = 2_000L
         private const val TAG = "VideoDescription"
         private const val TAG_VALIDATE = "VideoDescriptionValidate"
         private const val UPLOAD_ENDPOINT =

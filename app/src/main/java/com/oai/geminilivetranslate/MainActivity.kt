@@ -227,6 +227,7 @@ class MainActivity : AppCompatActivity() {
                 val restoredMode = loadSourceMode()
                 service.setSourceMode(restoredMode)
                 service.setProcessingMode(preferences.loadProcessingMode())
+                service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
                 service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
                 selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
@@ -319,14 +320,35 @@ class MainActivity : AppCompatActivity() {
         }
         processingModeButton.setOnClickListener {
             if (translationService?.state?.value?.running == true) return@setOnClickListener
-            val next = if (isTranscribeSelected()) {
-                AppPreferences.PROCESSING_MODE_TRANSLATE
-            } else {
-                AppPreferences.PROCESSING_MODE_TRANSCRIBE
+            val next = when (preferences.loadProcessingMode()) {
+                AppPreferences.PROCESSING_MODE_TRANSLATE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
+                AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+                else -> AppPreferences.PROCESSING_MODE_TRANSLATE
             }
             preferences.setProcessingMode(next)
             translationService?.setProcessingMode(next)
+            if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) {
+                saveSourceMode(SourceMode.FILE)
+                translationService?.setSourceMode(SourceMode.FILE)
+            }
             restoreProcessingModeUi()
+            updateModeUi(
+                if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) SourceMode.FILE
+                else SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE },
+                false,
+            )
+        }
+        videoDescriptionModeButton.setOnClickListener {
+            if (translationService?.state?.value?.running == true) return@setOnClickListener
+            val next = if (preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_TIMELINE) {
+                AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+            } else {
+                AppPreferences.VIDEO_DESCRIPTION_TIMELINE
+            }
+            preferences.setVideoDescriptionMode(next)
+            translationService?.setVideoDescriptionMode(next)
+            restoreProcessingModeUi()
+            updateModeUi(SourceMode.FILE, false)
         }
         speakerDiarizationSwitch.setOnCheckedChangeListener { _, checked ->
             if (speakerDiarizationSwitch.isPressed) {
@@ -361,8 +383,14 @@ class MainActivity : AppCompatActivity() {
         testConnectionButton.setOnClickListener { testConnection() }
         startButton.setOnClickListener {
             val service = translationService
-            if (service?.state?.value?.running == true) service.stopTranslation()
-            else startMode(SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE })
+            if (service?.state?.value?.running == true) {
+                service.stopTranslation()
+            } else {
+                startMode(
+                    if (isVideoDescriptionSelected()) SourceMode.FILE
+                    else SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+                )
+            }
         }
         playPauseButton.setOnClickListener { translationService?.togglePause() }
         rewindButton.setOnClickListener { translationService?.seekBy(-10_000) }

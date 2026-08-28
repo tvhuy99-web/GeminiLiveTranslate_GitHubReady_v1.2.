@@ -371,10 +371,8 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
                         )
                         lifecycleScope.launch {
                             delay(700)
-                            if (!playing) {
-                                mediaPlayer.stop()
-                                if (player === mediaPlayer) player = null
-                            }
+                            mediaPlayer.stop()
+                            if (player === mediaPlayer) player = null
                         }
                     }
                 }

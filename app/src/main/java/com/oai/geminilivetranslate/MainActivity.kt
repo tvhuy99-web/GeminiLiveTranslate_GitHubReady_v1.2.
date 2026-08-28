@@ -621,8 +621,11 @@ class MainActivity : AppCompatActivity() {
         }
         service.setSourceMode(mode)
         service.setProcessingMode(preferences.loadProcessingMode())
+        service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
         service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
-        if (mode == SourceMode.FILE && !isTranscribeSelected()) service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        if (mode == SourceMode.FILE && !isTranscribeSelected() && !isVideoDescriptionSelected()) {
+            service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
+        }
         startService(Intent(this, TranslationService::class.java))
         when (mode) {
             SourceMode.FILE -> service.startTranslation(mode)
@@ -1078,11 +1081,29 @@ class MainActivity : AppCompatActivity() {
     private fun isTranscribeSelected(): Boolean =
         preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_TRANSCRIBE
 
+    private fun isVideoDescriptionSelected(): Boolean =
+        preferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
+
+    private fun isVideoDescriptionSummarySelected(): Boolean =
+        preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+
     private fun restoreProcessingModeUi() = with(binding) {
         val transcribe = isTranscribeSelected()
-        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        val videoDescription = isVideoDescriptionSelected()
+        processingModeButton.text = when {
+            videoDescription -> "Chế độ: Mô tả video"
+            transcribe -> "Chế độ: Chép lời"
+            else -> "Chế độ: Dịch thuật"
+        }
+        videoDescriptionModeButton.isVisible = videoDescription
+        videoDescriptionModeButton.text =
+            if (isVideoDescriptionSummarySelected()) "Mô tả tổng hợp" else "Mô tả theo thời gian"
         speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
-        val mode = SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        val mode = if (videoDescription) {
+            SourceMode.FILE
+        } else {
+            SourceMode.entries.getOrElse(audioSourceSpinner.selectedItemPosition) { SourceMode.FILE }
+        }
         speakerDiarizationSwitch.isVisible = transcribe && mode == SourceMode.FILE
     }
 
@@ -1115,13 +1136,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchFilePicker() {
+        val videoOnly = isVideoDescriptionSelected()
         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
+            type = if (videoOnly) "video/*" else "*/*"
+            if (!videoOnly) {
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
+            }
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        filePicker.launch(Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video"))
+        filePicker.launch(
+            Intent.createChooser(
+                intent,
+                if (videoOnly) "Chọn video" else "Chọn tệp âm thanh hoặc video",
+            )
+        )
     }
 
     private fun displayName(uri: Uri): String? = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {

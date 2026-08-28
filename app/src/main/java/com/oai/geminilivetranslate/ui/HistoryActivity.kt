@@ -77,9 +77,23 @@ class HistoryActivity : AppCompatActivity() {
             SourceMode.INTERNAL.name -> "âm thanh nội bộ"
             else -> "không rõ"
         }
+        val processing = when (session.processingMode) {
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION ->
+                if (session.videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY) {
+                    "mô tả video tổng hợp"
+                } else {
+                    "mô tả video theo thời gian"
+                }
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> "chép lời"
+            else -> "dịch thuật"
+        }
         val translated = if (session.hasVietnamese) ", đã có bản dịch tiếng Việt" else ""
+        val videoAvailable = buildString {
+            if (session.videoTimelineSrt.isNotBlank()) append(", có mô tả theo thời gian")
+            if (session.videoSummaryText.isNotBlank()) append(", có mô tả tổng hợp")
+        }
         val time = DATE_FORMAT.format(Date(session.updatedAtMs))
-        return "${index + 1}. ${session.title}, $source, $time$translated. Nhấn để mở. Nhấn giữ để xóa."
+        return "${index + 1}. ${session.title}, $source, $processing, $time$translated$videoAvailable. Nhấn để mở. Nhấn giữ để xóa."
     }
 
     private fun confirmDelete(session: HistorySession) {

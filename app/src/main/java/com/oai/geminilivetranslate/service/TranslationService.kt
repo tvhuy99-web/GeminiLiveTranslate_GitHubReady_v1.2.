@@ -227,10 +227,15 @@ class TranslationService : LifecycleService() {
     }
 
     fun setSelectedFile(uri: Uri, name: String?) {
-        if (_state.value.running && currentMode == SourceMode.FILE) stopTranslation("Đã dừng do đổi tệp")
+        if (_state.value.running && currentMode == SourceMode.FILE) {
+            stopTranslation("Đã dừng do đổi tệp")
+        } else {
+            saveCurrentHistoryNow("before-file-change")
+        }
         selectedUri = uri
         selectedFileName = name ?: uri.lastPathSegment
         _state.update { it.copy(selectedUri = uri, selectedFileName = selectedFileName) }
+        beginHistorySession(SourceMode.FILE, "file-selected")
     }
 
     fun startTranslation(
@@ -259,6 +264,20 @@ class TranslationService : LifecycleService() {
         }
         val projectionCode = projectionResultCode
         val projectionIntent = projectionData
+
+        if (mode == SourceMode.MICROPHONE || mode == SourceMode.INTERNAL) {
+            beginHistorySession(mode, "recording-start")
+        } else {
+            val currentHistory = currentHistorySession
+            val selected = selectedUri?.toString()
+            if (
+                currentHistory == null ||
+                currentHistory.sourceMode != SourceMode.FILE.name ||
+                currentHistory.mediaUri != selected
+            ) {
+                beginHistorySession(SourceMode.FILE, "file-start")
+            }
+        }
 
         resetSessionState()
         sessionStartedAt = SystemClock.elapsedRealtime()
@@ -346,6 +365,9 @@ class TranslationService : LifecycleService() {
         if (!stopping.compareAndSet(false, true)) return
         val hadActiveSession = _state.value.running || sessionId.isNotBlank()
         finalizeLiveTranscriptionFallback("stop")
+        historySaveJob?.cancel()
+        historySaveJob = null
+        saveCurrentHistoryNow("stop")
         connectionGeneration++
         inputEpoch.incrementAndGet()
         reconnectJob?.cancel(); reconnectJob = null
@@ -815,6 +837,172 @@ class TranslationService : LifecycleService() {
             hash = hash * 31L + cue.text.hashCode()
         }
         return java.lang.Long.toUnsignedString(hash, 16)
+    }
+
+    fun restoreHistorySession(id: String): Boolean {
+        if (_state.value.running) stopTranslation("Đã dừng để mở phiên lịch sử")
+        historySaveJob?.cancel()
+        historySaveJob = null
+
+        val loaded = historyStore.load(id)
+        if (loaded == null) {
+            logger.log(1, "History", "Không tìm thấy phiên id=$id")
+            updateState { it.copy(status = "Không tìm thấy phiên lịch sử") }
+            return false
+        }
+
+        resetSessionState()
+        subtitles.reset()
+        vietnameseSubtitles.reset()
+
+        processingMode = if (loaded.processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE
+        } else {
+            AppPreferences.PROCESSING_MODE_TRANSLATE
+        }
+        preferences.setProcessingMode(processingMode)
+
+        currentMode = runCatching { SourceMode.valueOf(loaded.sourceMode) }
+            .getOrDefault(SourceMode.FILE)
+        speakerDiarization = loaded.speakerDiarization
+        preferences.setSpeakerDiarization(speakerDiarization)
+        selectedUri = loaded.mediaUri?.let(Uri::parse)
+        selectedFileName = loaded.mediaName
+
+        restoreStoreFromHistory(subtitles, loaded.primarySrt, loaded.primaryTranscript)
+        restoreStoreFromHistory(
+            vietnameseSubtitles,
+            loaded.vietnameseSrt,
+            loaded.vietnameseTranscript,
+        )
+
+        transcribePlainText = if (processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
+            loaded.primaryTranscript.ifBlank { subtitles.plainText() }
+        } else {
+            ""
+        }
+        liveCommittedTranscript = transcribePlainText
+        liveInterimTranscript = ""
+
+        val hasVietnamese = loaded.hasVietnamese && vietnameseSubtitles.plainText().isNotBlank()
+        val showVietnamese = loaded.showingVietnamese && hasVietnamese
+        val displayText = if (showVietnamese) {
+            loaded.vietnameseTranscript.ifBlank { vietnameseSubtitles.plainText() }
+        } else {
+            loaded.primaryTranscript.ifBlank { subtitles.plainText() }
+        }
+
+        currentHistorySession = loaded
+        sessionId = ""
+        sessionStartedAt = 0L
+        fileInputEnded = false
+        _state.value = _state.value.copy(
+            status = "Đã mở phiên lịch sử",
+            health = "",
+            running = false,
+            paused = false,
+            setupComplete = false,
+            sourceMode = currentMode,
+            selectedUri = selectedUri,
+            selectedFileName = selectedFileName,
+            transcript = displayText.takeLast(MAX_TRANSCRIPT_CHARS),
+            progressPercent = 0,
+            canSeek = false,
+            aiVoice = settings.aiVoice && processingMode != AppPreferences.PROCESSING_MODE_TRANSCRIBE,
+            currentLanguage = settings.targetLanguage,
+            lastError = null,
+            subtitleTranslationAvailable = hasVietnamese,
+            subtitleTranslationInProgress = false,
+            subtitleShowingVietnamese = showVietnamese,
+        )
+        logger.log(
+            2,
+            "History",
+            "Khôi phục phiên id=${loaded.id} title=${loaded.title} source=${loaded.sourceMode} processing=${loaded.processingMode} media=${loaded.mediaName ?: "none"} primaryChars=${loaded.primaryTranscript.length} primarySrtChars=${loaded.primarySrt.length} viChars=${loaded.vietnameseTranscript.length} viSrtChars=${loaded.vietnameseSrt.length} showVi=$showVietnamese",
+        )
+        return true
+    }
+
+    private fun restoreStoreFromHistory(
+        store: SubtitleStore,
+        srt: String,
+        transcript: String,
+    ) {
+        if (srt.isNotBlank()) {
+            val parsed = SrtParser.parse(srt)
+            if (parsed.cues.isNotEmpty()) {
+                store.replaceTimed(parsed.cues)
+                return
+            }
+        }
+        transcript.trim().takeIf(String::isNotBlank)?.let(store::append)
+    }
+
+    private fun beginHistorySession(mode: SourceMode, reason: String) {
+        saveCurrentHistoryNow("before-$reason")
+        historySaveJob?.cancel()
+        historySaveJob = null
+        currentHistorySession = historyStore.newSession(
+            sourceMode = mode.name,
+            processingMode = processingMode,
+            mediaUri = if (mode == SourceMode.FILE) selectedUri?.toString() else null,
+            mediaName = if (mode == SourceMode.FILE) selectedFileName else null,
+            speakerDiarization = speakerDiarization,
+        )
+        logger.log(
+            2,
+            "History",
+            "Bắt đầu phiên nháp id=${currentHistorySession?.id} reason=$reason source=$mode processing=$processingMode media=${selectedFileName ?: "none"}",
+        )
+    }
+
+    private fun scheduleHistorySave(reason: String) {
+        val id = currentHistorySession?.id ?: return
+        historySaveJob?.cancel()
+        historySaveJob = serviceScope.launch(Dispatchers.IO) {
+            delay(HISTORY_SAVE_DEBOUNCE_MS)
+            if (currentHistorySession?.id == id) saveCurrentHistoryNow(reason)
+        }
+    }
+
+    private fun saveCurrentHistoryNow(reason: String) {
+        val base = currentHistorySession ?: return
+        val primaryTranscript = if (processingMode == AppPreferences.PROCESSING_MODE_TRANSCRIBE) {
+            transcribePlainText.trim().ifBlank { subtitles.plainText() }
+        } else {
+            subtitles.plainText().ifBlank { _state.value.transcript }
+        }
+        val primarySrt = subtitles.srtText()
+        val viTranscript = vietnameseSubtitles.plainText()
+        val viSrt = vietnameseSubtitles.srtText()
+        val candidate = base.copy(
+            sourceMode = currentMode.name,
+            processingMode = processingMode,
+            mediaUri = if (currentMode == SourceMode.FILE) selectedUri?.toString() else null,
+            mediaName = if (currentMode == SourceMode.FILE) selectedFileName else null,
+            primaryTranscript = primaryTranscript,
+            primarySrt = primarySrt,
+            vietnameseTranscript = viTranscript,
+            vietnameseSrt = viSrt,
+            showingVietnamese = _state.value.subtitleShowingVietnamese,
+            speakerDiarization = speakerDiarization,
+        )
+        if (!candidate.hasValue) {
+            logger.log(3, "History", "Bỏ lưu phiên rỗng id=${base.id} reason=$reason")
+            return
+        }
+        runCatching { historyStore.save(candidate) }
+            .onSuccess { saved ->
+                currentHistorySession = saved
+                logger.log(
+                    2,
+                    "History",
+                    "Đã lưu phiên id=${saved.id} reason=$reason title=${saved.title} source=${saved.sourceMode} primaryChars=${saved.primaryTranscript.length} primarySrtChars=${saved.primarySrt.length} viChars=${saved.vietnameseTranscript.length} viSrtChars=${saved.vietnameseSrt.length} showVi=${saved.showingVietnamese} historyCount=${historyStore.count()}",
+                )
+            }
+            .onFailure { error ->
+                logger.log(0, "History", "Lưu phiên thất bại id=${base.id} reason=$reason", error)
+            }
     }
 
     fun logText(): String = logger.text()
@@ -2016,6 +2204,7 @@ class TranslationService : LifecycleService() {
     companion object {
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
         private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
+        private const val HISTORY_SAVE_DEBOUNCE_MS = 750L
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

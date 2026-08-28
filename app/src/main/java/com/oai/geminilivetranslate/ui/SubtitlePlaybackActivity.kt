@@ -56,6 +56,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
     private var lastCueListIndex = -1
     private var lastProgressLogBucket = -1L
     private var cueEvents = 0L
+    private var queueSubtitleTts = false
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
@@ -85,6 +86,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         preferences = AppPreferences(this)
         logger = SessionLogger(this, preferences)
         ttsEngine = RobustTtsEngine(this, logger)
+        queueSubtitleTts = intent.getBooleanExtra(EXTRA_QUEUE_SUBTITLE_TTS, false)
 
         restorePreferences()
         setupUi()
@@ -93,7 +95,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         logger.log(
             2,
             TAG,
-            "Mở màn hình seedMedia=${mediaUri != null} seedSubtitle=${subtitleRaw.isNotBlank()} cues=${cues.size}",
+            "Mở màn hình seedMedia=${mediaUri != null} seedSubtitle=${subtitleRaw.isNotBlank()} cues=${cues.size} queueSubtitleTts=$queueSubtitleTts",
         )
     }
 
@@ -506,14 +508,14 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             rate = playbackSpeed,
             pitch = 1f,
             volume = settings.translatedVolume.coerceIn(0, 100) / 100f,
-            queue = false,
+            queue = queueSubtitleTts,
         )
         val estimatedTtsMs = estimateTtsDurationMs(cue.text)
         if (spoken) applyDucking(estimatedTtsMs, cue.index)
         logger.log(
             if (spoken) 2 else 1,
             TAG_CUE,
-            "cueEvent=$cueEvents cue=${cue.index}/${cues.size} startMs=${cue.startMs} endMs=${cue.endMs} positionMs=$positionMs lateMs=$lateMs chars=${cue.text.length} speed=${formatSpeed()}x ttsQueued=$spoken estimatedTtsMs=$estimatedTtsMs autoDucking=${settings.autoDucking}",
+            "cueEvent=$cueEvents cue=${cue.index}/${cues.size} startMs=${cue.startMs} endMs=${cue.endMs} positionMs=$positionMs lateMs=$lateMs chars=${cue.text.length} speed=${formatSpeed()}x ttsQueued=$spoken queueMode=$queueSubtitleTts estimatedTtsMs=$estimatedTtsMs autoDucking=${settings.autoDucking}",
         )
         if (settings.logIncludeTranscript) {
             logger.log(3, TAG_CUE, "cue=${cue.index} text=${cue.text.replace(Regex("\\s+"), " ").take(500)}")
@@ -660,6 +662,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         const val EXTRA_MEDIA_NAME = "subtitlePlayback.mediaName"
         const val EXTRA_SUBTITLE_SRT = "subtitlePlayback.subtitleSrt"
         const val EXTRA_SUBTITLE_NAME = "subtitlePlayback.subtitleName"
+        const val EXTRA_QUEUE_SUBTITLE_TTS = "subtitlePlayback.queueSubtitleTts"
 
         private const val TAG = "SubtitlePlayback"
         private const val TAG_CUE = "SubtitlePlaybackCue"

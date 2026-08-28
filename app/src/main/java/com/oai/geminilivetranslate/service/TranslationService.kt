@@ -2632,7 +2632,14 @@ class TranslationService : LifecycleService() {
         videoDescriptionMode == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
 
     private fun activeModelName(): String = when {
-        isVideoDescriptionMode() -> AppPreferences.VIDEO_DESCRIPTION_MODEL
+        isVideoDescriptionMode() -> {
+            val api = AiApiSettingsStore(this).load()
+            if (api.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+                api.proxyModel.ifBlank { "openai-compatible" }
+            } else {
+                api.geminiModel
+            }
+        }
         isTranscribeMode() && currentMode == SourceMode.FILE -> AppPreferences.TRANSCRIBE_FILE_MODEL
         isTranscribeMode() -> AppPreferences.TRANSCRIBE_LIVE_MODEL
         else -> settings.model

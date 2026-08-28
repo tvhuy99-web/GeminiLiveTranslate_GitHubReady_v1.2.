@@ -1422,16 +1422,7 @@ class TranslationService : LifecycleService() {
                     error("Video dài quá 20 phút. Hãy chọn video tối đa 20 phút")
                 }
 
-                val resolvedMime = if (mimeType.startsWith("video/")) {
-                    mimeType
-                } else {
-                    when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-                        "webm" -> "video/webm"
-                        "3gp", "3gpp" -> "video/3gpp"
-                        "mkv" -> "video/x-matroska"
-                        else -> "video/mp4"
-                    }
-                }
+                val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
                 val client = GeminiVideoDescriptionClient(
                     apiKey = apiKey,
                     logger = logger,
@@ -1725,9 +1716,34 @@ class TranslationService : LifecycleService() {
         }
     }
 
+    private fun geminiVideoMimeType(uri: Uri, name: String, detectedMime: String): String {
+        val extensionMime = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "mp4", "m4v" -> "video/mp4"
+            "mpeg" -> "video/mpeg"
+            "mpg" -> "video/mpg"
+            "mov" -> "video/mov"
+            "avi" -> "video/avi"
+            "flv" -> "video/x-flv"
+            "webm" -> "video/webm"
+            "wmv" -> "video/wmv"
+            "3gp", "3gpp" -> "video/3gpp"
+            "mkv" -> error("Gemini 3.7 Flash chưa hỗ trợ trực tiếp video MKV. Hãy dùng MP4, WebM, MOV, AVI, MPEG, FLV, WMV hoặc 3GP")
+            else -> null
+        }
+        if (extensionMime != null) return extensionMime
+
+        val resolverMime = contentResolver.getType(uri).orEmpty()
+        val candidate = resolverMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
+            ?: detectedMime.takeIf { it in GEMINI_VIDEO_MIME_TYPES }
+        return candidate ?: error(
+            "Định dạng video chưa được Gemini 3.7 Flash hỗ trợ trực tiếp"
+        )
+    }
+
     private fun isVideoFileName(name: String): Boolean =
         when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-            "mp4", "m4v", "mov", "mkv", "webm", "3gp", "3gpp" -> true
+            "mp4", "m4v", "mpeg", "mpg", "mov", "avi", "flv", "webm", "wmv",
+            "3gp", "3gpp", "mkv" -> true
             else -> false
         }
 
@@ -2559,6 +2575,17 @@ class TranslationService : LifecycleService() {
     }
 
     companion object {
+        private val GEMINI_VIDEO_MIME_TYPES = setOf(
+            "video/mp4",
+            "video/mpeg",
+            "video/mpg",
+            "video/mov",
+            "video/avi",
+            "video/x-flv",
+            "video/webm",
+            "video/wmv",
+            "video/3gpp",
+        )
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
         private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
         private const val HISTORY_SAVE_DEBOUNCE_MS = 750L

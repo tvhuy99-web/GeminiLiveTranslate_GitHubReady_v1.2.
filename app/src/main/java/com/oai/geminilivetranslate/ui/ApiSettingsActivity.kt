@@ -149,6 +149,11 @@ class ApiSettingsActivity : AppCompatActivity() {
             contentDescription = "Model OpenAI-compatible cho Mô tả video"
         }
         proxyFields.addView(proxyModel)
+        proxyFields.addView(label("Nhiệt độ Proxy (0.0 - 2.0)"))
+        temperatureInput = numericEdit("0.2", decimal = true).apply {
+            contentDescription = "Nhiệt độ Proxy từ 0.0 đến 2.0"
+        }
+        proxyFields.addView(temperatureInput)
         root.addView(proxyFields)
 
         streamingSwitch = Switch(this).apply {
@@ -178,12 +183,6 @@ class ApiSettingsActivity : AppCompatActivity() {
             contentDescription = "Timeout yêu cầu AI tính bằng mili giây"
         }
         root.addView(timeoutInput)
-
-        root.addView(label("Nhiệt độ AI (0.0 - 2.0)"))
-        temperatureInput = numericEdit("0.2", decimal = true).apply {
-            contentDescription = "Nhiệt độ AI từ 0.0 đến 2.0"
-        }
-        root.addView(temperatureInput)
 
         root.addView(section("Lời nhắc: Mô tả theo thời gian"))
         timelinePrompt = promptEdit().apply {
@@ -396,8 +395,9 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun testConnection() {
         val provider = currentProvider()
+        val geminiValues = geminiKeysFromUi()
         val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            geminiKeysFromUi().firstOrNull().orEmpty()
+            ""
         } else {
             proxyKey.text.toString().trim()
         }
@@ -413,12 +413,47 @@ class ApiSettingsActivity : AppCompatActivity() {
             toast("Đang kiểm tra kết nối...")
             runCatching {
                 withContext(Dispatchers.IO) {
-                    testProviderConnection(
-                        provider = provider,
-                        keyValue = keyValue,
-                        modelValue = modelValue,
-                        proxyUrlValue = proxyUrlValue,
-                    )
+                    if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+                        if (geminiValues.isEmpty()) error("Hãy nhập ít nhất một Gemini API Key")
+                        var successCount = 0
+                        val failedIndexes = ArrayList<Int>()
+                        geminiValues.forEachIndexed { index, key ->
+                            runCatching {
+                                testProviderConnection(
+                                    provider = provider,
+                                    keyValue = key,
+                                    modelValue = modelValue,
+                                    proxyUrlValue = proxyUrlValue,
+                                )
+                            }.onSuccess {
+                                successCount++
+                            }.onFailure { error ->
+                                failedIndexes += index + 1
+                                logger.log(
+                                    1,
+                                    "ApiSettings",
+                                    "Kiểm tra Gemini API Key thất bại index=${index + 1}/${geminiValues.size} model=$modelValue",
+                                    error,
+                                )
+                            }
+                        }
+                        if (successCount == 0) {
+                            error("0/${geminiValues.size} API Key hoạt động")
+                        }
+                        buildString {
+                            append("Gemini: $successCount/${geminiValues.size} API Key hoạt động")
+                            if (failedIndexes.isNotEmpty()) {
+                                append(". Khóa lỗi: ").append(failedIndexes.joinToString())
+                            }
+                        }
+                    } else {
+                        testProviderConnection(
+                            provider = provider,
+                            keyValue = keyValue,
+                            modelValue = modelValue,
+                            proxyUrlValue = proxyUrlValue,
+                        )
+                    }
                 }
             }.onSuccess { info ->
                 toast("Kết nối thành công. $info")

@@ -653,10 +653,55 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateModeUi(mode: SourceMode, running: Boolean) = with(binding) {
         val transcribe = isTranscribeSelected()
+        val videoDescription = isVideoDescriptionSelected()
+        val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
         val fileMode = mode == SourceMode.FILE
         val micMode = mode == SourceMode.MICROPHONE
+
         processingModeButton.isEnabled = !running
-        processingModeButton.text = if (transcribe) "Chế độ: Chép lời" else "Chế độ: Dịch thuật"
+        processingModeButton.text = when {
+            videoDescription -> "Chế độ: Mô tả video"
+            transcribe -> "Chế độ: Chép lời"
+            else -> "Chế độ: Dịch thuật"
+        }
+        videoDescriptionModeButton.isVisible = videoDescription
+        videoDescriptionModeButton.isEnabled = !running
+        videoDescriptionModeButton.text =
+            if (videoSummary) "Mô tả tổng hợp" else "Mô tả theo thời gian"
+
+        if (videoDescription) {
+            audioSourceLabel.isVisible = false
+            audioSourceSpinner.isVisible = false
+            speakerDiarizationSwitch.isVisible = false
+            selectFileButton.isVisible = true
+            if (translationService?.state?.value?.selectedFileName.isNullOrBlank()) {
+                selectFileButton.text = "Chọn video"
+            }
+            miniBrowserButton.isVisible = false
+            testConnectionButton.isVisible = false
+            fileControls.isVisible = false
+            fileSpeedLayout.isVisible = false
+            progressSeekBar.isVisible = true
+            progressSeekBar.isEnabled = false
+            originalVolumeSeekBar.isVisible = false
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            autoDuckingSwitch.isVisible = false
+            micLanguageLayout.isVisible = false
+            nextLanguageButton.isVisible = false
+            if (!running) {
+                startButton.text =
+                    if (videoSummary) "Bắt đầu mô tả tổng hợp" else "Bắt đầu mô tả theo thời gian"
+            }
+            applyUiMode()
+            return@with
+        }
+
+        audioSourceLabel.isVisible = true
+        audioSourceSpinner.isVisible = true
+        testConnectionButton.isVisible = true
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode

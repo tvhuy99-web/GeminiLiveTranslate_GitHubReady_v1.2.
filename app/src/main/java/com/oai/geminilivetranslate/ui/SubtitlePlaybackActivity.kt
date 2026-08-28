@@ -275,6 +275,9 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             if (success && pendingPlayAfterTts) {
                 pendingPlayAfterTts = false
                 startPlayback()
+            } else if (success && playing && !paused) {
+                lastCueListIndex = -1
+                processCue(currentPositionMs)
             } else if (!success && startWhenReady) {
                 pendingPlayAfterTts = false
                 status("Không khởi tạo được TTS")

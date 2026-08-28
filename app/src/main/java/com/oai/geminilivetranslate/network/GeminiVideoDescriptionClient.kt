@@ -839,7 +839,6 @@ Không thêm lời chào, giải thích, markdown hoặc nội dung ngoài dữ 
             "https://generativelanguage.googleapis.com/upload/v1beta/files"
         private const val INTERACTIONS_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/interactions"
-        private const val INTERACTIONS_API_REVISION = "2026-05-20"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

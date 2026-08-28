@@ -663,8 +663,10 @@ class GeminiVideoDescriptionClient(
     }
 
     private fun parseAndValidateSummary(outputText: String): String {
-        val root = JSONObject(outputText)
-        val text = root.optString("text").trim()
+        val text = runCatching { JSONObject(outputText).optString("text").trim() }
+            .getOrNull()
+            ?.takeIf(String::isNotBlank)
+            ?: outputText.trim()
         if (text.isBlank()) error("Gemini trả bản tổng hợp rỗng")
         logger.log(2, TAG_VALIDATE, "Summary validate chars=${text.length} words=${text.split(Regex("\\s+")).count { it.isNotBlank() }}")
         return text

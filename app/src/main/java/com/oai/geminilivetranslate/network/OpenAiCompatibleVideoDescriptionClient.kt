@@ -199,6 +199,7 @@ class OpenAiCompatibleVideoDescriptionClient(
             "http 422",
             "không trả luồng dữ liệu",
             "không trả nội dung",
+            "bị ngắt trước tín hiệu hoàn tất",
         ).any(message::contains)
     }
 

@@ -38,25 +38,6 @@ class ApiKeyStore(context: Context) {
     }
 
     @Synchronized
-    fun add(key: String): State {
-        val normalized = key.trim()
-        require(normalized.length >= 20 && normalized.none(Char::isWhitespace)) { "API Key không hợp lệ" }
-        val current = load()
-        val keys = (current.keys + normalized).distinct()
-        return save(current.copy(keys = keys, selected = normalized))
-    }
-
-    @Synchronized
-    fun setGeminiKey(key: String): State {
-        val normalized = key.trim()
-        val current = load()
-        if (normalized.isBlank()) return current
-        requireValidGeminiKey(normalized)
-        val keys = (current.keys + normalized).distinct()
-        return save(current.copy(keys = keys, selected = normalized))
-    }
-
-    @Synchronized
     fun setGeminiKeys(values: List<String>): State {
         val normalized = values
             .map(String::trim)
@@ -89,25 +70,6 @@ class ApiKeyStore(context: Context) {
     }
 
     @Synchronized
-    fun remove(key: String): State {
-        val current = load()
-        val keys = current.keys.filterNot { it == key }
-        return save(
-            current.copy(
-                keys = keys,
-                selected = if (current.selected == key) keys.firstOrNull() else current.selected,
-            )
-        )
-    }
-
-    @Synchronized
-    fun select(key: String): State {
-        val current = load()
-        require(key in current.keys)
-        return save(current.copy(selected = key))
-    }
-
-    @Synchronized
     fun clear() {
         prefs.edit().clear().commit()
         runCatching {
@@ -115,11 +77,6 @@ class ApiKeyStore(context: Context) {
             if (keyStore.containsAlias(ALIAS)) keyStore.deleteEntry(ALIAS)
         }
         invalidateLogRedactionCache()
-    }
-
-    fun masked(key: String): String = when {
-        key.length <= 6 -> "••••••"
-        else -> key.take(4) + "••••••" + key.takeLast(2)
     }
 
     private fun requireValidGeminiKey(key: String) {

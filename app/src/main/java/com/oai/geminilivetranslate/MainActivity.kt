@@ -61,6 +61,8 @@ class MainActivity : AppCompatActivity() {
     private var translationService: TranslationService? = null
     private var bound = false
     private var spinnerReady = false
+    private var processingModeSpinnerReady = false
+    private var videoDescriptionModeSpinnerReady = false
     private var micSpinnerReady = false
     private var aiStreamSpinnerReady = false
     private var pendingStartMode: SourceMode? = null
@@ -101,6 +103,25 @@ class MainActivity : AppCompatActivity() {
         "Giao tiếp bằng giọng nói",
         "Trợ lý Android",
     )
+    private val processingModeValues = listOf(
+        AppPreferences.PROCESSING_MODE_TRANSLATE,
+        AppPreferences.PROCESSING_MODE_TRANSCRIBE,
+        AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION,
+    )
+    private val processingModeLabels = listOf(
+        "Dịch thuật",
+        "Chép lời",
+        "Mô tả video",
+    )
+    private val videoDescriptionModeValues = listOf(
+        AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
+        AppPreferences.VIDEO_DESCRIPTION_SUMMARY,
+    )
+    private val videoDescriptionModeLabels = listOf(
+        "Mô tả theo thời gian",
+        "Mô tả tổng hợp",
+    )
+
     private var pendingExportText: String? = null
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -318,19 +339,28 @@ class MainActivity : AppCompatActivity() {
         historyButton.setOnClickListener {
             historyLauncher.launch(Intent(this@MainActivity, HistoryActivity::class.java))
         }
-        processingModeButton.setOnClickListener {
-            if (translationService?.state?.value?.running == true) return@setOnClickListener
-            val next = when (preferences.loadProcessingMode()) {
-                AppPreferences.PROCESSING_MODE_TRANSLATE -> AppPreferences.PROCESSING_MODE_TRANSCRIBE
-                AppPreferences.PROCESSING_MODE_TRANSCRIBE -> AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION
-                else -> AppPreferences.PROCESSING_MODE_TRANSLATE
+        processingModeSpinner.adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_item,
+            processingModeLabels,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        processingModeSpinner.onItemSelectedListener = simpleSelection { position ->
+            if (!processingModeSpinnerReady) return@simpleSelection
+            if (translationService?.state?.value?.running == true) {
+                restoreProcessingModeUi()
+                return@simpleSelection
             }
+            val next = processingModeValues.getOrElse(position) {
+                AppPreferences.PROCESSING_MODE_TRANSLATE
+            }
+            if (preferences.loadProcessingMode() == next) return@simpleSelection
             preferences.setProcessingMode(next)
             translationService?.setProcessingMode(next)
             if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) {
                 saveSourceMode(SourceMode.FILE)
                 translationService?.setSourceMode(SourceMode.FILE)
             }
+            logger.log(2, "UI", "Đổi chế độ chính bằng dropdown mode=$next")
             restoreProcessingModeUi()
             updateModeUi(
                 if (next == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION) SourceMode.FILE
@@ -338,15 +368,25 @@ class MainActivity : AppCompatActivity() {
                 false,
             )
         }
-        videoDescriptionModeButton.setOnClickListener {
-            if (translationService?.state?.value?.running == true) return@setOnClickListener
-            val next = if (preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_TIMELINE) {
-                AppPreferences.VIDEO_DESCRIPTION_SUMMARY
-            } else {
+
+        videoDescriptionModeSpinner.adapter = ArrayAdapter(
+            this@MainActivity,
+            android.R.layout.simple_spinner_item,
+            videoDescriptionModeLabels,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        videoDescriptionModeSpinner.onItemSelectedListener = simpleSelection { position ->
+            if (!videoDescriptionModeSpinnerReady) return@simpleSelection
+            if (translationService?.state?.value?.running == true) {
+                restoreProcessingModeUi()
+                return@simpleSelection
+            }
+            val next = videoDescriptionModeValues.getOrElse(position) {
                 AppPreferences.VIDEO_DESCRIPTION_TIMELINE
             }
+            if (preferences.loadVideoDescriptionMode() == next) return@simpleSelection
             preferences.setVideoDescriptionMode(next)
             translationService?.setVideoDescriptionMode(next)
+            logger.log(2, "UI", "Đổi kiểu mô tả video bằng dropdown mode=$next")
             restoreProcessingModeUi()
             updateModeUi(SourceMode.FILE, false)
         }
@@ -1148,20 +1188,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchFilePicker() {
-        val videoOnly = isVideoDescriptionSelected()
         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = if (videoOnly) "video/*" else "*/*"
-            if (!videoOnly) {
-                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
-            }
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         filePicker.launch(
-            Intent.createChooser(
-                intent,
-                if (videoOnly) "Chọn video" else "Chọn tệp âm thanh hoặc video",
-            )
+            Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video")
         )
     }
 

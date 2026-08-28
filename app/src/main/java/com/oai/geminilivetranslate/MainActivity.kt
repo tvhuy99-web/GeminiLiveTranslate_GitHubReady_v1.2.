@@ -69,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private var pendingSelectedUri: Uri? = null
     private var pendingSelectedFileName: String? = null
     private var pendingHistorySessionId: String? = null
+    private var resumeHistoryAfterPlaybackId: String? = null
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
@@ -174,6 +175,27 @@ class MainActivity : AppCompatActivity() {
                 saveSourceMode(service.state.value.sourceMode)
                 restorePreferencesUi()
                 toast("Đã mở phiên lịch sử")
+            }
+        } else {
+            pendingHistorySessionId = sessionId
+        }
+    }
+
+    private val subtitlePlaybackLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val sessionId = resumeHistoryAfterPlaybackId
+        resumeHistoryAfterPlaybackId = null
+        if (sessionId.isNullOrBlank()) return@registerForActivityResult
+
+        logger.log(
+            2,
+            "History",
+            "Quay lại từ Nghe với phụ đề; phục hồi phiên id=$sessionId serviceBound=${translationService != null}",
+        )
+        val service = translationService
+        if (service != null) {
+            if (service.restoreHistorySession(sessionId)) {
+                saveSourceMode(service.state.value.sourceMode)
+                restorePreferencesUi()
             }
         } else {
             pendingHistorySessionId = sessionId
@@ -810,6 +832,7 @@ class MainActivity : AppCompatActivity() {
     private fun openSubtitlePlayback() {
         val service = translationService
         val state = service?.state?.value
+        resumeHistoryAfterPlaybackId = service?.currentHistorySessionId()
         val mediaUri = if (state?.sourceMode == SourceMode.FILE) service.selectedMediaUri() else null
         val mediaName = if (mediaUri != null) service?.selectedMediaName() else null
         val subtitleSrt = service?.subtitleText("srt").orEmpty()
@@ -841,7 +864,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
-        startActivity(intent)
+        subtitlePlaybackLauncher.launch(intent)
     }
 
     private fun exportTranscript() {

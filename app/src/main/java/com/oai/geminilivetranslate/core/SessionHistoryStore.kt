@@ -12,6 +12,7 @@ data class HistorySession(
     val id: String,
     val sourceMode: String,
     val processingMode: String,
+    val videoDescriptionMode: String,
     val title: String,
     val mediaUri: String?,
     val mediaName: String?,
@@ -48,11 +49,13 @@ class SessionHistoryStore(context: Context) {
         mediaUri: String?,
         mediaName: String?,
         speakerDiarization: Boolean,
+        videoDescriptionMode: String = AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
         nowMs: Long = System.currentTimeMillis(),
     ): HistorySession = HistorySession(
         id = UUID.randomUUID().toString(),
         sourceMode = sourceMode,
         processingMode = processingMode,
+        videoDescriptionMode = videoDescriptionMode,
         title = deriveTitle(sourceMode, mediaName, "", nowMs),
         mediaUri = mediaUri,
         mediaName = mediaName,
@@ -151,6 +154,7 @@ class SessionHistoryStore(context: Context) {
         .put("id", session.id)
         .put("sourceMode", session.sourceMode)
         .put("processingMode", session.processingMode)
+        .put("videoDescriptionMode", session.videoDescriptionMode)
         .put("title", session.title)
         .put("mediaUri", session.mediaUri ?: JSONObject.NULL)
         .put("mediaName", session.mediaName ?: JSONObject.NULL)
@@ -176,6 +180,13 @@ class SessionHistoryStore(context: Context) {
                 "processingMode",
                 AppPreferences.PROCESSING_MODE_TRANSCRIBE,
             ),
+            videoDescriptionMode = json.optString(
+                "videoDescriptionMode",
+                AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
+            ).takeIf {
+                it == AppPreferences.VIDEO_DESCRIPTION_TIMELINE ||
+                    it == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
+            } ?: AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
             title = json.optString("title").ifBlank {
                 deriveTitle(
                     sourceMode,

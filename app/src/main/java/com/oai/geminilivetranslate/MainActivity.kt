@@ -971,6 +971,10 @@ class MainActivity : AppCompatActivity() {
         )
 
         val intent = Intent(this, SubtitlePlaybackActivity::class.java).apply {
+            putExtra(
+                SubtitlePlaybackActivity.EXTRA_QUEUE_SUBTITLE_TTS,
+                isVideoDescriptionSelected() && !isVideoDescriptionSummarySelected(),
+            )
             mediaUri?.let {
                 putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_URI, it.toString())
                 putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_NAME, mediaName ?: "Media từ phiên hiện tại")

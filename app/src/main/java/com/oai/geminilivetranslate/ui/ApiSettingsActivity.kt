@@ -27,8 +27,10 @@ import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -329,28 +331,116 @@ class ApiSettingsActivity : AppCompatActivity() {
         } else {
             proxyKey.text.toString().trim()
         }
-        val proxyUrlValue = proxyUrl.text.toString().trim()
-        val selected = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+        val modelValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
             geminiModel.text.toString().trim().removePrefix("models/")
+                .ifBlank { AppPreferences.VIDEO_DESCRIPTION_MODEL }
         } else {
             proxyModel.text.toString().trim()
         }
+        val proxyUrlValue = proxyUrl.text.toString().trim()
+
         lifecycleScope.launch {
             toast("Đang kiểm tra kết nối...")
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val models = fetchModelList(provider, keyValue, proxyUrlValue)
-                    val found = selected.isBlank() || selected in models
-                    models.size to found
+                    testProviderConnection(
+                        provider = provider,
+                        keyValue = keyValue,
+                        modelValue = modelValue,
+                        proxyUrlValue = proxyUrlValue,
+                    )
                 }
-            }.onSuccess { (count, found) ->
-                val suffix = if (found) "" else " Model đã nhập không có trong danh sách trả về."
-                toast("Kết nối thành công. Nhận $count model.$suffix")
-                logger.log(2, "ApiSettings", "Kiểm tra kết nối thành công provider=$provider modelCount=$count selectedFound=$found")
+            }.onSuccess { info ->
+                toast("Kết nối thành công. $info")
+                logger.log(
+                    2,
+                    "ApiSettings",
+                    "Kiểm tra kết nối thành công provider=$provider model=$modelValue info=$info",
+                )
             }.onFailure {
-                logger.log(0, "ApiSettings", "Kiểm tra kết nối thất bại provider=$provider", it)
+                logger.log(
+                    0,
+                    "ApiSettings",
+                    "Kiểm tra kết nối thất bại provider=$provider model=$modelValue",
+                    it,
+                )
                 toast("Kết nối thất bại: ${it.message}")
             }
+        }
+    }
+
+    private fun testProviderConnection(
+        provider: String,
+        keyValue: String,
+        modelValue: String,
+        proxyUrlValue: String,
+    ): String {
+        if (modelValue.isBlank()) error("Hãy nhập model trước")
+
+        if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            if (keyValue.isBlank()) error("Hãy nhập Gemini API Key trước")
+            val payload = JSONObject()
+                .put("model", modelValue)
+                .put("store", false)
+                .put("input", "Chỉ trả lời đúng một từ: OK")
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/interactions")
+                .header("x-goog-api-key", keyValue)
+                .header("Content-Type", "application/json")
+                .post(payload.toString().toRequestBody(JSON_MEDIA))
+                .build()
+            return client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    error("HTTP ${response.code}: ${body.replace(Regex("\\s+"), " ").take(500)}")
+                }
+                "Gemini HTTP ${response.code}"
+            }
+        }
+
+        if (!proxyUrlValue.startsWith("https://")) {
+            error("URL OpenAI-compatible phải dùng HTTPS")
+        }
+        val endpoint = normalizeProxyTestEndpoint(proxyUrlValue)
+        val responsesStyle = endpoint.endsWith("/responses")
+        val payload = if (responsesStyle) {
+            JSONObject()
+                .put("model", modelValue)
+                .put("input", "Chỉ trả lời đúng một từ: OK")
+        } else {
+            JSONObject()
+                .put("model", modelValue)
+                .put(
+                    "messages",
+                    org.json.JSONArray().put(
+                        JSONObject()
+                            .put("role", "user")
+                            .put("content", "Chỉ trả lời đúng một từ: OK")
+                    )
+                )
+        }
+        val builder = Request.Builder()
+            .url(endpoint)
+            .header("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+        if (keyValue.isNotBlank()) {
+            builder.header("Authorization", "Bearer $keyValue")
+        }
+        return client.newCall(builder.build()).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}: ${body.replace(Regex("\\s+"), " ").take(500)}")
+            }
+            "OpenAI-compatible HTTP ${response.code}"
+        }
+    }
+
+    private fun normalizeProxyTestEndpoint(raw: String): String {
+        val url = raw.trim().removeSuffix("/")
+        return when {
+            url.endsWith("/chat/completions") -> url
+            url.endsWith("/responses") -> url
+            else -> "$url/chat/completions"
         }
     }
 
@@ -496,4 +586,7 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+    companion object {
+        private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+    }
 }

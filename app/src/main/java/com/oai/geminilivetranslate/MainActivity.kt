@@ -280,7 +280,8 @@ class MainActivity : AppCompatActivity() {
         apiKeyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
-        logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x")
+        resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
+        logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x playbackReturn=${resumeHistoryAfterPlaybackId ?: "none"}")
         setupUi()
         requestNotificationPermissionIfNeeded()
     }
@@ -288,6 +289,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        resumeHistoryAfterPlaybackId?.let {
+            outState.putString(STATE_PLAYBACK_RETURN_SESSION_ID, it)
+        }
     }
 
     override fun onStop() {
@@ -1041,6 +1049,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val FILE_SPEED_STEPS = 20
         private const val KEY_SOURCE_MODE = "lastSourceMode"
+        private const val STATE_PLAYBACK_RETURN_SESSION_ID = "state.playbackReturnSessionId"
         private const val KEY_FILE_PLAYBACK_SPEED = "filePlaybackSpeed"
     }
 }

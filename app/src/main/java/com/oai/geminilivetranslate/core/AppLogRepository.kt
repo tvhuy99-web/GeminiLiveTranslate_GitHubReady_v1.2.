@@ -199,7 +199,7 @@ class AppLogRepository private constructor(context: Context) {
             appendLine()
             appendLine("--- Cài đặt đã khử dữ liệu nhạy cảm ---")
             appendLine("model=${settings.model}")
-            appendLine("videoProvider=${aiApi.provider}, videoGeminiModel=${aiApi.geminiModel}, videoProxyModel=${aiApi.proxyModel}, streaming=${aiApi.streamingEnabled}")
+            appendLine("videoProvider=${aiApi.provider}, videoGeminiModel=${aiApi.geminiModel}, videoProxyModel=${aiApi.proxyModel}, streaming=${aiApi.streamingEnabled}, timeoutMs=${aiApi.requestTimeoutMs}, temperature=${aiApi.temperature}")
             appendLine("videoTimelinePromptChars=${aiApi.timelinePrompt.length}, videoSummaryPromptChars=${aiApi.summaryPrompt.length}")
             appendLine("targetLanguage=${settings.targetLanguage}")
             appendLine("echoTargetLanguage=${settings.echoTargetLanguage}")

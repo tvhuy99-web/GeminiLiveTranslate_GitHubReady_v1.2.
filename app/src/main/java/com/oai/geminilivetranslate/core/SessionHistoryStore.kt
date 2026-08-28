@@ -20,6 +20,9 @@ data class HistorySession(
     val primarySrt: String,
     val vietnameseTranscript: String,
     val vietnameseSrt: String,
+    val videoTimelineTranscript: String,
+    val videoTimelineSrt: String,
+    val videoSummaryText: String,
     val showingVietnamese: Boolean,
     val speakerDiarization: Boolean,
     val createdAtMs: Long,
@@ -29,7 +32,10 @@ data class HistorySession(
         get() = primaryTranscript.isNotBlank() ||
             primarySrt.isNotBlank() ||
             vietnameseTranscript.isNotBlank() ||
-            vietnameseSrt.isNotBlank()
+            vietnameseSrt.isNotBlank() ||
+            videoTimelineTranscript.isNotBlank() ||
+            videoTimelineSrt.isNotBlank() ||
+            videoSummaryText.isNotBlank()
 
     val hasVietnamese: Boolean
         get() = vietnameseTranscript.isNotBlank() || vietnameseSrt.isNotBlank()
@@ -63,6 +69,9 @@ class SessionHistoryStore(context: Context) {
         primarySrt = "",
         vietnameseTranscript = "",
         vietnameseSrt = "",
+        videoTimelineTranscript = "",
+        videoTimelineSrt = "",
+        videoSummaryText = "",
         showingVietnamese = false,
         speakerDiarization = speakerDiarization,
         createdAtMs = nowMs,
@@ -162,6 +171,9 @@ class SessionHistoryStore(context: Context) {
         .put("primarySrt", session.primarySrt)
         .put("vietnameseTranscript", session.vietnameseTranscript)
         .put("vietnameseSrt", session.vietnameseSrt)
+        .put("videoTimelineTranscript", session.videoTimelineTranscript)
+        .put("videoTimelineSrt", session.videoTimelineSrt)
+        .put("videoSummaryText", session.videoSummaryText)
         .put("showingVietnamese", session.showingVietnamese)
         .put("speakerDiarization", session.speakerDiarization)
         .put("createdAtMs", session.createdAtMs)
@@ -201,6 +213,9 @@ class SessionHistoryStore(context: Context) {
             primarySrt = json.optString("primarySrt"),
             vietnameseTranscript = vietnameseTranscript,
             vietnameseSrt = json.optString("vietnameseSrt"),
+            videoTimelineTranscript = json.optString("videoTimelineTranscript"),
+            videoTimelineSrt = json.optString("videoTimelineSrt"),
+            videoSummaryText = json.optString("videoSummaryText"),
             showingVietnamese = json.optBoolean("showingVietnamese", false),
             speakerDiarization = json.optBoolean("speakerDiarization", false),
             createdAtMs = created,

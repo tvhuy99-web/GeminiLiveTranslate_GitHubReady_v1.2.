@@ -11,16 +11,6 @@ import com.oai.geminilivetranslate.core.SessionLogger
 import java.util.Locale
 import java.util.UUID
 
-/**
- * Defensive Android TTS wrapper for devices whose default TextToSpeech engine is unreliable.
- *
- * Strategy adapted from the project's chess/Xiangqi Android TTS plugin:
- * 1. Discover visible TTS services, with ACTION_CHECK_TTS_DATA as a second discovery route.
- * 2. Prefer the engine selected in TTS settings, then try the system default and other engines.
- * 3. Add an init timeout because some Chinese ROMs never call OnInitListener.
- * 4. Apply the selected TTS language and selected voice, with language-only fallback.
- * 5. Retry speak without Bundle parameters when an engine rejects them.
- */
 class RobustTtsEngine(
     context: Context,
     private val logger: SessionLogger,
@@ -154,8 +144,6 @@ class RobustTtsEngine(
         }.onFailure {
             logger.log(1, "TTS", "Không quét được TTS_SERVICE qua PackageManager", it)
         }
-
-        // Some vendor ROMs expose only a CHECK_TTS_DATA activity, not a queryable service.
         runCatching {
             val checkIntent = Intent(TextToSpeech.Engine.ACTION_CHECK_TTS_DATA)
             val activities = packageManager.queryIntentActivities(checkIntent, 0)
@@ -240,8 +228,6 @@ class RobustTtsEngine(
             if (index + 1 < candidates.size) {
                 tryCandidate(candidates, index + 1, generation, onReady)
             } else {
-                // Some Chinese ROMs bind the engine but never invoke OnInitListener.
-                // Probe the instance instead of discarding it immediately.
                 val current = tts
                 if (current != null) {
                     logger.log(1, "TTS", "Không còn engine khác; force-probe instance sau timeout")

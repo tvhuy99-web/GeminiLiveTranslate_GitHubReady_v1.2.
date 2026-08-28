@@ -12,7 +12,6 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-/** A visible TTS engine choice. An empty package means the Android system default. */
 data class TtsEngineInfo(
     val packageName: String,
     val label: String,
@@ -58,11 +57,6 @@ data class TtsEngineCatalog(
         voicesForLanguage(languageTag).firstOrNull { it.name == savedVoiceName }
 }
 
-/**
- * Probes TTS packages on the real device. The engine controls the language list, and the chosen
- * language controls the voice list. This keeps the three selectors linked instead of presenting
- * impossible engine/language/voice combinations.
- */
 class TtsCatalogScanner(
     context: Context,
     private val logger: SessionLogger,
@@ -236,8 +230,6 @@ class TtsCatalogScanner(
             .forEach { locale ->
                 normalizedTag(locale)?.let { locales.putIfAbsent(it, locale) }
             }
-
-        // Vendor engines sometimes return no voices/languages even though isLanguageAvailable works.
         if (locales.isEmpty()) {
             fallbackLocaleCandidates().forEach { locale ->
                 val availability = runCatching { engine.isLanguageAvailable(locale) }
@@ -304,7 +296,6 @@ class TtsCatalogScanner(
     }
 }
 
-/** Uses exactly the draft engine/language/voice selection for the Nghe thử button. */
 class TtsPreviewSpeaker(
     context: Context,
     private val logger: SessionLogger,

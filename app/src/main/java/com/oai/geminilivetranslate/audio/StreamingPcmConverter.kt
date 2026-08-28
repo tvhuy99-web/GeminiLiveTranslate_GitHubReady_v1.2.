@@ -6,13 +6,6 @@ import java.nio.ByteOrder
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
-/**
- * Chuyển đổi PCM theo luồng sang mono 16-bit ở sample rate đích.
- *
- * Khác với việc resample từng chunk độc lập, lớp này giữ lại mẫu biên,
- * phần byte chưa đủ frame và pha nội suy giữa các lần gọi để tránh mất/lặp
- * mẫu ở ranh giới chunk.
- */
 class StreamingPcmConverter(
     sourceRate: Int,
     channels: Int,
@@ -48,7 +41,7 @@ class StreamingPcmConverter(
         return PcmTools.shortsToBytes(produceOutput(flushLastSample = false))
     }
 
-    /** Kết thúc luồng hiện tại và phát nốt mẫu cuối còn giữ lại. */
+    
     @Synchronized
     fun flush(): ByteArray {
         if (sampleBuffer.isEmpty()) {
@@ -61,7 +54,7 @@ class StreamingPcmConverter(
         return PcmTools.shortsToBytes(output)
     }
 
-    /** Bỏ toàn bộ trạng thái, dùng khi tua tệp hoặc bỏ audio cũ sau pause. */
+    
     @Synchronized
     fun reset() {
         resetInternal()

@@ -229,13 +229,13 @@ class SettingsActivity : AppCompatActivity() {
         }
         description("Chế độ Đơn giản chỉ hiện các nút thường dùng.")
 
-        title("Bộ máy dịch")
+        title("Model dịch trực tiếp")
         modelInput = labeledEditText(
-            label = "Tên bộ máy dịch",
+            label = "Model dùng cho chế độ Dịch thuật",
             value = draft.model,
             hint = "Giữ nguyên nếu không được hướng dẫn thay đổi",
         )
-        description("Giữ nguyên lựa chọn này nếu ứng dụng đang dịch bình thường.")
+        description("Mục này chỉ áp dụng cho chế độ Dịch thuật. Model Mô tả video được cấu hình trong Thiết lập API.")
 
         title("Ngôn ngữ cần dịch sang")
         val currentIndex = LanguageCatalog.codes.indexOf(draft.targetLanguage).coerceAtLeast(0)

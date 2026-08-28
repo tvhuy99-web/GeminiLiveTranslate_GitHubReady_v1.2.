@@ -98,24 +98,28 @@ class ApiSettingsActivity : AppCompatActivity() {
             ViewCompat.setAccessibilityHeading(this, true)
         })
 
-        root.addView(label("Nhà cung cấp AI"))
+        root.addView(label("Gemini API Key"))
+        geminiKey = edit("Nhập Gemini API Key", password = true).apply {
+            contentDescription = "Gemini API Key"
+        }
+        root.addView(geminiKey)
+        root.addView(
+            help("Khóa Gemini dùng cho Dịch thuật, Chép lời và Mô tả video khi nhà cung cấp mô tả là Google Gemini.")
+        )
+
+        root.addView(label("Nhà cung cấp cho Mô tả video"))
         providerSpinner = AccessibleSpinner(this).apply {
             adapter = ArrayAdapter(
                 this@ApiSettingsActivity,
                 android.R.layout.simple_spinner_item,
                 providerLabels,
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-            contentDescription = "Chọn nhà cung cấp AI"
+            contentDescription = "Chọn nhà cung cấp cho Mô tả video"
             minimumHeight = dp(48)
         }
         root.addView(providerSpinner)
 
         geminiFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        geminiFields.addView(label("Gemini API Key"))
-        geminiKey = edit("Nhập Gemini API Key", password = true).apply {
-            contentDescription = "Gemini API Key"
-        }
-        geminiFields.addView(geminiKey)
         geminiFields.addView(modelRow(
             title = "Model Gemini",
             onLoad = { fetchModels(AiApiSettingsStore.PROVIDER_GEMINI) },

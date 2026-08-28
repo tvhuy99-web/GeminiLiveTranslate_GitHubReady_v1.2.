@@ -131,6 +131,7 @@ class SubtitleTranslationClient(
                     totalTokens = totalTokens,
                 )
             } catch (error: Throwable) {
+                if (GeminiApiErrorClassifier.requiresKeyFailover(error)) throw error
                 lastError = error
                 logger.log(
                     if (attempt < MAX_ATTEMPTS) 1 else 0,

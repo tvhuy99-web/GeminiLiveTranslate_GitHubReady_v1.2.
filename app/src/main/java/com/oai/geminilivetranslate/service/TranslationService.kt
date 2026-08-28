@@ -38,6 +38,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
+import com.oai.geminilivetranslate.network.GeminiApiErrorClassifier
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.network.GeminiVideoDescriptionClient
@@ -124,6 +125,8 @@ class TranslationService : LifecycleService() {
     private var connectionGeneration = 0L
     private val inputEpoch = AtomicLong(0L)
     private var reconnectAttempts = 0
+    private var liveKeyFailoverAttempts = 0
+    @Volatile private var liveApiKey: String? = null
     @Volatile private var sessionResumptionHandle: String? = null
     private val resumedConnections = AtomicLong(0L)
     private val goAwayCount = AtomicLong(0L)
@@ -288,7 +291,7 @@ class TranslationService : LifecycleService() {
         val aiApi = AiApiSettingsStore(this).load()
         val useProxyVideoDescription =
             isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
-        val apiKey = if (useProxyVideoDescription) null else keyStore.takeGeminiKey()
+        val apiKey = if (useProxyVideoDescription) null else keyStore.currentGeminiKey()
         if (useProxyVideoDescription) {
             if (aiApi.proxyModel.isBlank()) {
                 updateError("Chưa chọn model OpenAI-compatible")
@@ -382,7 +385,7 @@ class TranslationService : LifecycleService() {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "VideoDescription", "Không tạo được wake lock", it)
             }
-            startVideoDescription(geminiApiKey)
+            startVideoDescription()
             return
         }
 
@@ -390,7 +393,7 @@ class TranslationService : LifecycleService() {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
             }
-            startFileTranscription(geminiApiKey)
+            startFileTranscription()
             return
         }
 
@@ -427,6 +430,7 @@ class TranslationService : LifecycleService() {
             "Session",
             "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
+        liveApiKey = geminiApiKey
         startHealthMonitor()
         connectGemini(geminiApiKey)
     }
@@ -671,7 +675,7 @@ class TranslationService : LifecycleService() {
             source?.pause()
             clearPendingInputForFreshSession()
             updateState { it.copy(setupComplete = false, status = "Đang áp dụng model/ngôn ngữ mới...") }
-            connectGemini(keyStore.takeGeminiKey().orEmpty())
+            connectGemini(liveApiKey.orEmpty())
         }
         if (running && diff.nextSession.isNotEmpty()) {
             logger.log(1, "Settings", "Đã lưu cho phiên tiếp theo: ${diff.nextSession.joinToString()}; phiên hiện tại giữ queue=$activeInputQueueCapacity quality=${activeAfter.qualityMode}")
@@ -688,12 +692,15 @@ class TranslationService : LifecycleService() {
             )
             return
         }
-        val selectedKey = keyStore.takeGeminiKey()
+        val selectedKey = keyStore.currentGeminiKey()
         if (selectedKey.isNullOrBlank()) {
             stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")
             return
         }
         logger.log(1, "ApiKey", "API Key đang dùng đã thay đổi; tạo kết nối Gemini mới")
+        liveApiKey = selectedKey
+        liveKeyFailoverAttempts = 0
+        sessionResumptionHandle = null
         source?.pause()
         clearPendingInputForFreshSession()
         updateState { it.copy(setupComplete = false, status = "Đang áp dụng API Key mới...") }
@@ -712,7 +719,7 @@ class TranslationService : LifecycleService() {
         if (_state.value.running && currentMode == SourceMode.MICROPHONE) {
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(keyStore.takeGeminiKey().orEmpty())
+            connectGemini(liveApiKey.orEmpty())
         }
         return code
     }
@@ -759,8 +766,7 @@ class TranslationService : LifecycleService() {
             return
         }
 
-        val apiKey = keyStore.takeGeminiKey()
-        if (apiKey.isNullOrBlank()) {
+        if (keyStore.orderedGeminiKeys().isEmpty()) {
             logger.log(1, "SubtitleTranslate", "Không thể dịch vì chưa có API Key")
             updateState { it.copy(status = "Chưa có API Key để dịch phụ đề") }
             return
@@ -793,13 +799,22 @@ class TranslationService : LifecycleService() {
 
         subtitleTranslationJob?.cancel()
         subtitleTranslationJob = serviceScope.launch(Dispatchers.IO) {
-            val client = SubtitleTranslationClient(
-                apiKey = apiKey,
-                logger = logger,
-                includeTranscriptInLogs = settings.logIncludeTranscript,
-            )
             try {
-                val result = client.translate(sourceCues)
+                val result = runWithGeminiKeyFailover("dịch phụ đề") { candidateKey, keyIndex, keyCount ->
+                    val client = SubtitleTranslationClient(
+                        apiKey = candidateKey,
+                        logger = logger,
+                        includeTranscriptInLogs = settings.logIncludeTranscript,
+                    )
+                    try {
+                        if (keyIndex > 0) {
+                            updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để dịch phụ đề...") }
+                        }
+                        client.translate(sourceCues)
+                    } finally {
+                        client.close()
+                    }
+                }
                 val currentCues = subtitles.snapshot()
                 val currentSignature = subtitleSignature(currentCues)
                 if (currentSignature != sourceSignature || currentCues.size != sourceCues.size) {
@@ -886,7 +901,6 @@ class TranslationService : LifecycleService() {
                     )
                 }
             } finally {
-                client.close()
                 subtitleTranslationJob = null
             }
         }
@@ -1226,6 +1240,8 @@ class TranslationService : LifecycleService() {
 
     private fun resetSessionState() {
         reconnectAttempts = 0
+        liveKeyFailoverAttempts = 0
+        liveApiKey = null
         sourceStarted = false
         fileInputEnded = false
         lastRawTranscript = ""
@@ -1259,6 +1275,7 @@ class TranslationService : LifecycleService() {
 
     private fun connectGemini(apiKey: String) {
         if (apiKey.isBlank() || !_state.value.running) return
+        liveApiKey = apiKey
         reconnectJob?.cancel()
         reconnectJob = null
         val generation = ++connectionGeneration
@@ -1295,6 +1312,7 @@ class TranslationService : LifecycleService() {
                 override fun onSetupComplete() {
                     if (generation != connectionGeneration || !_state.value.running) return
                     reconnectAttempts = 0
+                    liveKeyFailoverAttempts = 0
                     val setupLatencyMs = (SystemClock.elapsedRealtime() - setupStartedAt).coerceAtLeast(0L)
                     if (!handleForThisConnection.isNullOrBlank()) resumedConnections.incrementAndGet()
                     logger.log(2, "GeminiWS", "Setup hoàn tất generation=$generation latencyMs=$setupLatencyMs resumed=${!handleForThisConnection.isNullOrBlank()}")
@@ -1416,7 +1434,37 @@ class TranslationService : LifecycleService() {
         liveClient.connect()
     }
 
-    private fun startVideoDescription(apiKey: String) {
+    private fun <T> runWithGeminiKeyFailover(
+        operation: String,
+        block: (apiKey: String, keyIndex: Int, keyCount: Int) -> T,
+    ): T {
+        val candidates = keyStore.orderedGeminiKeys()
+        if (candidates.isEmpty()) error("Chưa có Gemini API Key")
+        var lastError: Throwable? = null
+        candidates.forEachIndexed { index, candidate ->
+            try {
+                val result = block(candidate, index, candidates.size)
+                keyStore.selectGeminiKey(candidate)
+                return result
+            } catch (error: Throwable) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                lastError = error
+                val code = GeminiApiErrorClassifier.httpCode(error)
+                val canFailover = GeminiApiErrorClassifier.requiresKeyFailover(error) &&
+                    index < candidates.lastIndex
+                logger.log(
+                    if (canFailover) 1 else 0,
+                    "ApiKey",
+                    "$operation thất bại với API Key ${index + 1}/${candidates.size} http=${code ?: -1} failover=$canFailover",
+                    error,
+                )
+                if (!canFailover) throw error
+            }
+        }
+        throw lastError ?: IllegalStateException("Không thể hoàn tất $operation")
+    }
+
+    private fun startVideoDescription() {
         sourceJob?.cancel()
         sourceJob = serviceScope.launch(Dispatchers.IO) {
             val uri = selectedUri ?: run {
@@ -1516,45 +1564,50 @@ class TranslationService : LifecycleService() {
                     }
                 } else {
                     val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
-                    val gemini = GeminiVideoDescriptionClient(
-                        apiKey = apiKey,
-                        logger = logger,
-                        includeOutputInLogs = settings.logIncludeTranscript,
-                        model = aiApi.geminiModel,
-                        timelinePromptTemplate = aiApi.timelinePrompt,
-                        summaryPromptTemplate = aiApi.summaryPrompt,
-                        streamingEnabled = aiApi.streamingEnabled,
-                        requestTimeoutMs = aiApi.requestTimeoutMs,
-                        temperature = aiApi.temperature,
-                    )
-                    videoDescriptionClient = gemini
-                    try {
-                        updateState {
-                            it.copy(
-                                status = "Đang tải nguyên video lên...",
-                                progressPercent = 0,
-                            )
-                        }
-                        gemini.describe(
-                            resolver = contentResolver,
-                            uri = uri,
-                            displayName = name,
-                            mimeType = resolvedMime,
-                            durationMs = durationMs,
-                            mode = modeValue,
-                            onProgress = { status, percent ->
-                                updateState {
-                                    it.copy(
-                                        status = status,
-                                        progressPercent = percent.coerceIn(0, 98),
-                                    )
-                                }
-                            },
-                            onPartial = partial,
+                    runWithGeminiKeyFailover("mô tả video") { candidateKey, keyIndex, keyCount ->
+                        val gemini = GeminiVideoDescriptionClient(
+                            apiKey = candidateKey,
+                            logger = logger,
+                            includeOutputInLogs = settings.logIncludeTranscript,
+                            model = aiApi.geminiModel,
+                            timelinePromptTemplate = aiApi.timelinePrompt,
+                            summaryPromptTemplate = aiApi.summaryPrompt,
+                            streamingEnabled = aiApi.streamingEnabled,
+                            requestTimeoutMs = aiApi.requestTimeoutMs,
                         )
-                    } finally {
-                        gemini.close()
-                        if (videoDescriptionClient === gemini) videoDescriptionClient = null
+                        videoDescriptionClient = gemini
+                        try {
+                            updateState {
+                                it.copy(
+                                    status = if (keyIndex == 0) {
+                                        "Đang tải nguyên video lên..."
+                                    } else {
+                                        "Đang thử API Key ${keyIndex + 1}/$keyCount cho mô tả video..."
+                                    },
+                                    progressPercent = 0,
+                                )
+                            }
+                            gemini.describe(
+                                resolver = contentResolver,
+                                uri = uri,
+                                displayName = name,
+                                mimeType = resolvedMime,
+                                durationMs = durationMs,
+                                mode = modeValue,
+                                onProgress = { status, percent ->
+                                    updateState {
+                                        it.copy(
+                                            status = status,
+                                            progressPercent = percent.coerceIn(0, 98),
+                                        )
+                                    }
+                                },
+                                onPartial = partial,
+                            )
+                        } finally {
+                            gemini.close()
+                            if (videoDescriptionClient === gemini) videoDescriptionClient = null
+                        }
                     }
                 }
 
@@ -1631,7 +1684,7 @@ class TranslationService : LifecycleService() {
         }
     }
 
-    private fun startFileTranscription(apiKey: String) {
+    private fun startFileTranscription() {
         sourceJob?.cancel()
         sourceJob = serviceScope.launch(Dispatchers.IO) {
             val uri = selectedUri ?: run {
@@ -1655,9 +1708,7 @@ class TranslationService : LifecycleService() {
                 )
 
                 var durationMs: Long
-                val fileClient = GeminiFileTranscribeClient(apiKey, logger)
-                val result = try {
-                    if (video) {
+                val result = if (video) {
                         val extractStartedAt = SystemClock.elapsedRealtime()
                         logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
                         updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
@@ -1681,16 +1732,26 @@ class TranslationService : LifecycleService() {
                             "TranscribeFile",
                             "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}",
                         )
-                        fileClient.transcribe(
-                            file = extracted.file,
-                            mimeType = extracted.mimeType,
-                            speakerDiarization = speakerDiarization,
-                        ) { status, percent ->
-                            updateState {
-                                it.copy(
-                                    status = status,
-                                    progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
-                                )
+                        runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
+                            val client = GeminiFileTranscribeClient(candidateKey, logger)
+                            try {
+                                if (keyIndex > 0) {
+                                    updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
+                                }
+                                client.transcribe(
+                                    file = extracted.file,
+                                    mimeType = extracted.mimeType,
+                                    speakerDiarization = speakerDiarization,
+                                ) { status, percent ->
+                                    updateState {
+                                        it.copy(
+                                            status = status,
+                                            progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
+                                        )
+                                    }
+                                }
+                            } finally {
+                                client.close()
                             }
                         }
                     } else {
@@ -1707,24 +1768,31 @@ class TranslationService : LifecycleService() {
                             error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
                         }
                         updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
-                        fileClient.transcribe(
-                            resolver = contentResolver,
-                            uri = uri,
-                            displayName = name,
-                            mimeType = mimeType,
-                            speakerDiarization = speakerDiarization,
-                        ) { status, percent ->
-                            updateState {
-                                it.copy(
-                                    status = status,
-                                    progressPercent = percent.coerceIn(0, 98),
-                                )
+                        runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
+                            val client = GeminiFileTranscribeClient(candidateKey, logger)
+                            try {
+                                if (keyIndex > 0) {
+                                    updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
+                                }
+                                client.transcribe(
+                                    resolver = contentResolver,
+                                    uri = uri,
+                                    displayName = name,
+                                    mimeType = mimeType,
+                                    speakerDiarization = speakerDiarization,
+                                ) { status, percent ->
+                                    updateState {
+                                        it.copy(
+                                            status = status,
+                                            progressPercent = percent.coerceIn(0, 98),
+                                        )
+                                    }
+                                }
+                            } finally {
+                                client.close()
                             }
                         }
                     }
-                } finally {
-                    fileClient.close()
-                }
 
                 val resultBuildStartedAt = SystemClock.elapsedRealtime()
                 val cues = buildTranscriptionCues(result.words, speakerDiarization)
@@ -2266,27 +2334,37 @@ class TranslationService : LifecycleService() {
     private fun handleConnectionError(error: Throwable) {
         logger.log(0, "Gemini", "Mất kết nối", error)
         val apiError = error as? GeminiLiveClient.GeminiApiException
-        val hasMoreKeys = keyStore.load().keys.size > 1
-        when (apiError?.code) {
+        val code = apiError?.code
+        when (code) {
             400 -> stopTranslation("Yêu cầu Gemini không hợp lệ; hãy kiểm tra cấu hình")
-            401, 403 -> {
-                if (hasMoreKeys) {
-                    scheduleReconnect(500L, true, "API Key hiện tại bị từ chối; đang chuyển sang API Key tiếp theo")
-                } else {
-                    stopTranslation("Lỗi xác thực Gemini: hãy kiểm tra API Key")
-                }
-            }
+            401, 403, 429 -> handleLiveKeyFailure(code)
             404 -> stopTranslation("Không tìm thấy model ${activeModelName()}")
-            429 -> scheduleReconnect(
-                if (hasMoreKeys) 500L else 60_000L,
-                true,
-                if (hasMoreKeys) {
-                    "API Key hiện tại bị giới hạn; đang chuyển sang API Key tiếp theo"
-                } else {
-                    "Gemini đang giới hạn lưu lượng"
-                },
-            )
             else -> scheduleReconnect(null, true, error.message ?: "Mất kết nối")
+        }
+    }
+
+    private fun handleLiveKeyFailure(code: Int) {
+        val keys = keyStore.load().keys
+        val current = liveApiKey
+        if (keys.size > 1 && liveKeyFailoverAttempts < keys.size - 1) {
+            val next = keyStore.selectNextGeminiKey(current)
+            if (!next.isNullOrBlank() && next != current) {
+                liveKeyFailoverAttempts++
+                liveApiKey = next
+                sessionResumptionHandle = null
+                scheduleReconnect(
+                    500L,
+                    false,
+                    "API Key hiện tại gặp lỗi HTTP $code; đang thử API Key ${liveKeyFailoverAttempts + 1}/${keys.size}",
+                )
+                return
+            }
+        }
+        if (code == 429) {
+            liveKeyFailoverAttempts = 0
+            scheduleReconnect(60_000L, true, "Tất cả API Key đang bị giới hạn lưu lượng")
+        } else {
+            stopTranslation("Các Gemini API Key đều bị từ chối; hãy kiểm tra lại API Key")
         }
     }
 
@@ -2299,7 +2377,7 @@ class TranslationService : LifecycleService() {
             finalizeLiveTranscriptionFallback("rotation")
             source?.pause()
             clearPendingInputForFreshSession()
-            connectGemini(keyStore.takeGeminiKey().orEmpty())
+            connectGemini(liveApiKey.orEmpty())
         }
     }
 
@@ -2327,7 +2405,7 @@ class TranslationService : LifecycleService() {
         }
         reconnectJob = serviceScope.launch {
             delay(delayMs)
-            if (_state.value.running) connectGemini(keyStore.takeGeminiKey().orEmpty())
+            if (_state.value.running) connectGemini(liveApiKey.orEmpty())
         }
     }
 
@@ -2344,7 +2422,7 @@ class TranslationService : LifecycleService() {
         ttsEngine?.stop()
         synchronized(ttsBuffer) { ttsBuffer.clear() }
         updateState { it.copy(transcript = "", status = "Đang tạo phiên Gemini mới sau khi tua...") }
-        connectGemini(keyStore.takeGeminiKey().orEmpty())
+        connectGemini(liveApiKey.orEmpty())
     }
 
     private fun setupPlayers() {

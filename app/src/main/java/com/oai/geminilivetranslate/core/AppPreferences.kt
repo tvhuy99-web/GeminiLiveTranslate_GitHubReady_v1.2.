@@ -47,7 +47,7 @@ class AppPreferences(context: Context) {
     fun save(settings: AppSettings) {
         val safe = SettingsPolicy.sanitize(settings)
         prefs.edit()
-            .putString(KEY_MODEL, DEFAULT_MODEL)
+            .remove("model")
             .putString(KEY_TARGET_LANGUAGE, safe.targetLanguage)
             .putBoolean(KEY_ECHO_TARGET, safe.echoTargetLanguage)
             .putBoolean(KEY_AI_VOICE, safe.aiVoice)
@@ -151,7 +151,6 @@ class AppPreferences(context: Context) {
     companion object {
         const val DEFAULT_MODEL = "gemini-3.5-live-translate-preview"
         const val PREFS_NAME = "gemini_translate_prefs"
-        private const val KEY_MODEL = "model"
         private const val KEY_TARGET_LANGUAGE = "targetLanguage"
         private const val KEY_ECHO_TARGET = "echoTargetLanguage"
         private const val KEY_AI_VOICE = "useAIVoice"

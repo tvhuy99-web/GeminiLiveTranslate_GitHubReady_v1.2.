@@ -506,7 +506,7 @@ class ApiSettingsActivity : AppCompatActivity() {
         proxyUrlValue: String,
     ): List<String> {
         val (url, key) = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            "https://generativelanguage.googleapis.com/v1beta/models" to keyValue
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" to keyValue
         } else {
             AiApiEndpointRules.proxyModelsEndpoint(proxyUrlValue) to keyValue
         }

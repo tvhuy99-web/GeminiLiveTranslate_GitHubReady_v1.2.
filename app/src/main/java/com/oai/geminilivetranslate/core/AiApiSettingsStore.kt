@@ -8,6 +8,8 @@ data class AiApiSettings(
     val proxyUrl: String = AiApiSettingsStore.DEFAULT_PROXY_URL,
     val proxyModel: String = "",
     val streamingEnabled: Boolean = true,
+    val requestTimeoutMs: Int = 300_000,
+    val temperature: Double = 0.2,
     val timelinePrompt: String = VideoDescriptionPromptDefaults.TIMELINE,
     val summaryPrompt: String = VideoDescriptionPromptDefaults.SUMMARY,
 )
@@ -32,6 +34,12 @@ class AiApiSettingsStore(context: Context) {
             .ifBlank { DEFAULT_PROXY_URL },
         proxyModel = prefs.getString(KEY_PROXY_MODEL, "").orEmpty().trim(),
         streamingEnabled = prefs.getBoolean(KEY_STREAMING, true),
+        requestTimeoutMs = prefs.getInt(KEY_REQUEST_TIMEOUT_MS, 300_000).coerceIn(30_000, 900_000),
+        temperature = prefs.getString(KEY_TEMPERATURE, "0.2")
+            .orEmpty()
+            .toDoubleOrNull()
+            ?.coerceIn(0.0, 2.0)
+            ?: 0.2,
         timelinePrompt = prefs.getString(KEY_TIMELINE_PROMPT, VideoDescriptionPromptDefaults.TIMELINE)
             .orEmpty()
             .ifBlank { VideoDescriptionPromptDefaults.TIMELINE },
@@ -53,6 +61,8 @@ class AiApiSettingsStore(context: Context) {
             .putString(KEY_PROXY_URL, settings.proxyUrl.trim().ifBlank { DEFAULT_PROXY_URL })
             .putString(KEY_PROXY_MODEL, settings.proxyModel.trim())
             .putBoolean(KEY_STREAMING, settings.streamingEnabled)
+            .putInt(KEY_REQUEST_TIMEOUT_MS, settings.requestTimeoutMs.coerceIn(30_000, 900_000))
+            .putString(KEY_TEMPERATURE, settings.temperature.coerceIn(0.0, 2.0).toString())
             .putString(
                 KEY_TIMELINE_PROMPT,
                 settings.timelinePrompt.ifBlank { VideoDescriptionPromptDefaults.TIMELINE },
@@ -74,6 +84,8 @@ class AiApiSettingsStore(context: Context) {
         private const val KEY_PROXY_URL = "proxyUrl"
         private const val KEY_PROXY_MODEL = "proxyModel"
         private const val KEY_STREAMING = "streamingEnabled"
+        private const val KEY_REQUEST_TIMEOUT_MS = "requestTimeoutMs"
+        private const val KEY_TEMPERATURE = "temperature"
         private const val KEY_TIMELINE_PROMPT = "videoTimelinePrompt"
         private const val KEY_SUMMARY_PROMPT = "videoSummaryPrompt"
     }

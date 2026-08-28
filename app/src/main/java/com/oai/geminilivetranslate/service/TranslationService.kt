@@ -766,6 +766,7 @@ class TranslationService : LifecycleService() {
                         lastError = null,
                     )
                 }
+                scheduleHistorySave("subtitle-translate-success")
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) return@launch
                 val elapsedMs = SystemClock.elapsedRealtime() - startedAt
@@ -823,6 +824,7 @@ class TranslationService : LifecycleService() {
                 status = if (showVietnamese) "Đang xem bản dịch tiếng Việt" else "Đang xem bản gốc",
             )
         }
+        scheduleHistorySave("subtitle-view-toggle")
     }
 
     private fun originalTranscriptForDisplay(): String =
@@ -1653,6 +1655,7 @@ class TranslationService : LifecycleService() {
                 status = "Đang chép lời...",
             )
         }
+        scheduleHistorySave("transcribe-final")
         logger.log(
             2,
             "TranscribeLive",
@@ -1680,6 +1683,7 @@ class TranslationService : LifecycleService() {
                 status = "Đang chép lời...",
             )
         }
+        scheduleHistorySave("transcribe-interim")
         if (liveInterimEvents == 1L || liveInterimEvents % 10L == 0L) {
             logger.log(
                 3,
@@ -1719,6 +1723,7 @@ class TranslationService : LifecycleService() {
                 status = "Đã chốt nội dung chép lời",
             )
         }
+        scheduleHistorySave("transcribe-fallback-$reason")
         logger.log(
             if (usedInterimFallback) 1 else 2,
             "TranscribeLive",
@@ -1798,6 +1803,7 @@ class TranslationService : LifecycleService() {
             "session.subtitleFiltered" to subtitleFilteredEvents.get(),
             "session.transcriptChars" to afterState.transcript.length,
         ))
+        scheduleHistorySave("live-translation")
         if (!settings.aiVoice) queueTts(delta)
     }
 

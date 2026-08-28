@@ -22,6 +22,7 @@ import com.oai.geminilivetranslate.audio.MicAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.audio.VideoAudioExtractor
+import com.oai.geminilivetranslate.core.AiApiSettingsStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -41,6 +42,7 @@ import com.oai.geminilivetranslate.core.WavWriter
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.network.GeminiVideoDescriptionClient
+import com.oai.geminilivetranslate.network.OpenAiCompatibleVideoDescriptionClient
 import com.oai.geminilivetranslate.network.SubtitleTranslationClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +97,7 @@ class TranslationService : LifecycleService() {
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
     @Volatile private var videoDescriptionClient: GeminiVideoDescriptionClient? = null
+    @Volatile private var proxyVideoDescriptionClient: OpenAiCompatibleVideoDescriptionClient? = null
     private var subtitleTranslationJob: Job? = null
     private var historySaveJob: Job? = null
     private var currentHistorySession: HistorySession? = null
@@ -283,9 +286,20 @@ class TranslationService : LifecycleService() {
         videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
-        val apiKey = keyStore.load().selected
-        if (apiKey.isNullOrBlank()) {
-            updateError("Chưa có API Key")
+        val secretState = keyStore.load()
+        val apiKey = secretState.selected
+        val aiApi = AiApiSettingsStore(this).load()
+        if (isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI) {
+            if (secretState.proxyKey.isNullOrBlank()) {
+                updateError("Chưa có OpenAI-compatible API Key")
+                return
+            }
+            if (aiApi.proxyModel.isBlank()) {
+                updateError("Chưa chọn model OpenAI-compatible")
+                return
+            }
+        } else if (apiKey.isNullOrBlank()) {
+            updateError("Chưa có Gemini API Key")
             return
         }
         if (mode == SourceMode.FILE && selectedUri == null) {
@@ -371,7 +385,7 @@ class TranslationService : LifecycleService() {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "VideoDescription", "Không tạo được wake lock", it)
             }
-            startVideoDescription(apiKey)
+            startVideoDescription(apiKey.orEmpty())
             return
         }
 
@@ -442,6 +456,7 @@ class TranslationService : LifecycleService() {
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
         videoDescriptionClient?.cancel()
+        proxyVideoDescriptionClient?.cancel()
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
         runCatching { mediaProjection?.stop() }

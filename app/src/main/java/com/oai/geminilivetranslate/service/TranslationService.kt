@@ -1470,6 +1470,8 @@ class TranslationService : LifecycleService() {
                         timelinePromptTemplate = aiApi.timelinePrompt,
                         summaryPromptTemplate = aiApi.summaryPrompt,
                         streamingEnabled = aiApi.streamingEnabled,
+                        requestTimeoutMs = aiApi.requestTimeoutMs,
+                        temperature = aiApi.temperature,
                     )
                     proxyVideoDescriptionClient = proxy
                     try {
@@ -1510,6 +1512,8 @@ class TranslationService : LifecycleService() {
                         timelinePromptTemplate = aiApi.timelinePrompt,
                         summaryPromptTemplate = aiApi.summaryPrompt,
                         streamingEnabled = aiApi.streamingEnabled,
+                        requestTimeoutMs = aiApi.requestTimeoutMs,
+                        temperature = aiApi.temperature,
                     )
                     videoDescriptionClient = gemini
                     try {

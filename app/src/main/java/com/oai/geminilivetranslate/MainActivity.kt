@@ -41,9 +41,11 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityMainBinding
 import com.oai.geminilivetranslate.network.GeminiLiveClient
 import com.oai.geminilivetranslate.service.TranslationService
+import com.oai.geminilivetranslate.ui.HistoryActivity
 import com.oai.geminilivetranslate.ui.LogViewerActivity
 import com.oai.geminilivetranslate.ui.MiniBrowserActivity
 import com.oai.geminilivetranslate.ui.SettingsActivity
+import com.oai.geminilivetranslate.ui.SubtitlePlaybackActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -66,6 +68,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingProjectionData: Intent? = null
     private var pendingSelectedUri: Uri? = null
     private var pendingSelectedFileName: String? = null
+    private var pendingHistorySessionId: String? = null
+    private var resumeHistoryAfterPlaybackId: String? = null
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
@@ -102,6 +106,17 @@ class MainActivity : AppCompatActivity() {
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
         val uri = result.data?.data ?: return@registerForActivityResult
+        val flags = result.data?.flags ?: 0
+        if (flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }.onFailure {
+                logger.log(1, "History", "Không giữ được quyền đọc lâu dài uriScheme=${uri.scheme}", it)
+            }
+        }
         val name = displayName(uri)
         logger.log(2, "UI", "Đã chọn tệp name=${name ?: uri.lastPathSegment} uriScheme=${uri.scheme}")
         val service = translationService
@@ -148,6 +163,45 @@ class MainActivity : AppCompatActivity() {
         } else toast("Bạn chưa cấp quyền thu âm thanh nội bộ")
     }
 
+    private val historyLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val sessionId = result.data?.getStringExtra(HistoryActivity.EXTRA_SESSION_ID)
+            ?.takeIf(String::isNotBlank)
+            ?: return@registerForActivityResult
+        logger.log(2, "History", "Nhận yêu cầu mở phiên id=$sessionId serviceBound=${translationService != null}")
+        val service = translationService
+        if (service != null) {
+            if (service.restoreHistorySession(sessionId)) {
+                saveSourceMode(service.state.value.sourceMode)
+                restorePreferencesUi()
+                toast("Đã mở phiên lịch sử")
+            }
+        } else {
+            pendingHistorySessionId = sessionId
+        }
+    }
+
+    private val subtitlePlaybackLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val sessionId = resumeHistoryAfterPlaybackId
+        resumeHistoryAfterPlaybackId = null
+        if (sessionId.isNullOrBlank()) return@registerForActivityResult
+
+        logger.log(
+            2,
+            "History",
+            "Quay lại từ Nghe với phụ đề; phục hồi phiên id=$sessionId serviceBound=${translationService != null}",
+        )
+        val service = translationService
+        if (service != null) {
+            if (service.restoreHistorySession(sessionId)) {
+                saveSourceMode(service.state.value.sourceMode)
+                restorePreferencesUi()
+            }
+        } else {
+            pendingHistorySessionId = sessionId
+        }
+    }
+
     private val exportDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         val text = pendingExportText
         pendingExportText = null
@@ -183,6 +237,15 @@ class MainActivity : AppCompatActivity() {
                 pendingSelectedUri = null
                 pendingSelectedFileName = null
             }
+            pendingHistorySessionId?.let { historyId ->
+                pendingHistorySessionId = null
+                translationService?.let { service ->
+                    if (service.restoreHistorySession(historyId)) {
+                        saveSourceMode(service.state.value.sourceMode)
+                        restorePreferencesUi()
+                    }
+                }
+            }
             observeService()
             pendingStartMode?.let { mode ->
                 pendingStartMode = null
@@ -217,7 +280,8 @@ class MainActivity : AppCompatActivity() {
         apiKeyStore = ApiKeyStore(this)
         logger = SessionLogger(this, preferences)
         selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
-        logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x")
+        resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
+        logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x playbackReturn=${resumeHistoryAfterPlaybackId ?: "none"}")
         setupUi()
         requestNotificationPermissionIfNeeded()
     }
@@ -225,6 +289,13 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        resumeHistoryAfterPlaybackId?.let {
+            outState.putString(STATE_PLAYBACK_RETURN_SESSION_ID, it)
+        }
     }
 
     override fun onStop() {
@@ -243,6 +314,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupUi() = with(binding) {
         titleText.text = "Gemini Live Translate v${BuildConfig.VERSION_NAME}"
+        historyButton.setOnClickListener {
+            historyLauncher.launch(Intent(this@MainActivity, HistoryActivity::class.java))
+        }
         processingModeButton.setOnClickListener {
             if (translationService?.state?.value?.running == true) return@setOnClickListener
             val next = if (isTranscribeSelected()) {
@@ -341,6 +415,20 @@ class MainActivity : AppCompatActivity() {
         }
         autoDuckingSwitch.setOnCheckedChangeListener { _, checked -> translationService?.setAutoDucking(checked) ?: preferences.setAutoDucking(checked) }
         exportButton.setOnClickListener { exportTranscript() }
+        subtitlePlaybackButton.setOnClickListener { openSubtitlePlayback() }
+        translateToVietnameseButton.setOnClickListener {
+            val service = translationService
+            if (service == null) {
+                toast("Dịch vụ chưa sẵn sàng")
+                return@setOnClickListener
+            }
+            val state = service.state.value
+            if (state.subtitleTranslationAvailable) {
+                service.toggleSubtitleLanguage()
+            } else {
+                service.translateSubtitlesToVietnamese()
+            }
+        }
         settingsButton.setOnClickListener { startActivity(Intent(this@MainActivity, SettingsActivity::class.java)) }
         logButton.setOnClickListener { startActivity(Intent(this@MainActivity, LogViewerActivity::class.java)) }
         manageLanguagesButton.setOnClickListener { showMicLanguageManager() }
@@ -436,6 +524,35 @@ class MainActivity : AppCompatActivity() {
         playPauseButton.text = if (state.paused) "Phát" else "Tạm dừng"
         playPauseButton.isEnabled = state.running && state.setupComplete
         updateModeUi(state.sourceMode, state.running)
+        updateSubtitleActionUi(state)
+    }
+
+    private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
+        val transcribe = isTranscribeSelected()
+        val hasContent = state.transcript.isNotBlank()
+        subtitlePlaybackButton.isVisible = transcribe
+        translateToVietnameseButton.isVisible =
+            transcribe && !state.running && (hasContent || state.subtitleTranslationInProgress)
+        translateToVietnameseButton.isEnabled =
+            transcribe && !state.running && hasContent && !state.subtitleTranslationInProgress
+        translateToVietnameseButton.text = when {
+            state.subtitleTranslationInProgress -> "Đang dịch..."
+            state.subtitleTranslationAvailable && state.subtitleShowingVietnamese -> "Xem bản gốc"
+            state.subtitleTranslationAvailable -> "Xem bản dịch"
+            else -> "Dịch sang tiếng Việt"
+        }
+        translateToVietnameseButton.contentDescription = translateToVietnameseButton.text
+
+        val format = preferences.load().exportFormat
+        val baseExport = if (format == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
+        exportButton.text = when {
+            transcribe && state.subtitleTranslationAvailable && state.subtitleShowingVietnamese ->
+                "$baseExport - Tiếng Việt"
+            transcribe && state.subtitleTranslationAvailable ->
+                "$baseExport - Bản gốc"
+            else -> baseExport
+        }
+        exportButton.contentDescription = exportButton.text
     }
 
     private fun startMode(mode: SourceMode) {
@@ -720,13 +837,64 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openSubtitlePlayback() {
+        val service = translationService
+        val state = service?.state?.value
+        resumeHistoryAfterPlaybackId = service?.currentHistorySessionId()
+        val mediaUri = if (state?.sourceMode == SourceMode.FILE) service.selectedMediaUri() else null
+        val mediaName = if (mediaUri != null) service?.selectedMediaName() else null
+        val subtitleSrt = service?.subtitleText("srt").orEmpty()
+        val vietnamese = state?.subtitleTranslationAvailable == true &&
+            state.subtitleShowingVietnamese
+        val subtitleName = when {
+            subtitleSrt.isBlank() -> null
+            vietnamese -> "Phụ đề tiếng Việt - phiên hiện tại"
+            else -> "Phụ đề bản gốc - phiên hiện tại"
+        }
+
+        logger.log(
+            2,
+            "SubtitlePlayback",
+            "Mở màn hình từ MainActivity seedMedia=${mediaUri != null} mediaName=${mediaName ?: "none"} seedSubtitle=${subtitleSrt.isNotBlank()} subtitleChars=${subtitleSrt.length} version=${if (vietnamese) "vi" else "original"} running=${state?.running == true}",
+        )
+
+        val intent = Intent(this, SubtitlePlaybackActivity::class.java).apply {
+            mediaUri?.let {
+                putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_URI, it.toString())
+                putExtra(SubtitlePlaybackActivity.EXTRA_MEDIA_NAME, mediaName ?: "Media từ phiên hiện tại")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            if (subtitleSrt.isNotBlank()) {
+                putExtra(SubtitlePlaybackActivity.EXTRA_SUBTITLE_SRT, subtitleSrt)
+                putExtra(
+                    SubtitlePlaybackActivity.EXTRA_SUBTITLE_NAME,
+                    subtitleName ?: "Phụ đề từ phiên hiện tại",
+                )
+            }
+        }
+        subtitlePlaybackLauncher.launch(intent)
+    }
+
     private fun exportTranscript() {
         val format = preferences.load().exportFormat
-        val text = translationService?.subtitleText(format).orEmpty()
+        val service = translationService
+        val text = service?.subtitleText(format).orEmpty()
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
+        val state = service?.state?.value
+        val vietnamese = state?.subtitleTranslationAvailable == true &&
+            state.subtitleShowingVietnamese
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
-        val prefix = if (isTranscribeSelected()) "gemini_transcribe" else "gemini_translate"
+        val prefix = when {
+            isTranscribeSelected() && vietnamese -> "gemini_transcribe_vi"
+            isTranscribeSelected() -> "gemini_transcribe_original"
+            else -> "gemini_translate"
+        }
+        logger.log(
+            2,
+            "Export",
+            "Chuẩn bị xuất format=$format version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
+        )
         exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }
 
@@ -881,6 +1049,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val FILE_SPEED_STEPS = 20
         private const val KEY_SOURCE_MODE = "lastSourceMode"
+        private const val STATE_PLAYBACK_RETURN_SESSION_ID = "state.playbackReturnSessionId"
         private const val KEY_FILE_PLAYBACK_SPEED = "filePlaybackSpeed"
     }
 }

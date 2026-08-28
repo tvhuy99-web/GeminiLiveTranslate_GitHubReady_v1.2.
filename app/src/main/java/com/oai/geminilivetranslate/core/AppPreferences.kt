@@ -169,5 +169,6 @@ class AppPreferences(context: Context) {
         const val PROCESSING_MODE_TRANSCRIBE = "transcribe"
         const val TRANSCRIBE_FILE_MODEL = "gemini-3.5-transcribe"
         const val TRANSCRIBE_LIVE_MODEL = "gemini-3.5-transcribe-live"
+        const val SUBTITLE_TRANSLATE_MODEL = "gemini-3.5-flash-lite"
     }
 }

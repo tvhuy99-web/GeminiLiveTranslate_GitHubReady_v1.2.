@@ -61,4 +61,7 @@ data class SessionUiState(
     val aiVoice: Boolean = true,
     val currentLanguage: String = "vi",
     val lastError: String? = null,
+    val subtitleTranslationAvailable: Boolean = false,
+    val subtitleTranslationInProgress: Boolean = false,
+    val subtitleShowingVietnamese: Boolean = false,
 )

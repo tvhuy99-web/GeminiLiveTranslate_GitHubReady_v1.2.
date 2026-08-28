@@ -23,6 +23,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.oai.geminilivetranslate.audio.TtsPreferences
+import com.oai.geminilivetranslate.core.AiApiSettingsStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -590,58 +591,13 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun testConnection(button: Button) {
-        val safeDraft = SettingsPolicy.sanitize(draft)
-        val key = apiKeys.load().selected
-        if (key.isNullOrBlank()) {
-            toast("Chưa có khóa truy cập")
-            return
-        }
-
-        button.isEnabled = false
-        button.text = "Đang kiểm tra..."
-        logger.log(
-            2,
-            "Settings",
-            "Bắt đầu kiểm tra API model=${safeDraft.model} target=${safeDraft.targetLanguage}",
-        )
-
-        lifecycleScope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    GeminiLiveClient.testConnection(
-                        key,
-                        safeDraft.model,
-                        safeDraft.targetLanguage,
-                        safeDraft.echoTargetLanguage,
-                        logger,
-                    )
-                }
-            }.onSuccess {
-                logger.log(2, "Settings", "Kiểm tra API thành công latencyMs=$it")
-                toast("Kết nối tốt")
-            }.onFailure {
-                logger.log(0, "Settings", "Kiểm tra API thất bại", it)
-                AlertDialog.Builder(this@SettingsActivity)
-                    .setTitle("Không thể kết nối")
-                    .setMessage(
-                        "Hãy kiểm tra mạng, khóa truy cập và bộ máy dịch, rồi thử lại.",
-                    )
-                    .setPositiveButton("Đóng", null)
-                    .show()
-            }
-
-            button.isEnabled = true
-            button.text = "Kiểm tra kết nối dịch"
-        }
-    }
-
     private fun confirmRestoreSettings() = confirm(
         title = "Đưa cài đặt về mặc định?",
         message = "Khóa truy cập và các bản ghi âm vẫn được giữ lại.",
         positive = "Khôi phục",
     ) {
         val restored = preferences.restoreDefaultsPreservingKeys()
+        AiApiSettingsStore(this).clear()
         TtsPreferences(this).reset()
         draft = restored
         original = restored
@@ -703,6 +659,7 @@ class SettingsActivity : AppCompatActivity() {
         apiKeys.clear()
         logger.clear()
         preferences.clear()
+        AiApiSettingsStore(this).clear()
         TtsPreferences(this).clear()
         PublicRecordingStore(this, logger).deleteAll()
         File(cacheDir, "diagnostic-share").deleteRecursively()

@@ -40,6 +40,7 @@ import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
+import com.oai.geminilivetranslate.network.GeminiVideoDescriptionClient
 import com.oai.geminilivetranslate.network.SubtitleTranslationClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -138,12 +139,14 @@ class TranslationService : LifecycleService() {
     @Volatile private var transcribePlainText = ""
     @Volatile private var liveCommittedTranscript = ""
     @Volatile private var liveInterimTranscript = ""
+    @Volatile private var videoSummaryText = ""
     private var liveInterimEvents = 0L
     private var liveFinalEvents = 0L
     private var selectedUri: Uri? = null
     private var selectedFileName: String? = null
     private var currentMode = SourceMode.FILE
     @Volatile private var processingMode = AppPreferences.PROCESSING_MODE_TRANSLATE
+    @Volatile private var videoDescriptionMode = AppPreferences.VIDEO_DESCRIPTION_TIMELINE
     @Volatile private var speakerDiarization = false
     private var sessionStartedAt = 0L
     private var totalInputBytes = 0L
@@ -170,12 +173,14 @@ class TranslationService : LifecycleService() {
         historyStore = SessionHistoryStore(this)
         settings = preferences.load()
         processingMode = preferences.loadProcessingMode()
+        videoDescriptionMode = preferences.loadVideoDescriptionMode()
         speakerDiarization = preferences.loadSpeakerDiarization()
         _state.update {
             it.copy(
                 aiVoice = settings.aiVoice,
                 currentLanguage = settings.targetLanguage,
-                sourceMode = currentMode
+                sourceMode = currentMode,
+                videoDescriptionMode = videoDescriptionMode,
             )
         }
         if (!settings.aiVoice) ensureTtsInitialized()

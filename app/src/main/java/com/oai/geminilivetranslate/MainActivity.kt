@@ -959,6 +959,7 @@ class MainActivity : AppCompatActivity() {
             state.subtitleShowingVietnamese
         val subtitleName = when {
             subtitleSrt.isBlank() -> null
+            isVideoDescriptionSelected() -> "Mô tả video theo thời gian - phiên hiện tại"
             vietnamese -> "Phụ đề tiếng Việt - phiên hiện tại"
             else -> "Phụ đề bản gốc - phiên hiện tại"
         }
@@ -987,7 +988,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun exportTranscript() {
-        val format = preferences.load().exportFormat
+        val videoSummary = isVideoDescriptionSelected() && isVideoDescriptionSummarySelected()
+        val format = if (videoSummary) "txt" else preferences.load().exportFormat
         val service = translationService
         val text = service?.subtitleText(format).orEmpty()
         if (text.isBlank()) { toast("Chưa có nội dung để xuất"); return }
@@ -997,6 +999,8 @@ class MainActivity : AppCompatActivity() {
         pendingExportText = text
         val extension = if (format == "txt") "txt" else "srt"
         val prefix = when {
+            isVideoDescriptionSelected() && videoSummary -> "gemini_video_description_summary"
+            isVideoDescriptionSelected() -> "gemini_video_description_timeline"
             isTranscribeSelected() && vietnamese -> "gemini_transcribe_vi"
             isTranscribeSelected() -> "gemini_transcribe_original"
             else -> "gemini_translate"
@@ -1004,7 +1008,7 @@ class MainActivity : AppCompatActivity() {
         logger.log(
             2,
             "Export",
-            "Chuẩn bị xuất format=$format version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
+            "Chuẩn bị xuất format=$format mode=${preferences.loadProcessingMode()} videoMode=${preferences.loadVideoDescriptionMode()} version=${if (vietnamese) "vi" else "original"} chars=${text.length} prefix=$prefix",
         )
         exportDocument.launch("${prefix}_${System.currentTimeMillis()}.$extension")
     }

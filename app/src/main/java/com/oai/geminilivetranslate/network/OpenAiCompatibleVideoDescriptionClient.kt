@@ -209,13 +209,28 @@ class OpenAiCompatibleVideoDescriptionClient(
     ): String {
         val output = StringBuilder()
         var lastPreview = ""
+        var completed = false
         while (true) {
             throwIfCancelled()
             val line = source.readUtf8Line() ?: break
             if (!line.startsWith("data:")) continue
             val data = line.substringAfter("data:").trim()
-            if (data.isBlank() || data == "[DONE]") continue
+            if (data.isBlank()) continue
+            if (data == "[DONE]") {
+                completed = true
+                continue
+            }
             val root = runCatching { JSONObject(data) }.getOrNull() ?: continue
+            if (root.optString("type") == "response.completed") {
+                completed = true
+            }
+            val choices = root.optJSONArray("choices")
+            if (choices != null && choices.length() > 0) {
+                val finishReason = choices.optJSONObject(0)?.opt("finish_reason")
+                if (finishReason != null && finishReason != JSONObject.NULL) {
+                    completed = true
+                }
+            }
             val delta = streamDelta(root)
             if (delta.isEmpty()) continue
             output.append(delta)
@@ -228,6 +243,9 @@ class OpenAiCompatibleVideoDescriptionClient(
                 lastPreview = preview
                 onPartial(preview)
             }
+        }
+        if (!completed) {
+            error("Luồng OpenAI-compatible bị ngắt trước tín hiệu hoàn tất")
         }
         return output.toString().trim().ifBlank { error("API OpenAI-compatible không trả nội dung") }
     }

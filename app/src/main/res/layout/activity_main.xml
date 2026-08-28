@@ -83,7 +83,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
-            android:text="Khóa truy cập" />
+            android:text="Khóa truy cập"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/testConnectionButton"
@@ -91,7 +92,8 @@
             android:layout_height="wrap_content"
             android:contentDescription="Kiểm tra khóa truy cập và kết nối dịch"
             android:minHeight="48dp"
-            android:text="Kiểm tra kết nối dịch" />
+            android:text="Kiểm tra kết nối dịch"
+            android:visibility="gone" />
 
         <LinearLayout
             android:layout_width="match_parent"

@@ -1,0 +1,47 @@
+name: One-shot video history reuse patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/video-history-reuse-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: python3 tools/apply_video_history_reuse_patch.py
+
+      - name: Validate patch text
+        run: |
+          git diff --check
+          grep -q 'Intent.ACTION_OPEN_DOCUMENT' app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          grep -q 'video-upload-ready' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'reusableUploadedFile' app/src/main/java/com/oai/geminilivetranslate/network/GeminiVideoDescriptionClient.kt
+
+      - name: Remove one-shot helper files
+        run: |
+          rm -f tools/apply_video_history_reuse_patch.py
+          rm -f .github/workflows/one-shot-video-history-reuse.yml
+          rm -f .github/video-history-reuse-trigger.txt
+
+      - name: Commit patched source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No source changes to commit'
+            exit 1
+          fi
+          git commit -m 'Fix persistent video history and reuse Gemini uploads'
+          git push origin HEAD:main

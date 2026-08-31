@@ -89,6 +89,7 @@ class HistoryActivity : AppCompatActivity() {
         }
         val translated = if (session.hasVietnamese) ", đã có bản dịch tiếng Việt" else ""
         val videoAvailable = buildString {
+            if (!session.geminiFileUri.isNullOrBlank()) append(", video đã tải lên Gemini")
             if (session.videoTimelineSrt.isNotBlank()) append(", có mô tả theo thời gian")
             if (session.videoSummaryText.isNotBlank()) append(", có mô tả tổng hợp")
         }

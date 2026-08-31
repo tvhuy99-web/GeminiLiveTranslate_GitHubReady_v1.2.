@@ -16,6 +16,10 @@ data class HistorySession(
     val title: String,
     val mediaUri: String?,
     val mediaName: String?,
+    val geminiFileName: String?,
+    val geminiFileUri: String?,
+    val geminiFileMimeType: String?,
+    val geminiFileUploadedAtMs: Long,
     val primaryTranscript: String,
     val primarySrt: String,
     val vietnameseTranscript: String,
@@ -29,7 +33,8 @@ data class HistorySession(
     val updatedAtMs: Long,
 ) {
     val hasValue: Boolean
-        get() = primaryTranscript.isNotBlank() ||
+        get() = !geminiFileUri.isNullOrBlank() ||
+            primaryTranscript.isNotBlank() ||
             primarySrt.isNotBlank() ||
             vietnameseTranscript.isNotBlank() ||
             vietnameseSrt.isNotBlank() ||
@@ -65,6 +70,10 @@ class SessionHistoryStore(context: Context) {
         title = deriveTitle(sourceMode, mediaName, "", nowMs),
         mediaUri = mediaUri,
         mediaName = mediaName,
+        geminiFileName = null,
+        geminiFileUri = null,
+        geminiFileMimeType = null,
+        geminiFileUploadedAtMs = 0L,
         primaryTranscript = "",
         primarySrt = "",
         vietnameseTranscript = "",
@@ -167,6 +176,10 @@ class SessionHistoryStore(context: Context) {
         .put("title", session.title)
         .put("mediaUri", session.mediaUri ?: JSONObject.NULL)
         .put("mediaName", session.mediaName ?: JSONObject.NULL)
+        .put("geminiFileName", session.geminiFileName ?: JSONObject.NULL)
+        .put("geminiFileUri", session.geminiFileUri ?: JSONObject.NULL)
+        .put("geminiFileMimeType", session.geminiFileMimeType ?: JSONObject.NULL)
+        .put("geminiFileUploadedAtMs", session.geminiFileUploadedAtMs)
         .put("primaryTranscript", session.primaryTranscript)
         .put("primarySrt", session.primarySrt)
         .put("vietnameseTranscript", session.vietnameseTranscript)
@@ -209,6 +222,10 @@ class SessionHistoryStore(context: Context) {
             },
             mediaUri = json.optNullableString("mediaUri"),
             mediaName = mediaName,
+            geminiFileName = json.optNullableString("geminiFileName"),
+            geminiFileUri = json.optNullableString("geminiFileUri"),
+            geminiFileMimeType = json.optNullableString("geminiFileMimeType"),
+            geminiFileUploadedAtMs = json.optLong("geminiFileUploadedAtMs", 0L),
             primaryTranscript = primaryTranscript,
             primarySrt = json.optString("primarySrt"),
             vietnameseTranscript = vietnameseTranscript,
@@ -274,7 +291,7 @@ class SessionHistoryStore(context: Context) {
         private const val DIRECTORY_NAME = "session_history"
         private const val META_PREFS = "session_history_meta"
         private const val KEY_DELETED_IDS = "deletedIds"
-        private const val FORMAT_VERSION = 1
+        private const val FORMAT_VERSION = 2
         private const val MAX_TITLE_CHARS = 80
         private const val MAX_TOMBSTONES = 100
     }

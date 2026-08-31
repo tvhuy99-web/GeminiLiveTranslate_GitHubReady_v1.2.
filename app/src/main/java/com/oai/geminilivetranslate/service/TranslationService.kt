@@ -1603,6 +1603,34 @@ class TranslationService : LifecycleService() {
                                     }
                                 },
                                 onPartial = partial,
+                                remoteFile = currentHistorySession?.let { history ->
+                                    history.geminiFileUri
+                                        ?.takeIf(String::isNotBlank)
+                                        ?.let { remoteUri ->
+                                            GeminiVideoDescriptionClient.RemoteFile(
+                                                name = history.geminiFileName,
+                                                uri = remoteUri,
+                                                mimeType = history.geminiFileMimeType ?: resolvedMime,
+                                                uploadedAtMs = history.geminiFileUploadedAtMs,
+                                            )
+                                        }
+                                },
+                                onRemoteFileReady = { remote ->
+                                    val history = currentHistorySession
+                                    if (
+                                        history != null &&
+                                        history.mediaUri == uri.toString() &&
+                                        selectedUri == uri
+                                    ) {
+                                        currentHistorySession = history.copy(
+                                            geminiFileName = remote.name,
+                                            geminiFileUri = remote.uri,
+                                            geminiFileMimeType = remote.mimeType,
+                                            geminiFileUploadedAtMs = remote.uploadedAtMs,
+                                        )
+                                        saveCurrentHistoryNow("video-upload-ready")
+                                    }
+                                },
                             )
                         } finally {
                             gemini.close()

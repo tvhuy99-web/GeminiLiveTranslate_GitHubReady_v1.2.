@@ -120,13 +120,11 @@ class MainActivity : AppCompatActivity() {
     private val filePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
         val uri = result.data?.data ?: return@registerForActivityResult
-        val flags = result.data?.flags ?: 0
-        if (flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+        val takeFlags = (result.data?.flags ?: 0) and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (takeFlags != 0) {
             runCatching {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
+                contentResolver.takePersistableUriPermission(uri, takeFlags)
             }.onFailure {
                 logger.log(1, "History", "Không giữ được quyền đọc lâu dài uriScheme=${uri.scheme}", it)
             }
@@ -1070,11 +1068,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchFilePicker() {
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
         }
         filePicker.launch(
             Intent.createChooser(intent, "Chọn tệp âm thanh hoặc video")

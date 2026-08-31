@@ -41,6 +41,13 @@ class GeminiVideoDescriptionClient(
         val text: String,
     )
 
+    data class RemoteFile(
+        val name: String?,
+        val uri: String,
+        val mimeType: String,
+        val uploadedAtMs: Long,
+    )
+
     data class Result(
         val timelineItems: List<TimelineItem>,
         val summaryText: String,
@@ -89,6 +96,8 @@ class GeminiVideoDescriptionClient(
         mode: Mode,
         onProgress: (String, Int) -> Unit,
         onPartial: (String) -> Unit = {},
+        remoteFile: RemoteFile? = null,
+        onRemoteFileReady: (RemoteFile) -> Unit = {},
     ): Result {
         require(apiKey.isNotBlank()) { "API Key đang trống" }
         require(mimeType in SUPPORTED_VIDEO_MIME_TYPES) {
@@ -116,6 +125,8 @@ class GeminiVideoDescriptionClient(
             mode = mode,
             onProgress = onProgress,
             onPartial = onPartial,
+            remoteFile = remoteFile,
+            onRemoteFileReady = onRemoteFileReady,
         )
     }
 
@@ -125,6 +136,8 @@ class GeminiVideoDescriptionClient(
         mode: Mode,
         onProgress: (String, Int) -> Unit,
         onPartial: (String) -> Unit,
+        remoteFile: RemoteFile?,
+        onRemoteFileReady: (RemoteFile) -> Unit,
     ): Result {
         val startedAt = SystemClock.elapsedRealtime()
         val durationSeconds = durationMs / 1_000.0
@@ -134,12 +147,30 @@ class GeminiVideoDescriptionClient(
             "Bắt đầu model=$model mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs wholeVideo=true maxDurationMs=$MAX_VIDEO_DURATION_MS streaming=$streamingEnabled timeoutMs=$requestTimeoutMs",
         )
 
-        var uploadedName: String? = null
-        try {
+        val reusable = reusableUploadedFile(remoteFile, source.mimeType)
+        val uploaded = if (reusable != null) {
+            onProgress("Đang dùng lại video đã tải lên Gemini...", 55)
+            logger.log(
+                2,
+                TAG,
+                "Dùng lại video đã tải fileName=${reusable.name ?: "none"} fileUri=${reusable.uri.take(100)} mime=${reusable.mimeType}",
+            )
+            reusable
+        } else {
             onProgress("Đang tải nguyên video lên...", 2)
-            val uploaded = upload(source, onProgress)
-            uploadedName = uploaded.name
-            waitUntilActive(uploaded, onProgress)
+            upload(source, onProgress).also { waitUntilActive(it, onProgress) }
+        }
+        val readyRemote = RemoteFile(
+            name = uploaded.name,
+            uri = uploaded.uri,
+            mimeType = uploaded.mimeType,
+            uploadedAtMs = if (reusable != null) {
+                remoteFile?.uploadedAtMs ?: System.currentTimeMillis()
+            } else {
+                System.currentTimeMillis()
+            },
+        )
+        onRemoteFileReady(readyRemote)
 
             val prompt = VideoDescriptionPromptDefaults.render(
                 if (mode == Mode.TIMELINE) timelinePromptTemplate else summaryPromptTemplate,
@@ -239,9 +270,6 @@ class GeminiVideoDescriptionClient(
                 }
             }
             throw lastError ?: IllegalStateException("Gemini không tạo được mô tả video")
-        } finally {
-            uploadedName?.let(::deleteUploadedFile)
-        }
     }
 
     fun cancel() {
@@ -390,6 +418,54 @@ class GeminiVideoDescriptionClient(
             throwIfCancelled()
         }
         error("Hết thời gian chờ Gemini chuẩn bị video")
+    }
+
+    private fun reusableUploadedFile(
+        remote: RemoteFile?,
+        fallbackMimeType: String,
+    ): UploadedFile? {
+        if (remote == null || remote.uri.isBlank() || remote.uploadedAtMs <= 0L) return null
+        val ageMs = (System.currentTimeMillis() - remote.uploadedAtMs).coerceAtLeast(0L)
+        if (ageMs >= REMOTE_FILE_MAX_AGE_MS) {
+            logger.log(2, TAG, "Video Gemini đã quá thời gian tái sử dụng ageMs=$ageMs; sẽ tải lại")
+            return null
+        }
+        val name = remote.name?.takeIf(String::isNotBlank) ?: return null
+        val uploaded = UploadedFile(
+            name = name,
+            uri = remote.uri,
+            mimeType = remote.mimeType.takeIf(String::isNotBlank) ?: fallbackMimeType,
+        )
+        val clean = name.removePrefix("/")
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/$clean")
+            .header("x-goog-api-key", apiKey)
+            .get()
+            .build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                logger.log(
+                    if (response.code == 400 || response.code == 403 || response.code == 404) 2 else 1,
+                    TAG,
+                    "Không tái sử dụng được video Gemini HTTP=${response.code} fileName=$name; ${if (response.code == 400 || response.code == 403 || response.code == 404) "sẽ tải lại" else "không thể xác minh"}",
+                )
+                if (response.code == 400 || response.code == 403 || response.code == 404) {
+                    return@use null
+                }
+                throw IllegalStateException(
+                    "Không kiểm tra được video đã tải: HTTP ${response.code} ${sanitizeForLog(body, 500)}"
+                )
+            }
+            val state = runCatching { JSONObject(body).optString("state").uppercase() }
+                .getOrDefault("")
+            if (state == "ACTIVE") {
+                uploaded
+            } else {
+                logger.log(2, TAG, "Video Gemini cache state=${state.ifBlank { "UNKNOWN" }}; sẽ tải lại")
+                null
+            }
+        }
     }
 
     private fun createAndAwait(
@@ -809,6 +885,7 @@ class GeminiVideoDescriptionClient(
         private const val MAX_ITEM_SECONDS = 15.0
         private const val TIMECODE_TOLERANCE_SECONDS = 0.10
         private const val MAX_ATTEMPTS = 2
+        private const val REMOTE_FILE_MAX_AGE_MS = 48L * 60L * 60L * 1_000L
         private const val MAX_FILE_POLLS = 180
         private const val FILE_POLL_INTERVAL_MS = 2_000L
         private const val TAG = "VideoDescription"

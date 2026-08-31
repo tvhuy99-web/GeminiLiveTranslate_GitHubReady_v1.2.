@@ -18,6 +18,8 @@ import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.InputStream
+import java.net.URI
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class OpenAiCompatibleVideoDescriptionClient(
@@ -87,30 +89,22 @@ class OpenAiCompatibleVideoDescriptionClient(
             durationSeconds,
         ) + if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) TIMELINE_JSON_CONTRACT else ""
 
+        val useGeminiNative = shouldUseGeminiNativeVideoProtocol()
+        val protocol = if (useGeminiNative) "gemini-native" else "openai-compatible"
         val startedAt = SystemClock.elapsedRealtime()
         logger.log(
             2,
             TAG,
-            "Bắt đầu model=$model endpoint=${sanitizeUrl(endpoint)} mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs streaming=$streamingEnabled timeoutMs=$requestTimeoutMs temperature=$temperature",
+            "Bắt đầu model=$model endpoint=${sanitizeUrl(endpoint)} protocol=$protocol mode=$mode name=${source.displayName} mime=${source.mimeType} bytes=${source.contentLength} durationMs=$durationMs streaming=$streamingEnabled timeoutMs=$requestTimeoutMs temperature=$temperature",
         )
 
-        onProgress("Đang gửi nguyên video tới API...", 8)
-        val output = if (streamingEnabled) {
-            try {
-                execute(source, prompt, mode, onProgress, onPartial, stream = true)
-            } catch (error: Throwable) {
-                if (cancelled || !shouldFallbackFromStreaming(error)) throw error
-                logger.log(
-                    1,
-                    TAG,
-                    "Streaming Proxy không khả dụng; thử lại non-stream reason=${error.message ?: error.javaClass.simpleName}",
-                )
-                onProgress("API không hỗ trợ streaming; đang nhận kết quả thông thường...", 65)
-                execute(source, prompt, mode, onProgress, onPartial, stream = false)
-            }
+        onProgress("Đang chuẩn bị gửi video tới API...", 8)
+        val output = if (useGeminiNative) {
+            executeGeminiNativeWithFallback(source, prompt, mode, onProgress, onPartial)
         } else {
-            execute(source, prompt, mode, onProgress, onPartial, stream = false)
+            executeOpenAiWithFallback(source, prompt, mode, onProgress, onPartial)
         }
+
         val timelineItems = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
             parseTimeline(output, durationSeconds)
         } else {
@@ -128,7 +122,7 @@ class OpenAiCompatibleVideoDescriptionClient(
         logger.log(
             2,
             TAG,
-            "Hoàn tất mode=$mode items=${timelineItems.size} summaryChars=${summary.length} elapsedMs=$elapsed",
+            "Hoàn tất protocol=$protocol mode=$mode items=${timelineItems.size} summaryChars=${summary.length} elapsedMs=$elapsed",
         )
         return GeminiVideoDescriptionClient.Result(
             timelineItems = timelineItems,
@@ -143,7 +137,55 @@ class OpenAiCompatibleVideoDescriptionClient(
         )
     }
 
-    private fun execute(
+    private fun executeOpenAiWithFallback(
+        source: UploadSource,
+        prompt: String,
+        mode: GeminiVideoDescriptionClient.Mode,
+        onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
+    ): String {
+        if (!streamingEnabled) {
+            return executeOpenAi(source, prompt, mode, onProgress, onPartial, stream = false)
+        }
+        return try {
+            executeOpenAi(source, prompt, mode, onProgress, onPartial, stream = true)
+        } catch (error: Throwable) {
+            if (cancelled || !shouldFallbackFromStreaming(error)) throw error
+            logger.log(
+                1,
+                TAG,
+                "OPENAI_STREAM_FALLBACK reason=${error.message ?: error.javaClass.simpleName}",
+            )
+            onProgress("Streaming lỗi; đang thử lại chế độ thường...", 55)
+            executeOpenAi(source, prompt, mode, onProgress, onPartial, stream = false)
+        }
+    }
+
+    private fun executeGeminiNativeWithFallback(
+        source: UploadSource,
+        prompt: String,
+        mode: GeminiVideoDescriptionClient.Mode,
+        onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
+    ): String {
+        if (!streamingEnabled) {
+            return executeGeminiNative(source, prompt, mode, onProgress, onPartial, stream = false)
+        }
+        return try {
+            executeGeminiNative(source, prompt, mode, onProgress, onPartial, stream = true)
+        } catch (error: Throwable) {
+            if (cancelled || !shouldFallbackFromStreaming(error)) throw error
+            logger.log(
+                1,
+                TAG,
+                "GEMINI_NATIVE_STREAM_FALLBACK reason=${error.message ?: error.javaClass.simpleName}",
+            )
+            onProgress("Luồng Gemini lỗi; đang thử lại chế độ thường...", 55)
+            executeGeminiNative(source, prompt, mode, onProgress, onPartial, stream = false)
+        }
+    }
+
+    private fun executeOpenAi(
         source: UploadSource,
         prompt: String,
         mode: GeminiVideoDescriptionClient.Mode,
@@ -153,6 +195,8 @@ class OpenAiCompatibleVideoDescriptionClient(
     ): String {
         throwIfCancelled()
         val url = AiApiEndpointRules.proxyChatEndpoint(endpoint)
+        val uploadProgress = createUploadProgressReporter("openai-compatible", stream, source, onProgress)
+        val body = OpenAiVideoRequestBody(source, model.trim(), prompt, stream, temperature, uploadProgress)
         val request = Request.Builder()
             .url(url)
             .header("Content-Type", "application/json")
@@ -160,31 +204,139 @@ class OpenAiCompatibleVideoDescriptionClient(
                 if (apiKey.isNotBlank()) header("Authorization", "Bearer $apiKey")
                 if (stream) header("Accept", "text/event-stream")
             }
-            .post(VideoRequestBody(source, model.trim(), prompt, stream, temperature))
+            .post(body)
             .build()
 
-        return client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val body = response.body?.string().orEmpty()
-                error("OpenAI-compatible HTTP ${response.code}: ${body.replace(Regex("\\s+"), " ").take(900)}")
+        return executeRequest(
+            request = request,
+            protocol = "openai-compatible",
+            stream = stream,
+            bodyBytes = body.contentLength(),
+            mode = mode,
+            onProgress = onProgress,
+            onPartial = onPartial,
+            parseNonStream = ::extractNonStreamText,
+            parseStream = { responseSource -> readOpenAiSse(responseSource, mode, onPartial) },
+        )
+    }
+
+    private fun executeGeminiNative(
+        source: UploadSource,
+        prompt: String,
+        mode: GeminiVideoDescriptionClient.Mode,
+        onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
+        stream: Boolean,
+    ): String {
+        throwIfCancelled()
+        val url = geminiNativeEndpoint(stream)
+        val uploadProgress = createUploadProgressReporter("gemini-native", stream, source, onProgress)
+        val body = GeminiNativeVideoRequestBody(source, prompt, temperature, uploadProgress)
+        val request = Request.Builder()
+            .url(url)
+            .header("Content-Type", "application/json")
+            .apply {
+                if (apiKey.isNotBlank()) {
+                    header("Authorization", "Bearer $apiKey")
+                }
+                if (stream) header("Accept", "text/event-stream, application/json")
             }
+            .post(body)
+            .build()
+
+        return executeRequest(
+            request = request,
+            protocol = "gemini-native",
+            stream = stream,
+            bodyBytes = body.contentLength(),
+            mode = mode,
+            onProgress = onProgress,
+            onPartial = onPartial,
+            parseNonStream = ::extractGeminiNativeText,
+            parseStream = { responseSource -> readGeminiNativeStream(responseSource, mode, onPartial) },
+        )
+    }
+
+    private fun executeRequest(
+        request: Request,
+        protocol: String,
+        stream: Boolean,
+        bodyBytes: Long,
+        mode: GeminiVideoDescriptionClient.Mode,
+        onProgress: (String, Int) -> Unit,
+        onPartial: (String) -> Unit,
+        parseNonStream: (String) -> String,
+        parseStream: (okio.BufferedSource) -> String,
+    ): String {
+        val started = SystemClock.elapsedRealtime()
+        logger.log(
+            2,
+            TAG,
+            "REQUEST_PREPARED protocol=$protocol stream=$stream bodyBytes=$bodyBytes endpoint=${sanitizeUrl(request.url.toString())}",
+        )
+        logger.log(2, TAG, "REQUEST_SEND protocol=$protocol stream=$stream")
+
+        return client.newCall(request).execute().use { response ->
+            val headersElapsed = SystemClock.elapsedRealtime() - started
             val contentType = response.header("Content-Type").orEmpty()
             logger.log(
                 2,
                 TAG,
-                "POST stream=$stream HTTP=${response.code} contentType=$contentType endpoint=${sanitizeUrl(url)}",
+                "RESPONSE_HEADERS protocol=$protocol stream=$stream HTTP=${response.code} contentType=$contentType elapsedMs=$headersElapsed",
             )
-            onProgress("Đang nhận kết quả...", 70)
-            if (stream && contentType.contains("text/event-stream", ignoreCase = true)) {
-                readSse(response.body?.source() ?: error("API không trả luồng dữ liệu"), mode, onPartial)
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                error("$protocol HTTP ${response.code}: ${errorBody.replace(Regex("\\s+"), " ").take(900)}")
+            }
+
+            onProgress("Máy chủ đã nhận video; đang xử lý kết quả...", 70)
+            val responseBody = response.body ?: error("$protocol không trả response body")
+            val output = if (stream && contentType.contains("text/event-stream", ignoreCase = true)) {
+                parseStream(responseBody.source())
             } else {
-                val text = extractNonStreamText(response.body?.string().orEmpty())
+                val raw = responseBody.string()
+                val text = if (stream && protocol == "gemini-native") {
+                    extractGeminiNativeStreamingBody(raw)
+                } else {
+                    parseNonStream(raw)
+                }
                 val preview = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) timelinePreview(text) else text
                 if (preview.isNotBlank()) onPartial(preview)
                 text
             }
-        }.also {
             onProgress("Đang hoàn tất kết quả...", 96)
+            output
+        }
+    }
+
+    private fun createUploadProgressReporter(
+        protocol: String,
+        stream: Boolean,
+        source: UploadSource,
+        onProgress: (String, Int) -> Unit,
+    ): (Long, Long) -> Unit {
+        var lastProgress = -1
+        var uploadDoneLogged = false
+        return { written, total ->
+            if (total > 0L) {
+                val progress = (8L + (written.coerceIn(0L, total) * 42L / total)).toInt().coerceIn(8, 50)
+                if (progress != lastProgress) {
+                    lastProgress = progress
+                    onProgress("Đang tải video lên API...", progress)
+                }
+                if (written >= total && !uploadDoneLogged) {
+                    uploadDoneLogged = true
+                    logger.log(
+                        2,
+                        TAG,
+                        "UPLOAD_DONE protocol=$protocol stream=$stream sourceBytes=${source.contentLength}",
+                    )
+                    onProgress("Đã tải video lên; đang chờ AI xử lý...", 52)
+                }
+            } else if (lastProgress < 0) {
+                lastProgress = 8
+                onProgress("Đang tải video lên API...", 8)
+            }
         }
     }
 
@@ -200,10 +352,11 @@ class OpenAiCompatibleVideoDescriptionClient(
             "không trả luồng dữ liệu",
             "không trả nội dung",
             "bị ngắt trước tín hiệu hoàn tất",
+            "stream",
         ).any(message::contains)
     }
 
-    private fun readSse(
+    private fun readOpenAiSse(
         source: okio.BufferedSource,
         mode: GeminiVideoDescriptionClient.Mode,
         onPartial: (String) -> Unit,
@@ -211,26 +364,27 @@ class OpenAiCompatibleVideoDescriptionClient(
         val output = StringBuilder()
         var lastPreview = ""
         var completed = false
+        var firstDataLogged = false
         while (true) {
             throwIfCancelled()
             val line = source.readUtf8Line() ?: break
             if (!line.startsWith("data:")) continue
             val data = line.substringAfter("data:").trim()
             if (data.isBlank()) continue
+            if (!firstDataLogged) {
+                firstDataLogged = true
+                logger.log(2, TAG, "FIRST_STREAM_DATA protocol=openai-compatible")
+            }
             if (data == "[DONE]") {
                 completed = true
                 continue
             }
             val root = runCatching { JSONObject(data) }.getOrNull() ?: continue
-            if (root.optString("type") == "response.completed") {
-                completed = true
-            }
+            if (root.optString("type") == "response.completed") completed = true
             val choices = root.optJSONArray("choices")
             if (choices != null && choices.length() > 0) {
                 val finishReason = choices.optJSONObject(0)?.opt("finish_reason")
-                if (finishReason != null && finishReason != JSONObject.NULL) {
-                    completed = true
-                }
+                if (finishReason != null && finishReason != JSONObject.NULL) completed = true
             }
             val delta = streamDelta(root)
             if (delta.isEmpty()) continue
@@ -245,10 +399,57 @@ class OpenAiCompatibleVideoDescriptionClient(
                 onPartial(preview)
             }
         }
-        if (!completed) {
-            error("Luồng OpenAI-compatible bị ngắt trước tín hiệu hoàn tất")
-        }
+        if (!completed) error("Luồng OpenAI-compatible bị ngắt trước tín hiệu hoàn tất")
         return output.toString().trim().ifBlank { error("API OpenAI-compatible không trả nội dung") }
+    }
+
+    private fun readGeminiNativeStream(
+        source: okio.BufferedSource,
+        mode: GeminiVideoDescriptionClient.Mode,
+        onPartial: (String) -> Unit,
+    ): String {
+        val output = StringBuilder()
+        var lastPreview = ""
+        var firstDataLogged = false
+        var completed = false
+        while (true) {
+            throwIfCancelled()
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.substringAfter("data:").trim()
+            if (data.isBlank()) continue
+            if (!firstDataLogged) {
+                firstDataLogged = true
+                logger.log(2, TAG, "FIRST_STREAM_DATA protocol=gemini-native")
+            }
+            if (data == "[DONE]") {
+                completed = true
+                continue
+            }
+            val root = runCatching { JSONObject(data) }.getOrNull() ?: continue
+            val delta = geminiTextFromObject(root)
+            if (delta.isNotEmpty()) {
+                output.append(delta)
+                val preview = if (mode == GeminiVideoDescriptionClient.Mode.SUMMARY) {
+                    output.toString()
+                } else {
+                    timelinePreview(output.toString())
+                }
+                if (preview.isNotBlank() && preview != lastPreview) {
+                    lastPreview = preview
+                    onPartial(preview)
+                }
+            }
+            val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
+            val finishReason = candidate?.optString("finishReason").orEmpty()
+                .ifBlank { candidate?.optString("finish_reason").orEmpty() }
+            if (finishReason.isNotBlank()) completed = true
+        }
+        if (!completed && output.isBlank()) error("Luồng Gemini-native bị ngắt trước khi có dữ liệu")
+        if (!completed) {
+            logger.log(1, TAG, "GEMINI_NATIVE_STREAM_EOF_WITHOUT_FINISH outputChars=${output.length}")
+        }
+        return output.toString().trim().ifBlank { error("API Gemini-native không trả nội dung") }
     }
 
     private fun streamDelta(root: JSONObject): String {
@@ -305,6 +506,41 @@ class OpenAiCompatibleVideoDescriptionClient(
         error("API OpenAI-compatible không trả nội dung")
     }
 
+    private fun extractGeminiNativeStreamingBody(body: String): String {
+        val trimmed = body.trim()
+        if (trimmed.startsWith("[")) {
+            val array = JSONArray(trimmed)
+            val parts = ArrayList<String>()
+            for (i in 0 until array.length()) {
+                val text = array.optJSONObject(i)?.let(::geminiTextFromObject).orEmpty()
+                if (text.isNotBlank()) parts += text
+            }
+            return parts.joinToString("").trim().ifBlank { error("API Gemini-native không trả nội dung") }
+        }
+        return extractGeminiNativeText(trimmed)
+    }
+
+    private fun extractGeminiNativeText(body: String): String {
+        val trimmed = body.trim()
+        if (trimmed.startsWith("[")) return extractGeminiNativeStreamingBody(trimmed)
+        val root = JSONObject(trimmed)
+        return geminiTextFromObject(root).trim().ifBlank { error("API Gemini-native không trả nội dung") }
+    }
+
+    private fun geminiTextFromObject(root: JSONObject): String {
+        val candidates = root.optJSONArray("candidates") ?: return ""
+        if (candidates.length() == 0) return ""
+        val content = candidates.optJSONObject(0)?.optJSONObject("content") ?: return ""
+        val parts = content.optJSONArray("parts") ?: return ""
+        val textParts = ArrayList<String>()
+        for (i in 0 until parts.length()) {
+            parts.optJSONObject(i)?.optString("text")
+                ?.takeIf(String::isNotBlank)
+                ?.let(textParts::add)
+        }
+        return textParts.joinToString("")
+    }
+
     private fun parseTimeline(
         outputText: String,
         durationSeconds: Double,
@@ -350,6 +586,7 @@ class OpenAiCompatibleVideoDescriptionClient(
             .removeSuffix("```")
             .trim()
     }
+
     private fun timelinePreview(partialJson: String): String {
         val regex = Regex("""\"text\"\s*:\s*\"((?:\\\\.|[^\"\\\\])*)\"""")
         return regex.findAll(partialJson)
@@ -358,6 +595,30 @@ class OpenAiCompatibleVideoDescriptionClient(
             }
             .filter(String::isNotBlank)
             .joinToString("\n")
+    }
+
+    private fun shouldUseGeminiNativeVideoProtocol(): Boolean {
+        val host = runCatching { URI(endpoint.trim()).host.orEmpty().lowercase() }.getOrDefault("")
+        val raw = endpoint.lowercase()
+        return host == "gcli.ggchan.dev" ||
+            host.startsWith("gcli.") ||
+            raw.contains("gcli2api")
+    }
+
+    private fun geminiNativeEndpoint(stream: Boolean): String {
+        var base = endpoint.trim().removeSuffix("/")
+        val suffixes = listOf("/chat/completions", "/responses", "/models")
+        suffixes.forEach { suffix ->
+            if (base.endsWith(suffix)) base = base.removeSuffix(suffix).removeSuffix("/")
+        }
+        val path = runCatching { URI(base).path.orEmpty() }.getOrDefault("")
+        if (path.isBlank() || path == "/") base += "/v1"
+        val encodedModel = URLEncoder.encode(
+            model.trim().removePrefix("models/"),
+            Charsets.UTF_8.name(),
+        ).replace("+", "%20")
+        val method = if (stream) "streamGenerateContent" else "generateContent"
+        return "$base/models/$encodedModel:$method"
     }
 
     private fun sanitizeUrl(raw: String): String = raw.substringBefore('?').take(180)
@@ -373,35 +634,18 @@ class OpenAiCompatibleVideoDescriptionClient(
         val open: () -> InputStream,
     )
 
-    private class VideoRequestBody(
+    private abstract class StreamingVideoRequestBody(
         private val source: UploadSource,
-        model: String,
-        prompt: String,
-        stream: Boolean,
-        temperature: Double,
+        private val prefix: ByteArray,
+        private val suffix: ByteArray,
+        private val onUploadProgress: (Long, Long) -> Unit,
     ) : RequestBody() {
-        private val prefix: ByteArray
-        private val suffix: ByteArray
-
-        init {
-            val modelJson = JSONObject.quote(model)
-            val promptJson = JSONObject.quote(prompt)
-            val mime = source.mimeType.replace("\"", "")
-            val streamText = if (stream) "true" else "false"
-            val temperatureText = temperature.coerceIn(0.0, 2.0).toString()
-            val beforeData =
-                """{"model":$modelJson,"stream":$streamText,"temperature":$temperatureText,"messages":[{"role":"user","content":[{"type":"text","text":$promptJson},{"type":"video_url","video_url":{"url":"data:$mime;base64,"""
-            val afterData = "\"}}]}]}"
-            prefix = beforeData.toByteArray(Charsets.UTF_8)
-            suffix = afterData.toByteArray(Charsets.UTF_8)
-        }
-
         override fun contentType(): MediaType = "application/json; charset=utf-8".toMediaType()
 
         override fun contentLength(): Long {
             if (source.contentLength < 0L) return -1L
             val encoded = 4L * ((source.contentLength + 2L) / 3L)
-            return prefix.size + encoded + suffix.size
+            return prefix.size.toLong() + encoded + suffix.size.toLong()
         }
 
         override fun writeTo(sink: BufferedSink) {
@@ -410,18 +654,70 @@ class OpenAiCompatibleVideoDescriptionClient(
                 sink.outputStream(),
                 Base64.NO_WRAP or Base64.NO_CLOSE,
             )
+            var written = 0L
+            onUploadProgress(0L, source.contentLength)
             source.open().use { input ->
                 val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val read = input.read(buffer)
                     if (read <= 0) break
                     base64Out.write(buffer, 0, read)
+                    written += read
+                    onUploadProgress(written, source.contentLength)
                 }
             }
             base64Out.close()
             sink.write(suffix)
+            if (source.contentLength > 0L) onUploadProgress(source.contentLength, source.contentLength)
         }
     }
+
+    private class OpenAiVideoRequestBody(
+        source: UploadSource,
+        model: String,
+        prompt: String,
+        stream: Boolean,
+        temperature: Double,
+        onUploadProgress: (Long, Long) -> Unit,
+    ) : StreamingVideoRequestBody(
+        source = source,
+        prefix = run {
+            val modelJson = JSONObject.quote(model)
+            val promptJson = JSONObject.quote(prompt)
+            val mime = source.mimeType.replace("\"", "")
+            val streamText = if (stream) "true" else "false"
+            val temperatureText = temperature.coerceIn(0.0, 2.0).toString()
+            (
+                "{\"model\":$modelJson,\"stream\":$streamText,\"temperature\":$temperatureText," +
+                    "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":$promptJson}," +
+                    "{\"type\":\"video_url\",\"video_url\":{\"url\":\"data:$mime;base64,"
+                ).toByteArray(Charsets.UTF_8)
+        },
+        suffix = "\"}}]}]}".toByteArray(Charsets.UTF_8),
+        onUploadProgress = onUploadProgress,
+    )
+
+    private class GeminiNativeVideoRequestBody(
+        source: UploadSource,
+        prompt: String,
+        temperature: Double,
+        onUploadProgress: (Long, Long) -> Unit,
+    ) : StreamingVideoRequestBody(
+        source = source,
+        prefix = run {
+            val promptJson = JSONObject.quote(prompt)
+            val mimeJson = JSONObject.quote(source.mimeType.replace("\"", ""))
+            (
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":$promptJson}," +
+                    "{\"inline_data\":{\"mime_type\":$mimeJson,\"data\":\""
+                ).toByteArray(Charsets.UTF_8)
+        },
+        suffix = (
+            "\"}}]}],\"generationConfig\":{\"temperature\":" +
+                temperature.coerceIn(0.0, 2.0).toString() + "}}"
+            ).toByteArray(Charsets.UTF_8),
+        onUploadProgress = onUploadProgress,
+    )
 
     companion object {
         private const val TAG = "VideoDescriptionProxy"

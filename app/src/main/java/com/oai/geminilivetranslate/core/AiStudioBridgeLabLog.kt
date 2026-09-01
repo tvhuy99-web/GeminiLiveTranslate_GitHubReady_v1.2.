@@ -126,7 +126,7 @@ class AiStudioBridgeLabLog(context: Context) {
                         }
                     },
                 )
-                sessionDir.listFiles()?.filter(File::isFile)?.sortedBy(File::name)?.forEach { file ->
+                sessionDir.listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { file ->
                     zip.putNextEntry(ZipEntry("session/${file.name}"))
                     file.inputStream().buffered().use { input -> input.copyTo(zip) }
                     zip.closeEntry()

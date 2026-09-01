@@ -2,6 +2,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -52,6 +53,22 @@
             android:name=".ui.MiniBrowserActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize" />
+
+        <!--
+            Experimental launcher kept separate from MainActivity so WebView automation,
+            renderer crashes and aggressive diagnostics cannot disturb the production flow.
+        -->
+        <activity
+            android:name=".ui.AiStudioBridgeLabActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Bridge Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

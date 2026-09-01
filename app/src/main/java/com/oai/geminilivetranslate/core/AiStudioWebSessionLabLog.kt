@@ -9,7 +9,7 @@ import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-class AiStudioWebSessionLabLog(context: Context) {
+class AiStudioWebSessionLabLog(private val context: Context) {
     private val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
     private val sessionId = "$stamp-${UUID.randomUUID().toString().take(8)}"
     private val dir = File(context.filesDir, "aistudio-web-session-lab/$sessionId").apply { mkdirs() }

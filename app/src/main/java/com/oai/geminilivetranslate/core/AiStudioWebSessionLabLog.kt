@@ -2,6 +2,7 @@ package com.oai.geminilivetranslate.core
 
 import android.content.Context
 import java.io.File
+import java.io.FileInputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,6 +36,13 @@ class AiStudioWebSessionLabLog(private val context: Context) {
 
     companion object {
         private const val ROOT_DIR_NAME = "aistudio-web-session-lab"
+        private const val COPY_BUFFER_BYTES = 64 * 1024
+
+        private data class SnapshotEntry(
+            val file: File,
+            val relativePath: String,
+            val bytesAtSnapshot: Long,
+        )
 
         fun latestSessionDirectory(context: Context): File? {
             val root = File(context.filesDir, ROOT_DIR_NAME)
@@ -50,16 +58,57 @@ class AiStudioWebSessionLabLog(private val context: Context) {
             return zipSessionDirectory(context, latest)
         }
 
+        /**
+         * Creates a point-in-time ZIP even when the active Lab is still appending to events.log.
+         * Each source file is copied only up to the byte length observed before ZIP creation.
+         * This prevents an actively-growing log from keeping the export operation alive forever.
+         */
         private fun zipSessionDirectory(context: Context, sessionDir: File): File {
-            val out = File(context.cacheDir, "AIStudioWebSessionLab-${sessionDir.name}.zip")
-            ZipOutputStream(out.outputStream().buffered()).use { zip ->
-                sessionDir.walkTopDown().filter(File::isFile).forEach { file ->
-                    zip.putNextEntry(ZipEntry(file.relativeTo(sessionDir).invariantSeparatorsPath))
-                    file.inputStream().use { it.copyTo(zip) }
-                    zip.closeEntry()
+            val entries = sessionDir.walkTopDown()
+                .filter(File::isFile)
+                .map { file ->
+                    SnapshotEntry(
+                        file = file,
+                        relativePath = file.relativeTo(sessionDir).invariantSeparatorsPath,
+                        bytesAtSnapshot = file.length().coerceAtLeast(0L),
+                    )
                 }
+                .toList()
+
+            val out = File(context.cacheDir, "AIStudioWebSessionLab-${sessionDir.name}.zip")
+            val temp = File(context.cacheDir, out.name + ".tmp")
+            temp.delete()
+
+            try {
+                ZipOutputStream(temp.outputStream().buffered()).use { zip ->
+                    val buffer = ByteArray(COPY_BUFFER_BYTES)
+                    entries.forEach { entry ->
+                        zip.putNextEntry(ZipEntry(entry.relativePath))
+                        FileInputStream(entry.file).use { input ->
+                            var remaining = entry.bytesAtSnapshot
+                            while (remaining > 0L) {
+                                val requested = minOf(buffer.size.toLong(), remaining).toInt()
+                                val read = input.read(buffer, 0, requested)
+                                if (read < 0) break
+                                zip.write(buffer, 0, read)
+                                remaining -= read.toLong()
+                            }
+                        }
+                        zip.closeEntry()
+                    }
+                }
+                if (out.exists() && !out.delete()) {
+                    error("Không thể thay ZIP cũ: ${out.name}")
+                }
+                if (!temp.renameTo(out)) {
+                    temp.copyTo(out, overwrite = true)
+                    temp.delete()
+                }
+                return out
+            } catch (t: Throwable) {
+                temp.delete()
+                throw t
             }
-            return out
         }
     }
 }

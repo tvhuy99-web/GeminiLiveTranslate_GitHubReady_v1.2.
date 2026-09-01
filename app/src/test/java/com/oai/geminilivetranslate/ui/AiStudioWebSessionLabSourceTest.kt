@@ -47,7 +47,7 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
-    fun latestLogCanBeSharedWithoutOpeningWebView() {
+    fun latestLogCanBeSharedWithoutOpeningWebViewOrBlockingUi() {
         val manifest = source("src/main/AndroidManifest.xml")
         val share = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")
         val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
@@ -56,8 +56,13 @@ class AiStudioWebSessionLabSourceTest {
         assertTrue(share.contains("createLatestBundle"))
         assertTrue(share.contains("Intent.ACTION_SEND"))
         assertTrue(share.contains("Chia sẻ log ZIP gần nhất"))
+        assertTrue(share.contains("Thread({"))
+        assertTrue(share.contains("runOnUiThread"))
         assertFalse(share.contains("import android.webkit.WebView"))
         assertFalse(share.contains("WebView(this"))
         assertTrue(log.contains("latestSessionDirectory"))
+        assertTrue(log.contains("bytesAtSnapshot"))
+        assertTrue(log.contains("remaining = entry.bytesAtSnapshot"))
+        assertTrue(log.contains("while (remaining > 0L)"))
     }
 }

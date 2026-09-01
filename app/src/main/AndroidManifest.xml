@@ -52,6 +52,18 @@
             android:name=".ui.MiniBrowserActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize" />
+
+        <activity
+            android:name=".ui.AiStudioWebSessionLabActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -27,7 +27,7 @@ class AiStudioWebSessionLabSourceTest {
         assertTrue(scripts.contains("GENERATE_START"))
         assertTrue(scripts.contains("GENERATE_RESULT"))
         assertTrue(scripts.contains("MakerSuiteService"))
-        assertTrue(scripts.contains("response.clone"))
+        assertTrue(scripts.contains("resp.clone"))
         assertTrue(scripts.contains("callStack"))
         assertTrue(scripts.contains("headerSummary"))
         assertFalse(scripts.contains("GEMINI_API_KEY"))

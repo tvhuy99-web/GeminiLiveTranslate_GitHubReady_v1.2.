@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Studio Build Executor</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:850px;margin:0 auto;padding:24px;line-height:1.5}code,pre{font-family:ui-monospace,monospace}input,textarea,button{font:inherit;padding:10px;margin:4px 0}input,textarea{width:100%;box-sizing:border-box}pre{white-space:pre-wrap;background:#f3f3f3;padding:12px;border-radius:8px}</style>
+</head>
+<body>
+  <h1>AI Studio Build Executor</h1>
+  <p>Đây chỉ là màn hình tự kiểm tra. APK gọi trực tiếp <code>/api/bridge/*</code>, không cần điều khiển giao diện này.</p>
+  <button id="health">Kiểm tra Health</button>
+  <input id="token" type="password" placeholder="x-bridge-token nếu đã cấu hình BRIDGE_TOKEN" />
+  <input id="model" value="gemini-3.1-flash-live-preview" aria-label="Model" />
+  <textarea id="prompt" rows="4">Chỉ trả lời đúng chuỗi AIS_BUILD_BRIDGE_OK_20260901</textarea>
+  <button id="generate">Generate</button>
+  <button id="stream">Stream</button>
+  <pre id="output" aria-live="polite">Sẵn sàng.</pre>
+<script>
+const out=document.querySelector('#output');
+const headers=()=>({'content-type':'application/json',...(document.querySelector('#token').value?{'x-bridge-token':document.querySelector('#token').value}:{})});
+const body=()=>JSON.stringify({model:document.querySelector('#model').value,prompt:document.querySelector('#prompt').value,request_id:'web_'+Date.now()});
+document.querySelector('#health').onclick=async()=>{const r=await fetch('/api/bridge/health');out.textContent=`HTTP ${r.status}\n${await r.text()}`};
+document.querySelector('#generate').onclick=async()=>{const r=await fetch('/api/bridge/generate',{method:'POST',headers:headers(),body:body()});out.textContent=`HTTP ${r.status}\n${await r.text()}`};
+document.querySelector('#stream').onclick=async()=>{out.textContent='';const r=await fetch('/api/bridge/stream',{method:'POST',headers:headers(),body:body()});const reader=r.body.getReader(),decoder=new TextDecoder();while(true){const {done,value}=await reader.read();if(done)break;out.textContent+=decoder.decode(value,{stream:true})}};
+</script>
+</body>
+</html>

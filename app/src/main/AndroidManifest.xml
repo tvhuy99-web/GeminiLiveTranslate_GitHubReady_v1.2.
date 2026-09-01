@@ -57,6 +57,18 @@
             android:exported="false"
             android:configChanges="orientation|screenSize" />
 
+        <!-- Dedicated accessibility experiment. Kept separate so TalkBack tests do not disturb the original lab or production UI. -->
+        <activity
+            android:name=".ui.AiStudioAccessibilitySendLabActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio TalkBack Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!--
             Experimental launcher kept separate from MainActivity so WebView automation,
             renderer crashes and aggressive diagnostics cannot disturb the production flow.

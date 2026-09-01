@@ -14,12 +14,15 @@ import com.oai.geminilivetranslate.core.AiStudioWebSessionLabLog
 
 /**
  * Accessibility-safe escape hatch for exporting the latest Web Session Lab diagnostics.
- * This activity intentionally contains no WebView, so TalkBack focus cannot be captured by
- * AI Studio while the user is trying to export the ZIP.
+ * ZIP creation runs on a worker thread so the screen never freezes while logs are compressed.
  */
 class AiStudioWebSessionLogShareActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
+    private lateinit var shareButton: Button
     private var autoShareAttempted = false
+
+    @Volatile
+    private var sharing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,14 +49,14 @@ class AiStudioWebSessionLogShareActivity : AppCompatActivity() {
         }, fullWidth())
 
         statusView = TextView(this).apply {
-            text = "Đang chuẩn bị ZIP của phiên thử nghiệm gần nhất..."
+            text = "Sẵn sàng tạo ZIP của phiên thử nghiệm gần nhất."
             textSize = 16f
             setPadding(0, dp(16), 0, dp(16))
             contentDescription = "Trạng thái chuẩn bị nhật ký"
         }
         root.addView(statusView, fullWidth())
 
-        root.addView(Button(this).apply {
+        shareButton = Button(this).apply {
             text = "Chia sẻ log ZIP gần nhất"
             isAllCaps = false
             minHeight = dp(64)
@@ -61,7 +64,8 @@ class AiStudioWebSessionLogShareActivity : AppCompatActivity() {
             isFocusableInTouchMode = true
             contentDescription = "Chia sẻ log ZIP gần nhất"
             setOnClickListener { shareLatestBundle() }
-        }, fullWidth())
+        }
+        root.addView(shareButton, fullWidth())
 
         root.addView(Button(this).apply {
             text = "Đóng"
@@ -75,21 +79,41 @@ class AiStudioWebSessionLogShareActivity : AppCompatActivity() {
     }
 
     private fun shareLatestBundle() {
-        runCatching {
-            val bundle = AiStudioWebSessionLabLog.createLatestBundle(this)
-            val uri = FileProvider.getUriForFile(this, "$packageName.files", bundle)
-            statusView.text = "Đã tạo ${bundle.name}, ${bundle.length()} byte. Đang mở bảng chia sẻ."
+        if (sharing) return
+        sharing = true
+        shareButton.isEnabled = false
+        statusView.text = "Đang tạo ZIP ở luồng nền. Màn hình vẫn có thể thao tác."
 
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                clipData = ClipData.newRawUri("AI Studio Web Session diagnostics", uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        Thread({
+            val result = runCatching { AiStudioWebSessionLabLog.createLatestBundle(applicationContext) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    sharing = false
+                    return@runOnUiThread
+                }
+
+                result.onSuccess { bundle ->
+                    runCatching {
+                        val uri = FileProvider.getUriForFile(this, "$packageName.files", bundle)
+                        statusView.text = "Đã tạo ${bundle.name}, ${bundle.length()} byte. Đang mở bảng chia sẻ."
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/zip"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            clipData = ClipData.newRawUri("AI Studio Web Session diagnostics", uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(send, "Chia sẻ AI Studio Web Session Lab log"))
+                    }.onFailure {
+                        statusView.text = "ZIP đã tạo nhưng không mở được bảng chia sẻ: ${it.message ?: it.javaClass.simpleName}"
+                    }
+                }.onFailure {
+                    statusView.text = "Không tạo được ZIP: ${it.message ?: it.javaClass.simpleName}"
+                }
+
+                sharing = false
+                shareButton.isEnabled = true
             }
-            startActivity(Intent.createChooser(send, "Chia sẻ AI Studio Web Session Lab log"))
-        }.onFailure {
-            statusView.text = "Không tạo được ZIP: ${it.message ?: it.javaClass.simpleName}"
-        }
+        }, "AIStudioWebSessionLogZip").start()
     }
 
     private fun fullWidth() = LinearLayout.LayoutParams(

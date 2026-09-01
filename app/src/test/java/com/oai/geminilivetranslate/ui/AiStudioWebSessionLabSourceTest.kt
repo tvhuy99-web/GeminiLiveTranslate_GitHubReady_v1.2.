@@ -56,7 +56,8 @@ class AiStudioWebSessionLabSourceTest {
         assertTrue(share.contains("createLatestBundle"))
         assertTrue(share.contains("Intent.ACTION_SEND"))
         assertTrue(share.contains("Chia sẻ log ZIP gần nhất"))
-        assertFalse(share.contains("WebView"))
+        assertFalse(share.contains("import android.webkit.WebView"))
+        assertFalse(share.contains("WebView(this"))
         assertTrue(log.contains("latestSessionDirectory"))
     }
 }

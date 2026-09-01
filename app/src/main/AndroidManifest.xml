@@ -54,6 +54,17 @@
             android:configChanges="orientation|screenSize" />
 
         <activity
+            android:name=".ui.AiStudioWebSessionLogShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="Chia sẻ log AI Studio">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".ui.AiStudioWebSessionLabActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"

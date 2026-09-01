@@ -45,4 +45,18 @@ class AiStudioWebSessionLabSourceTest {
         assertFalse(activity.contains("Cloud Run"))
         assertFalse(activity.contains("/api/bridge/generate"))
     }
+
+    @Test
+    fun latestLogCanBeSharedWithoutOpeningWebView() {
+        val manifest = source("src/main/AndroidManifest.xml")
+        val share = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")
+        val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionLogShareActivity"))
+        assertTrue(manifest.contains("Chia sẻ log AI Studio"))
+        assertTrue(share.contains("createLatestBundle"))
+        assertTrue(share.contains("Intent.ACTION_SEND"))
+        assertTrue(share.contains("Chia sẻ log ZIP gần nhất"))
+        assertFalse(share.contains("WebView"))
+        assertTrue(log.contains("latestSessionDirectory"))
+    }
 }

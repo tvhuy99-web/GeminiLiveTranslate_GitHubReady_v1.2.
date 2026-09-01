@@ -52,6 +52,18 @@
             android:name=".ui.MiniBrowserActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize" />
+
+        <!-- Isolated POC: direct HTTPS/SSE client for our own AI Studio Build app. -->
+        <activity
+            android:name=".ui.AiStudioBuildExecutorLabActivity"
+            android:exported="true"
+            android:label="AI Studio Build Executor Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -57,12 +57,12 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11R2SeparatesModelVerificationFromAttachmentAndRequiresStableComposer() {
+    fun r11R2ShellSeparatesModelVerificationFromAttachmentAndRequiresStableComposer() {
         val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11R2Activity.kt")
         val manifest = source("src/main/AndroidManifest.xml")
         assertTrue(activity.contains("2026-09-02-web-session-r11.2-preflight-stable-attachment"))
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR11R2Activity"))
-        assertTrue(manifest.contains("AI Studio Web Session R11.2"))
+        assertTrue(manifest.contains("AI Studio Web Session R11.4"))
         assertTrue(activity.contains("verifySelectedModelWithText"))
         assertTrue(activity.contains("MODEL_PREFLIGHT_MARKER"))
         assertTrue(activity.contains("R11_MODEL_PREFLIGHT_START"))
@@ -88,11 +88,12 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun onlyR11R2ExperimentRemainsOnLauncher() {
+    fun onlyCurrentR11ExperimentRemainsOnLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
         val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
         assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
         assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR11R2Activity\""))
+        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R11.4\""))
         listOf(
             "AiStudioWebSessionR11UnifiedActivity",
             "AiStudioWebSessionR10Activity",

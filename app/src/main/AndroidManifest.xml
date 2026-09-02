@@ -44,18 +44,19 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R12.1 launcher adds a native system Google-account chooser experiment before the proven lab. -->
+        <!-- R13: manual AI Studio Live transport probe. Account-chooser experiment removed. -->
         <activity
-            android:name=".ui.AiStudioWebSessionR12LauncherActivity"
+            android:name=".ui.AiStudioWebSessionR13Activity"
             android:exported="true"
-            android:label="AI Studio Web Session R12.1">
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R13 - Live Probe">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Proven R11.2 shell + R12 Direct Engine, now internal behind the R12.1 launcher. -->
+        <!-- Proven R11.2 shell + R12 Direct Engine remains internal for closed-request regression tests. -->
         <activity
             android:name=".ui.AiStudioWebSessionR11R2Activity"
             android:exported="false"

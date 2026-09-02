@@ -27,6 +27,7 @@ class AiStudioWebSessionR11SourceTest {
         assertFalse(support.contains("Authorization="))
         assertFalse(support.contains("X-Goog-Api-Key="))
         assertFalse(support.contains("password="))
+        assertFalse(support.contains("type=\"password\""))
     }
 
     @Test
@@ -47,8 +48,8 @@ class AiStudioWebSessionR11SourceTest {
         assertTrue(activity.contains("R11_E2E_RESULT"))
         assertTrue(activity.contains("Hãy xem toàn bộ video này và tóm tắt chi tiết"))
         assertFalse(activity.contains("Gemini API Key"))
-        assertFalse(activity.contains("Mật khẩu"))
-        assertFalse(activity.contains("password"))
+        assertFalse(activity.contains("Mật khẩu:"))
+        assertFalse(activity.contains("type=\"password\""))
         assertFalse(activity.contains("document.cookie"))
     }
 

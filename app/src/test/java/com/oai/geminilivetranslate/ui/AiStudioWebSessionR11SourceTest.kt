@@ -30,15 +30,27 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11RequestFixMovesModelSelectionToRequestAndUsesTrustedFileActivation() {
+    fun r11RequestFixHandlesModelTrustedFileAndAttachmentSubmit() {
         val fix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
-        assertTrue(fix.contains("2026-09-02-web-session-r11.1-request-model-trusted-file"))
+        assertTrue(fix.contains("2026-09-02-web-session-r11.3-attachment-submit"))
         assertTrue(fix.contains("R11_GENERATE_MODEL_REWRITE"))
         assertTrue(fix.contains("body.split(original).join(fix.selectedModel)"))
         assertTrue(fix.contains("path:'request-layer'"))
         assertTrue(fix.contains("armTrustedFileChooser"))
         assertTrue(fix.contains("ev.isTrusted !== true"))
         assertTrue(fix.contains("R11_FILE_TRUSTED_ACTIVATION"))
+        assertTrue(fix.contains("R11_ATTACHMENT_FILE_CHANGE"))
+        assertTrue(fix.contains("R11_ATTACHMENT_FILE_READ"))
+        assertTrue(fix.contains("R11_ATTACHMENT_NET_REQUEST"))
+        assertTrue(fix.contains("R11_ATTACHMENT_SEND_CANDIDATES"))
+        assertTrue(fix.contains("R11_ATTACHMENT_SEND_CLICK"))
+        assertTrue(fix.contains("R11_ATTACHMENT_SEND_LISTENER_FALLBACK"))
+        assertTrue(fix.contains("R11_ATTACHMENT_SEND_RESULT"))
+        assertTrue(fix.contains("R11_ATTACHMENT_GENERATE_FALLBACK_START"))
+        assertTrue(fix.contains("attachmentPresent()"))
+        assertTrue(fix.contains("runtime.generate=wrapped"))
+        assertTrue(fix.contains("HTMLElement.prototype.click.call(best.button)"))
+        assertTrue(fix.contains("clickEntries"))
         assertFalse(fix.contains("document.cookie"))
         assertFalse(fix.contains("Authorization="))
         assertFalse(fix.contains("X-Goog-Api-Key="))
@@ -98,7 +110,7 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11R2LoggingHasEnoughMilestonesForDeviceDiagnosis() {
+    fun r11R2AndR11R3LoggingHasEnoughMilestonesForDeviceDiagnosis() {
         val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11R2Activity.kt")
         val support = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Support.kt")
         val fix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
@@ -138,6 +150,16 @@ class AiStudioWebSessionR11SourceTest {
             "R11_GENERATE_MODEL_REWRITE",
             "R11_FILE_ACTIVATION_ARM",
             "R11_FILE_TRUSTED_ACTIVATION",
-        ).forEach { assertTrue("Thiếu R11.1 log $it", fix.contains(it)) }
+            "R11_ATTACHMENT_OBSERVATION_START",
+            "R11_ATTACHMENT_FILE_CHANGE",
+            "R11_ATTACHMENT_FILE_READ",
+            "R11_ATTACHMENT_NET_REQUEST",
+            "R11_ATTACHMENT_NET_RESULT",
+            "R11_ATTACHMENT_GENERATE_ARMED",
+            "R11_ATTACHMENT_GENERATE_FALLBACK_START",
+            "R11_ATTACHMENT_SEND_CANDIDATES",
+            "R11_ATTACHMENT_SEND_CLICK",
+            "R11_ATTACHMENT_SEND_RESULT",
+        ).forEach { assertTrue("Thiếu R11.3 log $it", fix.contains(it)) }
     }
 }

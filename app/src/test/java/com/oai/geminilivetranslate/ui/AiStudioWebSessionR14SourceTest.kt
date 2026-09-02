@@ -57,22 +57,24 @@ class AiStudioWebSessionR14SourceTest {
     }
 
     @Test
-    fun r15ThenR14SummaryArePrioritizedBeforeEventsLogInTextDiagnostics() {
+    fun r16R15R14SummariesArePrioritizedBeforeEventsLog() {
         val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
-        val r15 = log.indexOf("\"r15-final-summary.txt\" -> 0")
-        val r14 = log.indexOf("\"r14-final-summary.txt\" -> 1")
-        val events = log.indexOf("\"events.log\" -> 4")
-        assertTrue(r15 >= 0)
+        val r16 = log.indexOf("\"r16-final-summary.txt\" -> 0")
+        val r15 = log.indexOf("\"r15-final-summary.txt\" -> 1")
+        val r14 = log.indexOf("\"r14-final-summary.txt\" -> 2")
+        val events = log.indexOf("\"events.log\" -> 5")
+        assertTrue(r16 >= 0)
+        assertTrue(r15 > r16)
         assertTrue(r14 > r15)
         assertTrue(events > r14)
         assertTrue(log.contains("MAX_REPORT_CHARS = 600_000"))
     }
 
     @Test
-    fun manifestKeepsR14InternalAfterR15TakesExperimentLauncher() {
+    fun manifestKeepsR14InternalAfterR16TakesExperimentLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
-        assertTrue(manifest.contains(".ui.AiStudioWebSessionR15Activity"))
-        assertTrue(manifest.contains("AI Studio Web Session R15 - Real Source Bridge"))
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR16Activity"))
+        assertTrue(manifest.contains("AI Studio Web Session R16 - Bidirectional Live"))
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR14Activity"))
         assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
         val r14Block = Regex("<activity[^>]*android:name=\\\"\\.ui\\.AiStudioWebSessionR14Activity\\\"[\\s\\S]*?/>")

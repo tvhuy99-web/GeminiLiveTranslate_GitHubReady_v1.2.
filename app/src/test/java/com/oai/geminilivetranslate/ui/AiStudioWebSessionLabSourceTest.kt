@@ -24,14 +24,31 @@ class AiStudioWebSessionLabSourceTest {
     @Test
     fun probeCapturesGenerateNetworkResultWithoutExportingCredentialValues() {
         val scripts = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLabScripts.kt")
+        assertTrue(scripts.contains("2026-09-02-web-session-r2"))
         assertTrue(scripts.contains("GENERATE_START"))
         assertTrue(scripts.contains("GENERATE_RESULT"))
         assertTrue(scripts.contains("MakerSuiteService"))
         assertTrue(scripts.contains("resp.clone"))
         assertTrue(scripts.contains("callStack"))
         assertTrue(scripts.contains("headerSummary"))
+        assertTrue(scripts.contains("responseText:raw.slice(0,16000)"))
         assertFalse(scripts.contains("GEMINI_API_KEY"))
         assertFalse(scripts.contains("asia-southeast1.run.app"))
+    }
+
+    @Test
+    fun xhrCompletionUsesNativeEventListenerAndAllTerminalSignals() {
+        val scripts = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLabScripts.kt")
+        assertTrue(scripts.contains("window.EventTarget.prototype.addEventListener"))
+        assertTrue(scripts.contains("nativeEventAdd.call(target"))
+        assertTrue(scripts.contains("XHR_LIFECYCLE"))
+        assertTrue(scripts.contains("readystatechange"))
+        assertTrue(scripts.contains("loadend"))
+        assertTrue(scripts.contains("timeout"))
+        assertTrue(scripts.contains("arraybuffer"))
+        assertTrue(scripts.contains("TextDecoder('utf-8')"))
+        assertTrue(scripts.contains("xhr.response.text"))
+        assertTrue(scripts.contains("lastXhrLifecycle"))
     }
 
     @Test

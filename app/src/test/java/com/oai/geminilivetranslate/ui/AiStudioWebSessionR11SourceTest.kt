@@ -15,7 +15,6 @@ class AiStudioWebSessionR11SourceTest {
         assertTrue(support.contains("2026-09-02-web-session-r11.0-auth-model-file"))
         assertTrue(support.contains("probeSession"))
         assertTrue(support.contains("discoverModels"))
-        assertTrue(support.contains("openModelPicker"))
         assertTrue(support.contains("selectModel"))
         assertTrue(support.contains("R11_GENERATE_MODEL_OBSERVED"))
         assertTrue(support.contains("markFileChooserServed"))
@@ -31,20 +30,39 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11ActivityUsesNativeShellRealWebAuthAndOneSelectedUri() {
-        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Activity.kt")
+    fun r11RequestFixMovesModelSelectionToRequestAndUsesTrustedFileActivation() {
+        val fix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
+        assertTrue(fix.contains("2026-09-02-web-session-r11.1-request-model-trusted-file"))
+        assertTrue(fix.contains("R11_GENERATE_MODEL_REWRITE"))
+        assertTrue(fix.contains("body.split(original).join(fix.selectedModel)"))
+        assertTrue(fix.contains("path:'request-layer'"))
+        assertTrue(fix.contains("armTrustedFileChooser"))
+        assertTrue(fix.contains("ev.isTrusted !== true"))
+        assertTrue(fix.contains("R11_FILE_TRUSTED_ACTIVATION"))
+        assertFalse(fix.contains("document.cookie"))
+        assertFalse(fix.contains("Authorization="))
+        assertFalse(fix.contains("X-Goog-Api-Key="))
+    }
+
+    @Test
+    fun r11UnifiedActivityUsesOneSelectedUriAndInternalTrustedPulse() {
+        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11UnifiedActivity.kt")
         val manifest = source("src/main/AndroidManifest.xml")
-        assertTrue(manifest.contains(".ui.AiStudioWebSessionR11Activity"))
-        assertTrue(manifest.contains("AI Studio Web Session R11 - Login Model File"))
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR11UnifiedActivity"))
+        assertTrue(manifest.contains("AI Studio Web Session R11"))
         assertTrue(activity.contains("AiStudioWebSessionExecutor"))
         assertTrue(activity.contains("ActivityResultContracts.OpenDocument"))
         assertTrue(activity.contains("takePersistableUriPermission"))
         assertTrue(activity.contains("onShowFileChooser"))
         assertTrue(activity.contains("filePathCallback.onReceiveValue(arrayOf(selected.uri))"))
         assertTrue(activity.contains("AiStudioWebSessionR11Support.DOCUMENT_START"))
-        assertTrue(activity.contains("refreshModels(openPickerIfEmpty = true)"))
+        assertTrue(activity.contains("AiStudioWebSessionR11RequestFix.DOCUMENT_START"))
+        assertTrue(activity.contains("dispatchTrustedFileActivationPulse"))
+        assertTrue(activity.contains("InputDevice.SOURCE_TOUCHSCREEN"))
+        assertTrue(activity.contains("R11_FILE_ACTIVATION_PULSE"))
         assertTrue(activity.contains("selectCurrentModel"))
         assertTrue(activity.contains("attachSelectedFile"))
+        assertTrue(activity.contains("observed == expectedModel && rewriteCount > 0"))
         assertTrue(activity.contains("R11_E2E_RESULT"))
         assertTrue(activity.contains("Hãy xem toàn bộ video này và tóm tắt chi tiết"))
         assertFalse(activity.contains("Gemini API Key"))
@@ -54,9 +72,31 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
+    fun onlyR11ExperimentRemainsOnLauncher() {
+        val manifest = source("src/main/AndroidManifest.xml")
+        val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
+        // Main application + exactly one AI Studio R11 experiment.
+        assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
+        listOf(
+            "AiStudioWebSessionR10Activity",
+            "AiStudioWebSessionR7Activity",
+            "AiStudioWebSessionR6Activity",
+            "AiStudioWebSessionR5Activity",
+            "AiStudioWebSessionR4Activity",
+            "AiStudioWebSessionLabActivity",
+            "AiStudioWebSessionLogShareActivity",
+        ).forEach { activityName ->
+            val block = Regex("<activity[^>]*android:name=\\\"\\.ui\\.$activityName\\\"[\\s\\S]*?/>").find(manifest)?.value.orEmpty()
+            assertTrue("Không tìm thấy block $activityName", block.isNotEmpty())
+            assertFalse("$activityName không được là launcher", block.contains("LAUNCHER"))
+        }
+    }
+
+    @Test
     fun r11LoggingHasEnoughMilestonesForDeviceDiagnosis() {
-        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Activity.kt")
+        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11UnifiedActivity.kt")
         val support = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Support.kt")
+        val fix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
         listOf(
             "R11_ACTIVITY_CREATE",
             "R11_AUTH_PROBE_NATIVE",
@@ -65,6 +105,8 @@ class AiStudioWebSessionR11SourceTest {
             "R11_FILE_SELECTED",
             "R11_FILE_CHOOSER_REQUEST",
             "R11_FILE_CHOOSER_SERVED",
+            "R11_FILE_ACTIVATION_ARM_NATIVE",
+            "R11_FILE_ACTIVATION_PULSE",
             "R11_ATTACH_NATIVE_START",
             "R11_ATTACHMENT_POLL",
             "R11_ATTACHMENT_READY",
@@ -78,8 +120,13 @@ class AiStudioWebSessionR11SourceTest {
             "R11_GENERATE_MODEL_OBSERVED",
             "R11_UPLOAD_START",
             "R11_UPLOAD_COMPLETE",
-            "R11_MODEL_SELECT_RESULT",
-            "R11_ATTACH_TRIGGER",
         ).forEach { assertTrue("Thiếu JS log $it", support.contains(it)) }
+        listOf(
+            "R11_REQUEST_FIX_INSTALLED",
+            "R11_MODEL_SELECT_RESULT",
+            "R11_GENERATE_MODEL_REWRITE",
+            "R11_FILE_ACTIVATION_ARM",
+            "R11_FILE_TRUSTED_ACTIVATION",
+        ).forEach { assertTrue("Thiếu R11.1 log $it", fix.contains(it)) }
     }
 }

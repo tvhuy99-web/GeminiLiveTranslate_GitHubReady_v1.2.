@@ -25,9 +25,9 @@ class AiStudioWebSessionR10SourceTest {
     }
 
     @Test
-    fun r91UsesCumulativeSupportScoringAndHighConfidenceControllerGate() {
+    fun r92UsesCumulativeSupportScoringHighConfidenceGateAndValidSortCallback() {
         val runtime = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionAdaptiveRuntime.kt")
-        assertTrue(runtime.contains("2026-09-02-web-session-r9.1-adaptive-runtime"))
+        assertTrue(runtime.contains("2026-09-02-web-session-r9.2-adaptive-runtime"))
         assertTrue(runtime.contains("groupFor(target)"))
         assertTrue(runtime.contains("candidateScore(group)"))
         assertTrue(runtime.contains("readyCandidates()"))
@@ -40,6 +40,8 @@ class AiStudioWebSessionR10SourceTest {
         assertFalse(runtime.contains("else if(entry.target===document)"))
         assertTrue(runtime.contains("supportCounts"))
         assertTrue(runtime.contains("supportClass"))
+        assertTrue(runtime.contains(".sort(function(a,b){return b.score-a.score;})"))
+        assertFalse(runtime.contains("function(a,b)=>"))
         assertTrue(runtime.contains("R9_DISCOVERY_PLAN"))
         assertTrue(runtime.contains("R9_CANDIDATE_ATTEMPT"))
         assertTrue(runtime.contains("R9_HANDLER_SUCCESS"))

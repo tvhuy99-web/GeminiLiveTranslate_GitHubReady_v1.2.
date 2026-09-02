@@ -47,22 +47,28 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
-    fun latestLogCanBeSharedWithoutOpeningWebViewOrBlockingUi() {
+    fun latestLogIsShownOnScreenAndCopiedWithoutZipOrShareSheet() {
         val manifest = source("src/main/AndroidManifest.xml")
-        val share = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")
+        val viewer = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")
         val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
+
         assertTrue(manifest.contains(".ui.AiStudioWebSessionLogShareActivity"))
-        assertTrue(manifest.contains("Chia sẻ log AI Studio"))
-        assertTrue(share.contains("createLatestBundle"))
-        assertTrue(share.contains("Intent.ACTION_SEND"))
-        assertTrue(share.contains("Chia sẻ log ZIP gần nhất"))
-        assertTrue(share.contains("Thread({"))
-        assertTrue(share.contains("runOnUiThread"))
-        assertFalse(share.contains("import android.webkit.WebView"))
-        assertFalse(share.contains("WebView(this"))
-        assertTrue(log.contains("latestSessionDirectory"))
-        assertTrue(log.contains("bytesAtSnapshot"))
-        assertTrue(log.contains("remaining = entry.bytesAtSnapshot"))
-        assertTrue(log.contains("while (remaining > 0L)"))
+        assertTrue(manifest.contains("Nhật ký AI Studio"))
+        assertTrue(viewer.contains("createLatestTextReport"))
+        assertTrue(viewer.contains("reportView.text = text"))
+        assertTrue(viewer.contains("Sao chép toàn bộ"))
+        assertTrue(viewer.contains("ClipboardManager"))
+        assertTrue(viewer.contains("setPrimaryClip"))
+        assertTrue(viewer.contains("Thread({"))
+        assertTrue(viewer.contains("runOnUiThread"))
+        assertFalse(viewer.contains("Intent.ACTION_SEND"))
+        assertFalse(viewer.contains("FileProvider"))
+        assertFalse(viewer.contains("createLatestBundle"))
+        assertFalse(viewer.contains("import android.webkit.WebView"))
+
+        assertTrue(log.contains("createLatestTextReport"))
+        assertTrue(log.contains("MAX_REPORT_CHARS"))
+        assertTrue(log.contains("readTailAtSnapshot"))
+        assertTrue(log.contains("snapshotBytes"))
     }
 }

@@ -48,11 +48,16 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
         assertTrue(src.contains("tryProgrammaticAttachmentSubmitRecovery"))
         assertTrue(src.contains("R11_SUBMIT_RECOVERY_DISPATCH"))
         assertTrue(src.contains("R11_SUBMIT_RECOVERY_RESULT"))
+
+        val recoveryMethodIndex = src.indexOf("private fun tryAttachmentSubmitRecovery")
+        val trustedTapIndex = src.indexOf("dispatchTrustedWebViewTap(", recoveryMethodIndex)
+        val fallbackCallIndex = src.indexOf("tryProgrammaticAttachmentSubmitRecovery(requestSeq)", trustedTapIndex)
         val handlerFinalIndex = src.indexOf("\"R9_HANDLER_FINAL\"")
-        val trustedRecoveryIndex = src.indexOf("tryAttachmentSubmitRecovery(p.seq)", handlerFinalIndex)
-        val programmaticIndex = src.indexOf("tryProgrammaticAttachmentSubmitRecovery", trustedRecoveryIndex)
+        val handlerRecoveryIndex = src.indexOf("tryAttachmentSubmitRecovery(p.seq)", handlerFinalIndex)
+        assertTrue(recoveryMethodIndex >= 0)
+        assertTrue(trustedTapIndex > recoveryMethodIndex)
+        assertTrue(fallbackCallIndex > trustedTapIndex)
         assertTrue(handlerFinalIndex >= 0)
-        assertTrue(trustedRecoveryIndex > handlerFinalIndex)
-        assertTrue(programmaticIndex > trustedRecoveryIndex)
+        assertTrue(handlerRecoveryIndex > handlerFinalIndex)
     }
 }

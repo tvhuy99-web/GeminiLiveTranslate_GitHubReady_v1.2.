@@ -95,6 +95,39 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
+    fun r5InvokesCapturedAiStudioKeydownHandlerDirectlyWithoutKeyboardDispatchOrTouch() {
+        val manifest = source("src/main/AndroidManifest.xml")
+        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR5Activity.kt")
+        val capture = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR5HandlerCapture.kt")
+
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR5Activity"))
+        assertTrue(manifest.contains("AI Studio Web Session R5 - Trực tiếp handler"))
+        assertTrue(activity.contains("2026-09-02-web-session-r5"))
+        assertTrue(activity.contains("AiStudioWebSessionR5HandlerCapture.DOCUMENT_START"))
+        assertTrue(activity.contains("invokeDirect"))
+        assertTrue(activity.contains("R5_HANDLER_SUCCESS"))
+        assertTrue(activity.contains("R5_REASSEMBLED_RESULT"))
+        assertTrue(activity.contains("getLastSafeResponse"))
+        assertTrue(capture.contains("2026-09-02-web-session-r5-handler-capture"))
+        assertTrue(capture.contains("window.EventTarget.prototype.addEventListener = function"))
+        assertTrue(capture.contains("invokeListener(entry,event)"))
+        assertTrue(capture.contains("listener.call(entry.target,event)"))
+        assertTrue(capture.contains("keyboardDispatchUsed:false"))
+        assertTrue(capture.contains("eventIsTrusted:!!event.isTrusted"))
+        assertFalse(capture.contains("ctrl-enter-event"))
+        assertFalse(capture.contains("el.dispatchEvent(down)"))
+        assertFalse(activity.contains("import android.view.MotionEvent"))
+        assertFalse(activity.contains("dispatchTouchEvent"))
+        assertFalse(activity.contains("runCandidates"))
+        assertFalse(activity.contains("GEMINI_API_KEY"))
+        assertFalse(activity.contains("Authorization="))
+        assertFalse(activity.contains("X-Goog-Api-Key="))
+        assertFalse(capture.contains("GEMINI_API_KEY"))
+        assertFalse(capture.contains("Authorization="))
+        assertFalse(capture.contains("X-Goog-Api-Key="))
+    }
+
+    @Test
     fun latestLogIsShownOnScreenAndCopiedWithoutZipOrShareSheet() {
         val manifest = source("src/main/AndroidManifest.xml")
         val viewer = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")

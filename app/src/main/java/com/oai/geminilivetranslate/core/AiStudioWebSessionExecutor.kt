@@ -35,7 +35,9 @@ import org.json.JSONTokener
  *
  * R10.2 adds one attachment-only recovery hook: if the proven text handler route reaches
  * R9_HANDLER_FINAL, Android asks the R11.4 composer-aware submit runtime to press the submit control
- * that belongs to the active prompt+attachment composer before declaring failure.
+ * that belongs to the active prompt+attachment composer before declaring failure. A document-start
+ * guard also marks the broad R11.3 Send/Run fallback as superseded, so it cannot click an unrelated
+ * control before the composer-aware recovery runs.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
@@ -358,6 +360,7 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionHttpStatusGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionResponseCore.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, R11_BROAD_FALLBACK_GUARD, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
             setState(State.ERROR, "DOCUMENT_START_SCRIPT unsupported")
@@ -399,5 +402,6 @@ class AiStudioWebSessionExecutor(
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
         private const val ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS = 850L
+        private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

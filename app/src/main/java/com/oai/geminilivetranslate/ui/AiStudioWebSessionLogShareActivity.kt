@@ -1,126 +1,157 @@
 package com.oai.geminilivetranslate.ui
 
 import android.content.ClipData
-import android.content.Intent
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.FileProvider
 import com.oai.geminilivetranslate.core.AiStudioWebSessionLabLog
 
 /**
- * Accessibility-safe escape hatch for exporting the latest Web Session Lab diagnostics.
- * ZIP creation runs on a worker thread so the screen never freezes while logs are compressed.
+ * Simple diagnostics viewer for the latest Web Session Lab session.
+ * No WebView, ZIP creation or Android share sheet is required. The latest bounded text report is
+ * loaded on a worker thread, rendered directly on screen and can be copied to the clipboard.
  */
 class AiStudioWebSessionLogShareActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
-    private lateinit var shareButton: Button
-    private var autoShareAttempted = false
+    private lateinit var reportView: TextView
+    private lateinit var copyButton: Button
+    private lateinit var refreshButton: Button
 
     @Volatile
-    private var sharing = false
+    private var loading = false
+    private var reportText = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        statusView.postDelayed({
-            if (!isFinishing && !autoShareAttempted) {
-                autoShareAttempted = true
-                shareLatestBundle()
-            }
-        }, 350)
+        loadLatestReport()
     }
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
+            setPadding(dp(16), dp(16), dp(16), dp(16))
         }
 
         root.addView(TextView(this).apply {
-            text = "Chia sẻ nhật ký AI Studio Web Session"
+            text = "Nhật ký AI Studio Web Session"
             textSize = 20f
-            contentDescription = "Chia sẻ nhật ký AI Studio Web Session"
+            contentDescription = "Nhật ký AI Studio Web Session"
         }, fullWidth())
 
         statusView = TextView(this).apply {
-            text = "Sẵn sàng tạo ZIP của phiên thử nghiệm gần nhất."
-            textSize = 16f
-            setPadding(0, dp(16), 0, dp(16))
-            contentDescription = "Trạng thái chuẩn bị nhật ký"
+            text = "Đang đọc nhật ký gần nhất..."
+            textSize = 15f
+            setPadding(0, dp(10), 0, dp(10))
+            contentDescription = "Trạng thái đọc nhật ký"
         }
         root.addView(statusView, fullWidth())
 
-        shareButton = Button(this).apply {
-            text = "Chia sẻ log ZIP gần nhất"
+        copyButton = Button(this).apply {
+            text = "Sao chép toàn bộ"
             isAllCaps = false
-            minHeight = dp(64)
-            isFocusable = true
-            isFocusableInTouchMode = true
-            contentDescription = "Chia sẻ log ZIP gần nhất"
-            setOnClickListener { shareLatestBundle() }
+            minHeight = dp(60)
+            isEnabled = false
+            contentDescription = "Sao chép toàn bộ nhật ký vào bộ nhớ tạm"
+            setOnClickListener { copyReportToClipboard() }
         }
-        root.addView(shareButton, fullWidth())
+        root.addView(copyButton, fullWidth())
+
+        refreshButton = Button(this).apply {
+            text = "Làm mới nhật ký"
+            isAllCaps = false
+            minHeight = dp(56)
+            contentDescription = "Đọc lại nhật ký gần nhất"
+            setOnClickListener { loadLatestReport() }
+        }
+        root.addView(refreshButton, fullWidth())
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            contentDescription = "Nội dung nhật ký AI Studio"
+        }
+        reportView = TextView(this).apply {
+            text = "Đang tải..."
+            textSize = 12f
+            setTextIsSelectable(true)
+            setPadding(dp(8), dp(8), dp(8), dp(24))
+            contentDescription = "Nội dung nhật ký AI Studio có thể chọn và sao chép"
+        }
+        scroll.addView(reportView, fullWidth())
+        root.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f,
+        ))
 
         root.addView(Button(this).apply {
             text = "Đóng"
             isAllCaps = false
             minHeight = dp(56)
-            contentDescription = "Đóng màn hình chia sẻ nhật ký"
+            contentDescription = "Đóng màn hình nhật ký"
             setOnClickListener { finish() }
         }, fullWidth())
 
         setContentView(root)
     }
 
-    private fun shareLatestBundle() {
-        if (sharing) return
-        sharing = true
-        shareButton.isEnabled = false
-        statusView.text = "Đang tạo ZIP ở luồng nền. Màn hình vẫn có thể thao tác."
+    private fun loadLatestReport() {
+        if (loading) return
+        loading = true
+        copyButton.isEnabled = false
+        refreshButton.isEnabled = false
+        statusView.text = "Đang đọc nhật ký gần nhất ở luồng nền..."
 
         Thread({
-            val result = runCatching { AiStudioWebSessionLabLog.createLatestBundle(applicationContext) }
+            val result = runCatching { AiStudioWebSessionLabLog.createLatestTextReport(applicationContext) }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
-                    sharing = false
+                    loading = false
                     return@runOnUiThread
                 }
 
-                result.onSuccess { bundle ->
-                    runCatching {
-                        val uri = FileProvider.getUriForFile(this, "$packageName.files", bundle)
-                        statusView.text = "Đã tạo ${bundle.name}, ${bundle.length()} byte. Đang mở bảng chia sẻ."
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/zip"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            clipData = ClipData.newRawUri("AI Studio Web Session diagnostics", uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        startActivity(Intent.createChooser(send, "Chia sẻ AI Studio Web Session Lab log"))
-                    }.onFailure {
-                        statusView.text = "ZIP đã tạo nhưng không mở được bảng chia sẻ: ${it.message ?: it.javaClass.simpleName}"
-                    }
+                result.onSuccess { text ->
+                    reportText = text
+                    reportView.text = text
+                    statusView.text = "Đã tải ${text.length} ký tự. Có thể đọc trực tiếp hoặc bấm Sao chép toàn bộ."
+                    copyButton.isEnabled = text.isNotBlank()
                 }.onFailure {
-                    statusView.text = "Không tạo được ZIP: ${it.message ?: it.javaClass.simpleName}"
+                    reportText = ""
+                    reportView.text = "Không đọc được nhật ký: ${it.message ?: it.javaClass.simpleName}"
+                    statusView.text = "Không đọc được nhật ký gần nhất."
+                    copyButton.isEnabled = false
                 }
 
-                sharing = false
-                shareButton.isEnabled = true
+                refreshButton.isEnabled = true
+                loading = false
             }
-        }, "AIStudioWebSessionLogZip").start()
+        }, "AIStudioWebSessionTextReport").start()
+    }
+
+    private fun copyReportToClipboard() {
+        val text = reportText
+        if (text.isBlank()) {
+            statusView.text = "Chưa có nội dung để sao chép."
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("AI Studio Web Session diagnostics", text))
+        statusView.text = "Đã sao chép ${text.length} ký tự vào bộ nhớ tạm."
     }
 
     private fun fullWidth() = LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
         ViewGroup.LayoutParams.WRAP_CONTENT,
     ).apply {
-        topMargin = dp(8)
+        topMargin = dp(6)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()

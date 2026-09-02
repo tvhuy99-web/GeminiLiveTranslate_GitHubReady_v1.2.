@@ -44,12 +44,12 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R13: manual AI Studio Live transport probe. Account-chooser experiment removed. -->
+        <!-- R13.2: deep AI Studio Live WebChannel/audio probe. Account chooser experiment removed. -->
         <activity
             android:name=".ui.AiStudioWebSessionR13Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R13 - Live Probe">
+            android:label="AI Studio Web Session R13.2 - Deep Live Probe">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

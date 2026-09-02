@@ -1,7 +1,7 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionLabScripts {
-    const val VERSION = "2026-09-02-web-session-r2"
+    const val VERSION = "2026-09-02-web-session-r3"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -18,6 +18,7 @@ object AiStudioWebSessionLabScripts {
             expectedMarker: '',
             captureCount: 0,
             lastResult: null,
+            lastProgress: null,
             lastCallStack: '',
             lastXhrLifecycle: null
           };
@@ -74,23 +75,45 @@ object AiStudioWebSessionLabScripts {
             });
           }
 
-          function recordResult(source,status,ok,text,responseType,contentType) {
+          function resultPayload(source,status,ok,text,responseType,contentType,phase,partial) {
             const raw = String(text || '');
             const marker = state.expectedMarker;
             const markerFound = !!marker && raw.indexOf(marker) >= 0;
-            state.lastResult = {
+            return {
               source:source,
               status:Number(status),
               ok:!!ok,
               responseChars:raw.length,
               responseType:String(responseType||''),
               contentType:String(contentType||''),
+              phase:String(phase||''),
+              partial:!!partial,
               marker:marker,
               markerFound:markerFound,
               responseText:raw.slice(0,16000),
               at:Date.now()
             };
+          }
+
+          function recordResult(source,status,ok,text,responseType,contentType,phase,partial) {
+            state.lastResult = resultPayload(source,status,ok,text,responseType,contentType,phase,partial);
             emit('GENERATE_RESULT', state.lastResult);
+          }
+
+          function recordProgress(source,status,text,responseType,contentType,phase) {
+            const payload = resultPayload(source,status,status>=200&&status<300,text,responseType,contentType,phase,true);
+            state.lastProgress = payload;
+            emit('GENERATE_PROGRESS', {
+              source:payload.source,
+              status:payload.status,
+              responseChars:payload.responseChars,
+              responseType:payload.responseType,
+              contentType:payload.contentType,
+              phase:payload.phase,
+              markerFound:payload.markerFound,
+              at:payload.at
+            });
+            return payload;
           }
 
           function xhrContentType(xhr) {
@@ -98,43 +121,46 @@ object AiStudioWebSessionLabScripts {
             catch (_) { return ''; }
           }
 
-          function xhrResponseText(xhr, done) {
-            const type = String(xhr.responseType || '');
+          function xhrTextNow(xhr) {
+            let type = '';
+            try { type = String(xhr.responseType || ''); } catch (_) {}
             try {
               if (type === '' || type === 'text') {
-                let text = '';
-                try { text = typeof xhr.responseText === 'string' ? xhr.responseText : ''; } catch (_) {}
-                done(text, type);
-                return;
+                return {text:typeof xhr.responseText === 'string' ? xhr.responseText : '',type:type};
               }
               if (type === 'json') {
                 let text = '';
                 try { text = JSON.stringify(xhr.response); } catch (_) {}
-                done(text, type);
-                return;
+                return {text:text,type:type};
               }
               if (type === 'arraybuffer') {
                 let text = '';
                 try {
                   if (xhr.response) text = new TextDecoder('utf-8').decode(new Uint8Array(xhr.response));
                 } catch (_) {}
-                done(text, type);
-                return;
-              }
-              if (type === 'blob' && xhr.response) {
-                try {
-                  if (typeof xhr.response.text === 'function') {
-                    xhr.response.text().then((text) => done(String(text||''), type)).catch(() => done('', type));
-                    return;
-                  }
-                } catch (_) {}
+                return {text:text,type:type};
               }
               let fallback = '';
-              try { fallback = typeof xhr.response === 'string' ? xhr.response : JSON.stringify(xhr.response); } catch (_) {}
-              done(String(fallback || ''), type);
+              try { fallback = typeof xhr.response === 'string' ? xhr.response : ''; } catch (_) {}
+              return {text:String(fallback || ''),type:type};
             } catch (_) {
-              done('', type);
+              return {text:'',type:type};
             }
+          }
+
+          function xhrResponseText(xhr, done) {
+            const immediate = xhrTextNow(xhr);
+            if (immediate.text || immediate.type !== 'blob') {
+              done(immediate.text, immediate.type);
+              return;
+            }
+            try {
+              if (xhr.response && typeof xhr.response.text === 'function') {
+                xhr.response.text().then((text) => done(String(text||''), 'blob')).catch(() => done('', 'blob'));
+                return;
+              }
+            } catch (_) {}
+            done('', immediate.type);
           }
 
           function attachNativeListener(target, name, listener) {
@@ -165,10 +191,10 @@ object AiStudioWebSessionLabScripts {
                 promise.then((resp) => {
                   try {
                     const clone = resp.clone();
-                    clone.text().then((text) => recordResult('fetch',resp.status,resp.ok,text,'fetch',resp.headers.get('content-type')||''))
-                      .catch(() => recordResult('fetch',resp.status,resp.ok,'','fetch',resp.headers.get('content-type')||''));
-                  } catch (_) { recordResult('fetch',resp.status,resp.ok,'','fetch',''); }
-                }).catch(() => recordResult('fetch',-1,false,'','fetch',''));
+                    clone.text().then((text) => recordResult('fetch',resp.status,resp.ok,text,'fetch',resp.headers.get('content-type')||'','fetch-complete',false))
+                      .catch(() => recordResult('fetch',resp.status,resp.ok,'','fetch',resp.headers.get('content-type')||'','fetch-read-error',true));
+                  } catch (_) { recordResult('fetch',resp.status,resp.ok,'','fetch','','fetch-clone-error',true); }
+                }).catch(() => recordResult('fetch',-1,false,'','fetch','','fetch-rejected',true));
               }
               return promise;
             };
@@ -185,7 +211,12 @@ object AiStudioWebSessionLabScripts {
                 url:String(url||''),
                 headerSummary:[],
                 resultRecorded:false,
-                listenersAttached:false
+                listenersAttached:false,
+                bestText:'',
+                bestStatus:-1,
+                bestResponseType:'',
+                bestContentType:'',
+                progressCount:0
               };
               return nativeOpen.apply(this,arguments);
             };
@@ -197,7 +228,10 @@ object AiStudioWebSessionLabScripts {
             };
             NativeXHR.prototype.send = function(body) {
               const xhr = this;
-              const m = xhr.__aisWsMeta || {method:'POST',url:'',headerSummary:[],resultRecorded:false,listenersAttached:false};
+              const m = xhr.__aisWsMeta || {
+                method:'POST',url:'',headerSummary:[],resultRecorded:false,listenersAttached:false,
+                bestText:'',bestStatus:-1,bestResponseType:'',bestContentType:'',progressCount:0
+              };
               if (isGenerateUrl(m.url)) {
                 state.captureCount += 1;
                 state.lastCallStack = safeStack();
@@ -216,25 +250,81 @@ object AiStudioWebSessionLabScripts {
                   try { responseType = String(xhr.responseType || ''); } catch (_) {}
                   state.lastXhrLifecycle = {event:eventName,status:status,readyState:readyState,responseType:responseType,at:Date.now()};
                   emit('XHR_LIFECYCLE', state.lastXhrLifecycle);
+                  return {status:status,readyState:readyState,responseType:responseType};
+                };
+
+                const captureStreaming = function(eventName, info) {
+                  if (m.resultRecorded) return;
+                  const rs = info ? info.readyState : Number(xhr.readyState || 0);
+                  const status = info ? info.status : Number(xhr.status || -1);
+                  if (rs !== 3 || status < 200 || status >= 300) return;
+                  const snapshot = xhrTextNow(xhr);
+                  const text = String(snapshot.text || '');
+                  if (!text || text.length < String(m.bestText || '').length) return;
+                  m.bestText = text;
+                  m.bestStatus = status;
+                  m.bestResponseType = snapshot.type;
+                  m.bestContentType = xhrContentType(xhr);
+                  m.progressCount += 1;
+                  const progress = recordProgress('xhr',status,text,snapshot.type,m.bestContentType,eventName+'-rs3');
+                  if (progress.markerFound) {
+                    m.resultRecorded = true;
+                    recordResult('xhr',status,true,text,snapshot.type,m.bestContentType,'stream-marker',false);
+                  }
                 };
 
                 const finish = function(eventName) {
-                  lifecycle(eventName);
+                  const info = lifecycle(eventName);
+                  captureStreaming(eventName, info);
                   if (m.resultRecorded) return;
-                  let readyState = -1;
-                  try { readyState = Number(xhr.readyState); } catch (_) {}
-                  if (eventName === 'readystatechange' && readyState !== 4) return;
+
+                  if (eventName === 'readystatechange') {
+                    if (info.readyState === 3) return;
+                    if (info.readyState === 0) {
+                      if (m.bestText) {
+                        m.resultRecorded = true;
+                        recordResult(
+                          'xhr',
+                          m.bestStatus,
+                          m.bestStatus>=200&&m.bestStatus<300,
+                          m.bestText,
+                          m.bestResponseType,
+                          m.bestContentType,
+                          'reset-after-stream',
+                          true
+                        );
+                      }
+                      return;
+                    }
+                    if (info.readyState !== 4) return;
+                  }
+
                   m.resultRecorded = true;
                   xhrResponseText(xhr, function(text, responseType) {
                     let status = -1;
                     try { status = Number(xhr.status); } catch (_) {}
-                    recordResult('xhr',status,status>=200&&status<300,text,responseType,xhrContentType(xhr));
+                    const finalText = String(text || '') || String(m.bestText || '');
+                    const finalStatus = status > 0 ? status : m.bestStatus;
+                    recordResult(
+                      'xhr',
+                      finalStatus,
+                      finalStatus>=200&&finalStatus<300,
+                      finalText,
+                      responseType || m.bestResponseType,
+                      xhrContentType(xhr) || m.bestContentType,
+                      eventName,
+                      eventName === 'error' || eventName === 'abort' || eventName === 'timeout'
+                    );
                   });
                 };
 
                 if (!m.listenersAttached) {
                   m.listenersAttached = true;
                   attachNativeListener(xhr,'readystatechange',function(){ finish('readystatechange'); });
+                  attachNativeListener(xhr,'progress',function(){
+                    const info = lifecycle('progress');
+                    captureStreaming('progress', info);
+                  });
                   attachNativeListener(xhr,'load',function(){ finish('load'); });
                   attachNativeListener(xhr,'loadend',function(){ finish('loadend'); });
                   attachNativeListener(xhr,'error',function(){ finish('error'); });
@@ -292,6 +382,7 @@ object AiStudioWebSessionLabScripts {
           state.prepareTrustedSend = function(prompt,marker) {
             state.expectedMarker=String(marker||'');
             state.lastResult=null;
+            state.lastProgress=null;
             state.lastXhrLifecycle=null;
             const prompts=promptCandidates();
             if(!prompts.length) return {ok:false,error:'prompt-not-found'};
@@ -310,12 +401,15 @@ object AiStudioWebSessionLabScripts {
               readyState:document.readyState,
               captureCount:state.captureCount,
               lastResult:state.lastResult,
+              lastProgress:state.lastProgress,
               lastCallStack:state.lastCallStack,
               lastXhrLifecycle:state.lastXhrLifecycle
             };
           };
 
-          state.getLastSafeResponse = function() { return state.lastResult || {ok:false,error:'no-result',lastXhrLifecycle:state.lastXhrLifecycle}; };
+          state.getLastSafeResponse = function() {
+            return state.lastResult || state.lastProgress || {ok:false,error:'no-result',lastXhrLifecycle:state.lastXhrLifecycle};
+          };
           window.__AIS_WEB_SESSION__=state;
           emit('DOCUMENT_START_INSTALLED',{version:state.version,href:location.href});
         })();

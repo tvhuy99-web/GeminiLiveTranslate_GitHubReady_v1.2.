@@ -9,9 +9,10 @@ package com.oai.geminilivetranslate.ui
  * R9.1 fixes a device-found regression: ancestor/document/body support handlers now receive
  * cumulative relationship scores, matching the proven R7 behavior. READY candidates are also
  * restricted to connected prompt-like targets that own both input and keydown handlers.
+ * R9.2 fixes the embedded JavaScript sort callback syntax and is protected by node --check in CI.
  */
 object AiStudioWebSessionAdaptiveRuntime {
-    const val VERSION = "2026-09-02-web-session-r9.1-adaptive-runtime"
+    const val VERSION = "2026-09-02-web-session-r9.2-adaptive-runtime"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -149,7 +150,7 @@ object AiStudioWebSessionAdaptiveRuntime {
           function candidates() {
             return groups.map(function(g){return {group:g,score:candidateScore(g),meta:targetMeta(g.target)};})
               .filter(function(x){return x.score>-50000;})
-              .sort(function(a,b)=>b.score-a.score);
+              .sort(function(a,b){return b.score-a.score;});
           }
 
           function readyCandidates() {

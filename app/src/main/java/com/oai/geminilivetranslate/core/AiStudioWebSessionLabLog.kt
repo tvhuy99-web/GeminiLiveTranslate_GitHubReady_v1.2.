@@ -3,6 +3,7 @@ package com.oai.geminilivetranslate.core
 import android.content.Context
 import java.io.File
 import java.io.FileInputStream
+import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,6 +38,9 @@ class AiStudioWebSessionLabLog(private val context: Context) {
     companion object {
         private const val ROOT_DIR_NAME = "aistudio-web-session-lab"
         private const val COPY_BUFFER_BYTES = 64 * 1024
+        private const val MAX_REPORT_CHARS = 600_000
+        private const val MAX_EVENTS_CHARS = 360_000
+        private const val MAX_OTHER_FILE_CHARS = 100_000
 
         private data class SnapshotEntry(
             val file: File,
@@ -56,6 +60,80 @@ class AiStudioWebSessionLabLog(private val context: Context) {
             val latest = latestSessionDirectory(context)
                 ?: error("Chưa có phiên nhật ký AI Studio Web Session nào")
             return zipSessionDirectory(context, latest)
+        }
+
+        /**
+         * Builds a bounded plain-text diagnostic report for direct on-screen display and clipboard
+         * copy. It never waits for an actively-growing events.log to stop growing: every source
+         * file is read only up to the byte length observed when that file is opened.
+         */
+        fun createLatestTextReport(context: Context): String {
+            val latest = latestSessionDirectory(context)
+                ?: error("Chưa có phiên nhật ký AI Studio Web Session nào")
+
+            val files = latest.listFiles()
+                ?.filter { it.isFile }
+                .orEmpty()
+                .sortedWith(compareBy<File>({ reportPriority(it.name) }, { it.name }))
+
+            return buildString {
+                appendLine("AI STUDIO WEB SESSION DIAGNOSTICS")
+                appendLine("session=${latest.name}")
+                appendLine("files=${files.size}")
+                appendLine("reportLimitChars=$MAX_REPORT_CHARS")
+                appendLine()
+
+                files.forEach { file ->
+                    if (length >= MAX_REPORT_CHARS) return@forEach
+                    val remaining = MAX_REPORT_CHARS - length
+                    val perFileLimit = when (file.name) {
+                        "events.log" -> minOf(MAX_EVENTS_CHARS, remaining)
+                        else -> minOf(MAX_OTHER_FILE_CHARS, remaining)
+                    }
+                    if (perFileLimit <= 0) return@forEach
+
+                    appendLine("===== ${file.name} =====")
+                    val snapshotBytes = file.length().coerceAtLeast(0L)
+                    appendLine("snapshotBytes=$snapshotBytes")
+                    append(readTailAtSnapshot(file, snapshotBytes, perFileLimit))
+                    if (!endsWith('\n')) appendLine()
+                    appendLine()
+                }
+
+                if (length >= MAX_REPORT_CHARS) {
+                    appendLine("[REPORT TRUNCATED AT $MAX_REPORT_CHARS CHARACTERS]")
+                }
+            }.take(MAX_REPORT_CHARS)
+        }
+
+        private fun reportPriority(name: String): Int = when (name) {
+            "last-generate-call-stack.txt" -> 0
+            "android-summary.txt" -> 1
+            "events.log" -> 2
+            else -> 10
+        }
+
+        private fun readTailAtSnapshot(file: File, snapshotBytes: Long, maxChars: Int): String {
+            if (snapshotBytes <= 0L || maxChars <= 0) return ""
+            val maxBytes = minOf(snapshotBytes, maxChars.toLong() * 3L)
+            val start = (snapshotBytes - maxBytes).coerceAtLeast(0L)
+            val bytes = ByteArray(maxBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+
+            val read = RandomAccessFile(file, "r").use { input ->
+                input.seek(start)
+                var offset = 0
+                var remaining = bytes.size
+                while (remaining > 0) {
+                    val count = input.read(bytes, offset, remaining)
+                    if (count < 0) break
+                    offset += count
+                    remaining -= count
+                }
+                offset
+            }
+
+            val prefix = if (start > 0L) "[... ${start} earlier bytes omitted ...]\n" else ""
+            return (prefix + bytes.copyOf(read).toString(Charsets.UTF_8)).takeLast(maxChars)
         }
 
         /**

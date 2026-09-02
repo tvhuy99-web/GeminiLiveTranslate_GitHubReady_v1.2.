@@ -430,7 +430,7 @@ class AiStudioWebSessionR16Activity : AppCompatActivity(), AiStudioWebSessionExe
         const val VERSION = "2026-09-03-web-session-r16.0-bidirectional-live"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_NEW_CHAT = "https://aistudio.google.com/prompts/new_chat"
-        private const val FILE_SOURCE_LEAD_MS = 80L
+        private const val FILE_SOURCE_LEAD_MS = 80
         private const val NOISY_INITIAL_KEEP = 3
         private const val NOISY_SAMPLE_EVERY = 100
         private const val NOISY_DETAIL_CHARS = 3_500

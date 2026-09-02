@@ -44,17 +44,24 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R15: continuous real application AudioSource -> authenticated AI Studio Live bridge. -->
+        <!-- R16: bidirectional BrowserChannel output decoding + proven R15 input bridge. -->
         <activity
-            android:name=".ui.AiStudioWebSessionR15Activity"
+            android:name=".ui.AiStudioWebSessionR16Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R15 - Real Source Bridge">
+            android:label="AI Studio Web Session R16 - Bidirectional Live">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- R15 continuous real-source bridge remains internal for regression comparison. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR15Activity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R15 - Real Source Bridge" />
 
         <!-- R14 direct carrier-replacement proof remains internal for regression comparison. -->
         <activity

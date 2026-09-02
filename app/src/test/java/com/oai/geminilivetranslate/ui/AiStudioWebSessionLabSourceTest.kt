@@ -68,13 +68,13 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
-    fun r4UsesPageInternalSubmitWithoutMotionEventOrRunButton() {
+    fun r41UsesPageInternalSubmitAndReassemblesStreamWithoutMotionEventOrRunButton() {
         val manifest = source("src/main/AndroidManifest.xml")
         val r4 = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR4Activity.kt")
 
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR4Activity"))
-        assertTrue(manifest.contains("AI Studio Web Session R4 - Không chạm"))
-        assertTrue(r4.contains("2026-09-02-web-session-r4"))
+        assertTrue(manifest.contains("AI Studio Web Session R4.1 - Không chạm"))
+        assertTrue(r4.contains("2026-09-02-web-session-r4.1"))
         assertTrue(r4.contains("form-submit-event"))
         assertTrue(r4.contains("HTMLFormElement.prototype.requestSubmit.call(form)"))
         assertTrue(r4.contains("ctrl-enter-event"))
@@ -82,6 +82,10 @@ class AiStudioWebSessionLabSourceTest {
         assertTrue(r4.contains("motionEventUsed:false"))
         assertTrue(r4.contains("AiStudioWebSessionLabScripts.DOCUMENT_START"))
         assertTrue(r4.contains("getLastSafeResponse"))
+        assertTrue(r4.contains("extractModelText"))
+        assertTrue(r4.contains("MODEL_FRAGMENT_REGEX"))
+        assertTrue(r4.contains("R4_REASSEMBLED_RESULT"))
+        assertTrue(r4.contains("R4_REASSEMBLED_READ"))
         assertFalse(r4.contains("import android.view.MotionEvent"))
         assertFalse(r4.contains("dispatchTouchEvent"))
         assertFalse(r4.contains("runCandidates"))

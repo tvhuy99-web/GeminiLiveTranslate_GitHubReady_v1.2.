@@ -81,10 +81,14 @@ class AiStudioWebSessionR13SourceTest {
     }
 
     @Test
-    fun manifestExposesOnlyR132ProbeAsExperimentLauncher() {
+    fun manifestKeepsR132ProbeInternalAfterR14TakesLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR13Activity"))
         assertTrue(manifest.contains("AI Studio Web Session R13.2 - Deep Live Probe"))
+        val block = Regex("<activity[^>]*android:name=\\\"\\.ui\\.AiStudioWebSessionR13Activity\\\"[\\s\\S]*?/>")
+            .find(manifest)?.value.orEmpty()
+        assertTrue(block.isNotEmpty())
+        assertFalse(block.contains("LAUNCHER"))
         assertFalse(manifest.contains("AiStudioWebSessionR12LauncherActivity"))
         assertFalse(manifest.contains("android.permission.GET_ACCOUNTS"))
         assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)

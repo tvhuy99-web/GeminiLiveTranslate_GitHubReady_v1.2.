@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
@@ -18,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.oai.geminilivetranslate.ui.AiStudioGoogleAccountBootstrap
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionDirectEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
@@ -28,16 +30,21 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R12 production-shaped executor for an authenticated AI Studio web session.
+ * R12.1 production-shaped executor for an authenticated AI Studio web session.
  *
- * The proven R9 adaptive path remains first for text because it already generates real
- * MakerSuiteService/GenerateContent requests reliably. If R9 reaches R9_HANDLER_FINAL, R12 no
- * longer tries to synthesize a physical tap. It invokes the page-local Direct Engine, which calls
- * AI Studio's own prompt/input and submit/click handlers directly. Only if that deep path cannot
- * create GenerateContent do we retain the old programmatic composer click as a diagnostic fallback.
+ * R12 Direct Engine remains unchanged: the proven R9 adaptive path is first for text, and if it
+ * reaches R9_HANDLER_FINAL the executor calls AI Studio's own page-local handlers directly rather
+ * than synthesizing a physical tap.
  *
- * Auth headers/cookies/API-key values never leave the page. R12 may retain a GenerateContent request
- * template privately in JavaScript memory for research/replay, but native logs receive metadata only.
+ * R12.1 fixes the response lifetime bug observed on real video generation. A terminal HTTP 2xx
+ * GENERATE_RESULT with model text is accepted even when ResponseCore still labels the protobuf
+ * payload partial. Long-running requests use a progress-aware watchdog: five minutes for first
+ * streamed data, sixty seconds of true idle time after progress begins, and a fifteen-minute hard
+ * ceiling. Any growth in responseChars, including the English thinking stream exposed by AI Studio,
+ * refreshes the idle watchdog.
+ *
+ * Auth headers/cookies/API-key values never leave the page. A selected Android Google account may
+ * be used only as a one-shot web login hint; no Android auth token is requested.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
@@ -61,6 +68,7 @@ class AiStudioWebSessionExecutor(
         fun onLog(name: String, detail: String) {}
     }
 
+    private val appContext = context.applicationContext
     val webView: WebView = WebView(context)
 
     private val main = Handler(Looper.getMainLooper())
@@ -76,6 +84,11 @@ class AiStudioWebSessionExecutor(
         val prompt: String,
         val marker: String,
         val callback: (Result) -> Unit,
+        val startedAt: Long,
+        val progressAware: Boolean,
+        var firstProgressAt: Long = 0L,
+        var lastProgressAt: Long = 0L,
+        var lastResponseChars: Int = 0,
     )
 
     init {
@@ -85,11 +98,19 @@ class AiStudioWebSessionExecutor(
 
     fun currentState(): State = state
 
-    fun start(url: String = NEW_CHAT_URL) {
+    fun start(url: String? = null) {
         if (destroyed) return
-        setState(State.LOADING, "loading AI Studio")
+        val bootstrapUrl = if (url == null) AiStudioGoogleAccountBootstrap.consumeStartUrl(appContext) else null
+        val resolvedUrl = url ?: bootstrapUrl ?: NEW_CHAT_URL
+        val source = when {
+            url != null -> "explicit"
+            bootstrapUrl != null -> "google-account-hint"
+            else -> "new-chat"
+        }
+        events?.onLog("R12_START_URL", "source=$source host=${runCatching { android.net.Uri.parse(resolvedUrl).host }.getOrNull().orEmpty()}")
+        setState(State.LOADING, "loading AI Studio source=$source")
         pageFinished = false
-        webView.loadUrl(url)
+        webView.loadUrl(resolvedUrl)
     }
 
     fun refreshDiscovery() {
@@ -137,10 +158,27 @@ class AiStudioWebSessionExecutor(
         }
 
         seq += 1
-        val request = Pending(seq, prompt, marker, callback)
+        val progressAware = marker.isBlank()
+        val request = Pending(
+            seq = seq,
+            prompt = prompt,
+            marker = marker,
+            callback = callback,
+            startedAt = SystemClock.uptimeMillis(),
+            progressAware = progressAware,
+        )
         pending = request
         directRecoverySeq = -1
-        setState(State.GENERATING, "request=${request.seq}")
+        setState(State.GENERATING, "request=${request.seq} progressAware=$progressAware")
+        events?.onLog(
+            "R12_TIMEOUT_POLICY",
+            if (progressAware) {
+                "seq=${request.seq} firstProgressMs=$FIRST_PROGRESS_TIMEOUT_MS idleMs=$PROGRESS_IDLE_TIMEOUT_MS hardMs=$PROGRESS_HARD_TIMEOUT_MS"
+            } else {
+                "seq=${request.seq} fixedMs=${timeoutMs.coerceIn(2_000L, FIXED_TIMEOUT_MAX_MS)} markerRequired=true"
+            },
+        )
+
         val expression = "window.__AIS_ADAPTIVE_RUNTIME__ ? window.__AIS_ADAPTIVE_RUNTIME__.generate(${JSONObject.quote(prompt)},${JSONObject.quote(marker)}) : ({ok:false,error:'runtime-not-installed'})"
         webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
             if (pending?.seq != request.seq) return@evaluateJavascript
@@ -154,12 +192,13 @@ class AiStudioWebSessionExecutor(
             }
         }
 
-        main.postDelayed({
-            if (pending?.seq == request.seq) {
-                runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
-                finish(request.seq, Result(ok = false, error = "TIMEOUT"))
-            }
-        }, timeoutMs.coerceIn(2_000L, 60_000L))
+        if (progressAware) {
+            scheduleProgressWatchdog(request.seq)
+        } else {
+            main.postDelayed({
+                if (pending?.seq == request.seq) timeoutRequest(request.seq, "FIXED_TIMEOUT")
+            }, timeoutMs.coerceIn(2_000L, FIXED_TIMEOUT_MAX_MS))
+        }
         return true
     }
 
@@ -187,9 +226,65 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun schedulePolls(requestSeq: Int) {
-        listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L).forEach { delay ->
+        listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L, 20_000L, 30_000L).forEach { delay ->
             main.postDelayed({ if (pending?.seq == requestSeq) readNormalized(requestSeq, "poll-$delay") }, delay)
         }
+    }
+
+    private fun scheduleProgressWatchdog(requestSeq: Int) {
+        main.postDelayed(object : Runnable {
+            override fun run() {
+                val p = pending ?: return
+                if (p.seq != requestSeq || !p.progressAware) return
+                val now = SystemClock.uptimeMillis()
+                val total = now - p.startedAt
+                val noProgressYet = p.firstProgressAt == 0L
+                val idle = if (p.lastProgressAt > 0L) now - p.lastProgressAt else total
+
+                when {
+                    total >= PROGRESS_HARD_TIMEOUT_MS -> {
+                        timeoutRequest(requestSeq, "HARD_TIMEOUT totalMs=$total responseChars=${p.lastResponseChars}")
+                    }
+                    noProgressYet && total >= FIRST_PROGRESS_TIMEOUT_MS -> {
+                        timeoutRequest(requestSeq, "FIRST_PROGRESS_TIMEOUT totalMs=$total")
+                    }
+                    !noProgressYet && idle >= PROGRESS_IDLE_TIMEOUT_MS -> {
+                        timeoutRequest(requestSeq, "IDLE_TIMEOUT idleMs=$idle totalMs=$total responseChars=${p.lastResponseChars}")
+                    }
+                    else -> {
+                        if (total % 10_000L < WATCHDOG_TICK_MS) {
+                            events?.onLog(
+                                "R12_PROGRESS_WATCHDOG",
+                                "seq=$requestSeq totalMs=$total firstProgress=${p.firstProgressAt > 0L} idleMs=$idle responseChars=${p.lastResponseChars}",
+                            )
+                        }
+                        main.postDelayed(this, WATCHDOG_TICK_MS)
+                    }
+                }
+            }
+        }, WATCHDOG_TICK_MS)
+    }
+
+    private fun recordProgress(requestSeq: Int, responseChars: Int, source: String) {
+        val p = pending ?: return
+        if (p.seq != requestSeq || !p.progressAware) return
+        if (responseChars <= p.lastResponseChars) return
+        val now = SystemClock.uptimeMillis()
+        val previous = p.lastResponseChars
+        p.lastResponseChars = responseChars
+        p.lastProgressAt = now
+        if (p.firstProgressAt == 0L) p.firstProgressAt = now
+        events?.onLog(
+            "R12_PROGRESS_ACTIVITY",
+            "seq=$requestSeq source=$source chars=$responseChars delta=${responseChars - previous} totalMs=${now - p.startedAt}",
+        )
+    }
+
+    private fun timeoutRequest(requestSeq: Int, reason: String) {
+        if (pending?.seq != requestSeq) return
+        events?.onLog("R12_TIMEOUT_FIRED", "seq=$requestSeq reason=$reason")
+        runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
+        finish(requestSeq, Result(ok = false, error = "TIMEOUT", phase = reason))
     }
 
     private fun readNormalized(requestSeq: Int, source: String) {
@@ -199,7 +294,10 @@ class AiStudioWebSessionExecutor(
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
             events?.onLog("R10_RESPONSE_$source", decoded.take(12000))
-            parseNormalized(decoded)?.let { maybeFinish(requestSeq, it) }
+            parseNormalized(decoded)?.let {
+                recordProgress(requestSeq, it.modelText.length, "normalized-$source")
+                maybeFinish(requestSeq, it)
+            }
         }
     }
 
@@ -311,13 +409,17 @@ class AiStudioWebSessionExecutor(
         val status = obj.optInt("status", -1)
         val ok = obj.optBoolean("ok")
         val explicitError = obj.optString("error")
+        val modelText = obj.optString("modelText")
+        val phase = obj.optString("phase")
+        val terminalHttpSuccess = ok && status in 200..299 && modelText.isNotBlank() &&
+            (phase == "reset-after-stream" || phase == "loadend" || phase == "done" || phase == "complete")
         return Result(
             ok = ok,
             status = status,
-            modelText = obj.optString("modelText"),
+            modelText = modelText,
             markerFound = obj.optBoolean("markerFound"),
-            complete = obj.optBoolean("complete") || (!ok && status >= 400),
-            phase = obj.optString("phase"),
+            complete = obj.optBoolean("complete") || terminalHttpSuccess || (!ok && status >= 400),
+            phase = phase,
             error = explicitError.ifBlank { if (!ok && status >= 400) httpErrorName(status) else "" },
         )
     }
@@ -329,11 +431,33 @@ class AiStudioWebSessionExecutor(
             val kind = parsed?.optString("kind").orEmpty()
             val payload = parsed?.optJSONObject("payload")
             events?.onLog("JS_$kind", json.take(16000))
+
+            if (payload != null && (kind == "GENERATE_PROGRESS" || kind == "NORMALIZED_GENERATE_RESULT" || kind == "GENERATE_RESULT")) {
+                val chars = payload.optInt("responseChars", payload.optString("modelText").length)
+                main.post {
+                    val p = pending ?: return@post
+                    recordProgress(p.seq, chars, kind)
+                }
+            }
+
             when (kind) {
                 "NORMALIZED_GENERATE_RESULT" -> if (payload != null) {
                     main.post {
                         val p = pending ?: return@post
                         maybeFinish(p.seq, parseNormalized(payload.toString()) ?: return@post)
+                    }
+                }
+                "GENERATE_RESULT" -> if (payload != null) {
+                    main.post {
+                        val p = pending ?: return@post
+                        val parsedResult = parseNormalized(payload.toString()) ?: return@post
+                        val terminal2xx = parsedResult.ok && parsedResult.status in 200..299 && parsedResult.modelText.isNotBlank()
+                        val result = if (terminal2xx) parsedResult.copy(complete = true) else parsedResult
+                        events?.onLog(
+                            "R12_TERMINAL_RESULT",
+                            "seq=${p.seq} ok=${result.ok} status=${result.status} complete=${result.complete} modelChars=${result.modelText.length} markerFound=${result.markerFound} phase=${result.phase}",
+                        )
+                        maybeFinish(p.seq, result)
                     }
                 }
                 "GENERATE_HTTP_ERROR" -> if (payload != null) {
@@ -469,11 +593,16 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r12.0-direct-engine-executor"
+        const val VERSION = "2026-09-02-web-session-r12.1-progress-watchdog"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
+        private const val FIXED_TIMEOUT_MAX_MS = 300_000L
+        private const val FIRST_PROGRESS_TIMEOUT_MS = 300_000L
+        private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L
+        private const val PROGRESS_HARD_TIMEOUT_MS = 900_000L
+        private const val WATCHDOG_TICK_MS = 2_000L
         private const val DIRECT_ENGINE_WATCHDOG_MS = 7_500L
         private const val LEGACY_FALLBACK_CHECK_MS = 900L
         private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"

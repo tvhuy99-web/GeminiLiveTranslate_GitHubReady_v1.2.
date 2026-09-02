@@ -44,12 +44,12 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R11.4 uses the proven R11.2 lab shell plus the composer-aware submit engine. -->
+        <!-- R12 uses the proven R11.2 login/model/file lab shell with the page-local Direct Engine. -->
         <activity
             android:name=".ui.AiStudioWebSessionR11R2Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R11.4">
+            android:label="AI Studio Web Session R12 - Direct Engine">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

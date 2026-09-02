@@ -33,17 +33,26 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     }
 
     @Test
-    fun executorTriesComposerSubmitBeforeDeclaringNoHandler() {
+    fun executorUsesTrustedTouchOnTheComposerTargetBeforeProgrammaticFallback() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
         assertTrue(src.contains("AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START"))
+        assertTrue(src.contains("R11_BROAD_FALLBACK_GUARD"))
         assertTrue(src.contains("tryAttachmentSubmitRecovery"))
+        assertTrue(src.contains("R11_SUBMIT_TRUSTED_TARGET"))
+        assertTrue(src.contains("dispatchTrustedWebViewTap"))
+        assertTrue(src.contains("InputDevice.SOURCE_TOUCHSCREEN"))
+        assertTrue(src.contains("MotionEvent.ACTION_DOWN"))
+        assertTrue(src.contains("MotionEvent.ACTION_UP"))
+        assertTrue(src.contains("R11_SUBMIT_TRUSTED_TOUCH"))
+        assertTrue(src.contains("trusted attachment submit triggered GenerateContent"))
+        assertTrue(src.contains("tryProgrammaticAttachmentSubmitRecovery"))
         assertTrue(src.contains("R11_SUBMIT_RECOVERY_DISPATCH"))
         assertTrue(src.contains("R11_SUBMIT_RECOVERY_RESULT"))
-        assertTrue(src.contains("attachment composer submit triggered GenerateContent"))
-        assertTrue(src.contains("ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS"))
         val handlerFinalIndex = src.indexOf("\"R9_HANDLER_FINAL\"")
-        val recoveryIndex = src.indexOf("tryAttachmentSubmitRecovery(p.seq)", handlerFinalIndex)
+        val trustedRecoveryIndex = src.indexOf("tryAttachmentSubmitRecovery(p.seq)", handlerFinalIndex)
+        val programmaticIndex = src.indexOf("tryProgrammaticAttachmentSubmitRecovery", trustedRecoveryIndex)
         assertTrue(handlerFinalIndex >= 0)
-        assertTrue(recoveryIndex > handlerFinalIndex)
+        assertTrue(trustedRecoveryIndex > handlerFinalIndex)
+        assertTrue(programmaticIndex > trustedRecoveryIndex)
     }
 }

@@ -63,7 +63,7 @@ class AiStudioWebSessionR11SourceTest {
         val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
         assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
         assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR13Activity\""))
-        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R13 - Live Probe\""))
+        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R13.2 - Deep Live Probe\""))
         assertFalse(manifest.contains("AiStudioWebSessionR12LauncherActivity"))
         listOf(
             "AiStudioWebSessionR11R2Activity",

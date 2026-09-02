@@ -40,91 +40,58 @@
 
         <activity
             android:name=".ui.AiStudioWebSessionLogShareActivity"
-            android:exported="true"
+            android:exported="false"
             android:excludeFromRecents="true"
-            android:label="Nhật ký AI Studio">
+            android:label="Nhật ký AI Studio" />
+
+        <!-- R11.1 is the only AI Studio experiment exposed on the launcher. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR11UnifiedActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R11">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
+        <!-- Historical experiments remain registered only for internal/reference use, not launcher UI. -->
         <activity
             android:name=".ui.AiStudioWebSessionR11Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R11 - Login Model File">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R11 legacy" />
         <activity
             android:name=".ui.AiStudioWebSessionR10Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R10 - Executor">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R10 - Executor" />
         <activity
             android:name=".ui.AiStudioWebSessionR7Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R7 - Không ghi textarea">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R7 - Không ghi textarea" />
         <activity
             android:name=".ui.AiStudioWebSessionR6Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R6 - Prompt state trực tiếp">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R6 - Prompt state trực tiếp" />
         <activity
             android:name=".ui.AiStudioWebSessionR5Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R5 - Trực tiếp handler">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R5 - Trực tiếp handler" />
         <activity
             android:name=".ui.AiStudioWebSessionR4Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R4.1 - Không chạm">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
+            android:label="AI Studio Web Session R4.1 - Không chạm" />
         <activity
             android:name=".ui.AiStudioWebSessionLabActivity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session Lab">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:label="AI Studio Web Session Lab" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

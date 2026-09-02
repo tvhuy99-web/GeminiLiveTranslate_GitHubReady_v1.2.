@@ -1,37 +1,42 @@
 package com.oai.geminilivetranslate.ui
 
 /**
- * R16 page-local receive engine for AI Studio Live.
+ * R16.1 page-local receive engine for AI Studio Live.
  *
- * R15 proved Android PCM can ride AI Studio's authenticated BrowserChannel/WebChannel carrier.
- * R16 decodes the reverse direction incrementally. Google BrowserChannel responses are framed as
- * decimal-length + newline + JSON payload chunks, so looking for JSON field names in raw
- * responseText is insufficient. This engine unwraps those chunks, recursively parses nested JSON
- * strings, forwards only recognized Live output (audio or explicitly named transcription/text
- * fields) through a dedicated non-logging Android bridge, and emits metadata-only diagnostics.
+ * R16.0 proved that the BrowserChannel framing can be decoded and that Gemini audio/pcm reaches
+ * Android with zero decode errors. R16.1 keeps that proven audio path and additionally understands
+ * the jspb array representation used by AI Studio for BidiGenerateContentServerMessage.
+ *
+ * Field mapping follows google.ai.generativelanguage.v1beta:
+ * ServerMessage: setup_complete=2, server_content=3, go_away=6, session_resumption_update=7.
+ * ServerContent: model_turn=1, turn_complete=2, interrupted=3, generation_complete=5,
+ * input_transcription=6, output_transcription=7, waiting_for_input=10.
+ * Content: parts=1. Part: text=2, inline_data=3. Transcription: text=1.
  *
  * Security: raw BrowserChannel payloads, Base64 audio, cookies, auth headers, access tokens and
  * session-resumption handles are never emitted through the diagnostic bridge. Resumption handles
- * remain page-local for this milestone.
+ * remain page-local.
  */
 object AiStudioWebSessionR16LiveOutputEngine {
-    const val VERSION = "2026-09-03-web-session-r16.0-browserchannel-output"
+    const val VERSION = "2026-09-03-web-session-r16.1-jspb-live-output"
 
     val DOCUMENT_START = """
 (function(){
   'use strict';
   if(window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-03-web-session-r16.0-browserchannel-output';
+  const VERSION='2026-09-03-web-session-r16.1-jspb-live-output';
   const MAX_BUFFER_CHARS=2200000;
   const MAX_NESTED_JSON_CHARS=1500000;
   const state={
     bidiResponses:0,browserChunks:0,parsedChunks:0,parseErrors:0,prefixSkips:0,
+    jspbEnvelopeEntries:0,jspbServerMessages:0,jspbServerContentMessages:0,
     audioChunks:0,audioPayloadChars:0,textEvents:0,inputTranscriptEvents:0,
     interimTranscriptEvents:0,outputTranscriptEvents:0,modelTextEvents:0,
-    setupCompleteEvents:0,turnCompleteEvents:0,interruptedEvents:0,
-    sessionResumptionEvents:0,goAwayEvents:0,bridgeErrors:0,lastMime:'',lastChunkAt:0,
-    lastAudioAt:0,lastTextAt:0,lastShape:''
+    setupCompleteEvents:0,generationCompleteEvents:0,turnCompleteEvents:0,
+    interruptedEvents:0,waitingForInputEvents:0,sessionResumptionEvents:0,
+    goAwayEvents:0,bridgeErrors:0,lastMime:'',lastChunkAt:0,lastAudioAt:0,
+    lastTextAt:0,lastShape:''
   };
 
   function diag(kind,payload){
@@ -51,6 +56,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
     return s.length>=4&&s.length<=300000&&s.length%4===0&&/^[A-Za-z0-9+/]+={0,2}$/.test(s);
   }
   function isAudioMime(v){return typeof v==='string'&&/^audio\/pcm(?:;|$)/i.test(v);}
+  function asTrue(v){return v===true||v===1||v==='1';}
   function bridgeAudio(mime,data,path){
     if(!validBase64(data))return false;
     try{
@@ -100,6 +106,76 @@ object AiStudioWebSessionR16LiveOutputEngine {
     }catch(_){}
     return '';
   }
+  function jspbTranscriptionText(v){
+    try{
+      if(Array.isArray(v)&&typeof v[0]==='string')return v[0];
+      return textFrom(v);
+    }catch(_){return '';}
+  }
+  function jspbModelText(content){
+    if(!Array.isArray(content))return 0;
+    let emitted=0;
+    try{
+      const parts=content[0];
+      if(!Array.isArray(parts))return 0;
+      for(let i=0;i<parts.length;i++){
+        const part=parts[i];
+        if(Array.isArray(part)&&typeof part[1]==='string'&&part[1]){bridgeText('modelText',part[1]);emitted++;}
+      }
+    }catch(_){}
+    return emitted;
+  }
+  function handleJspbServerContent(sc){
+    if(!Array.isArray(sc))return false;
+    state.jspbServerContentMessages++;
+    try{
+      jspbModelText(sc[0]);
+      if(asTrue(sc[4])){state.generationCompleteEvents++;bridgeSignal('generationComplete','true');}
+      if(asTrue(sc[1])){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');}
+      if(asTrue(sc[2])){state.interruptedEvents++;bridgeSignal('interrupted','true');}
+      const input=jspbTranscriptionText(sc[5]);if(input)bridgeText('inputTranscription',input);
+      const outputText=jspbTranscriptionText(sc[6]);if(outputText)bridgeText('outputTranscription',outputText);
+      if(asTrue(sc[9])){state.waitingForInputEvents++;bridgeSignal('waitingForInput','true');}
+      return true;
+    }catch(_){return false;}
+  }
+  function handleJspbServerMessage(msg){
+    if(!Array.isArray(msg))return false;
+    const sc=Array.isArray(msg[2])?msg[2]:null;
+    const ga=Array.isArray(msg[5])?msg[5]:null;
+    const resume=Array.isArray(msg[6])?msg[6]:null;
+    const setup=Array.isArray(msg[1])?msg[1]:null;
+    if(!sc&&!ga&&!resume&&!setup)return false;
+    state.jspbServerMessages++;
+    if(setup&&!sc&&!ga&&!resume){state.setupCompleteEvents++;bridgeSignal('setupComplete','true');}
+    if(sc)handleJspbServerContent(sc);
+    if(ga){
+      state.goAwayEvents++;
+      // Duration is non-secret. Export only a coarse presence marker in this milestone.
+      bridgeSignal('goAway','present');
+    }
+    if(resume){
+      state.sessionResumptionEvents++;
+      // Field 1 is new_handle and intentionally remains page-local. Only field 2 crosses Android.
+      bridgeSignal('sessionResumption',String(asTrue(resume[1])));
+    }
+    return true;
+  }
+  function scanJspbEnvelope(root){
+    if(!Array.isArray(root))return;
+    try{
+      for(let i=0;i<root.length;i++){
+        const entry=root[i];
+        if(!Array.isArray(entry)||typeof entry[0]!=='number'||!Array.isArray(entry[1]))continue;
+        state.jspbEnvelopeEntries++;
+        const payloads=entry[1];
+        for(let j=0;j<payloads.length;j++){
+          const candidate=payloads[j];
+          if(Array.isArray(candidate))handleJspbServerMessage(candidate);
+        }
+      }
+    }catch(_){}
+  }
   function handleKnownObject(obj){
     if(!obj||typeof obj!=='object'||Array.isArray(obj))return;
     try{
@@ -108,6 +184,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
       }
       const sc=obj.serverContent||obj.server_content;
       if(sc&&typeof sc==='object'&&!Array.isArray(sc)){
+        if(sc.generationComplete===true||sc.generation_complete===true){state.generationCompleteEvents++;bridgeSignal('generationComplete','true');}
         if(sc.interrupted===true){state.interruptedEvents++;bridgeSignal('interrupted','true');}
         const interim=textFrom(sc.interimInputTranscription||sc.interim_input_transcription);if(interim)bridgeText('interimInputTranscription',interim);
         const input=textFrom(sc.inputTranscription||sc.input_transcription);if(input)bridgeText('inputTranscription',input);
@@ -118,7 +195,8 @@ object AiStudioWebSessionR16LiveOutputEngine {
           const part=parts[i];if(!part||typeof part!=='object'||Array.isArray(part))continue;
           if(!outputText&&typeof part.text==='string'&&part.text)bridgeText('modelText',part.text);
         }
-        if(sc.turnComplete===true||sc.turn_complete===true||sc.generationComplete===true||sc.generation_complete===true){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');}
+        if(sc.turnComplete===true||sc.turn_complete===true){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');}
+        if(sc.waitingForInput===true||sc.waiting_for_input===true){state.waitingForInputEvents++;bridgeSignal('waitingForInput','true');}
       }
       const resume=obj.sessionResumptionUpdate||obj.session_resumption_update;
       if(resume&&typeof resume==='object'){
@@ -128,8 +206,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
       }
       const ga=obj.goAway||obj.go_away;
       if(ga&&typeof ga==='object'){
-        state.goAwayEvents++;
-        const tl=ga.timeLeft||ga.time_left||'';bridgeSignal('goAway',typeof tl==='string'?tl:'present');
+        state.goAwayEvents++;bridgeSignal('goAway','present');
       }
     }catch(_){}
   }
@@ -155,7 +232,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
       }
       if(typeof node==='string'&&node.length>1&&node.length<=MAX_NESTED_JSON_CHARS){
         const c=node.charAt(0);if(c==='['||c==='{'){
-          try{scan(JSON.parse(node),(path||[]).concat(['json']),d+1);}catch(_){}
+          try{const nested=JSON.parse(node);scanJspbEnvelope(nested);scan(nested,(path||[]).concat(['json']),d+1);}catch(_){}
         }
       }
     }catch(_){}
@@ -165,6 +242,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
       const parsed=JSON.parse(payload);state.parsedChunks++;state.lastChunkAt=Date.now();
       const sig=shape(parsed,0).slice(0,3500);
       if(sig!==state.lastShape){state.lastShape=sig;diag('MESSAGE_SHAPE',{ordinal:state.parsedChunks,chars:payload.length,shape:sig});}
+      scanJspbEnvelope(parsed);
       scan(parsed,[],0);
     }catch(e){state.parseErrors++;if(state.parseErrors<=3||state.parseErrors%50===0)diag('CHUNK_PARSE_ERROR',{chars:String(payload||'').length,count:state.parseErrors,name:String(e&&e.name||'Error')});}
   }
@@ -201,7 +279,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
     }
   }
   function describe(){
-    return {ok:true,version:VERSION,bidiResponses:state.bidiResponses,browserChunks:state.browserChunks,parsedChunks:state.parsedChunks,parseErrors:state.parseErrors,prefixSkips:state.prefixSkips,audioChunks:state.audioChunks,audioPayloadChars:state.audioPayloadChars,textEvents:state.textEvents,inputTranscriptEvents:state.inputTranscriptEvents,interimTranscriptEvents:state.interimTranscriptEvents,outputTranscriptEvents:state.outputTranscriptEvents,modelTextEvents:state.modelTextEvents,setupCompleteEvents:state.setupCompleteEvents,turnCompleteEvents:state.turnCompleteEvents,interruptedEvents:state.interruptedEvents,sessionResumptionEvents:state.sessionResumptionEvents,goAwayEvents:state.goAwayEvents,bridgeErrors:state.bridgeErrors,lastMime:state.lastMime,lastChunkAgeMs:state.lastChunkAt?Date.now()-state.lastChunkAt:-1,lastAudioAgeMs:state.lastAudioAt?Date.now()-state.lastAudioAt:-1,lastTextAgeMs:state.lastTextAt?Date.now()-state.lastTextAt:-1,lastShape:state.lastShape};
+    return {ok:true,version:VERSION,bidiResponses:state.bidiResponses,browserChunks:state.browserChunks,parsedChunks:state.parsedChunks,parseErrors:state.parseErrors,prefixSkips:state.prefixSkips,jspbEnvelopeEntries:state.jspbEnvelopeEntries,jspbServerMessages:state.jspbServerMessages,jspbServerContentMessages:state.jspbServerContentMessages,audioChunks:state.audioChunks,audioPayloadChars:state.audioPayloadChars,textEvents:state.textEvents,inputTranscriptEvents:state.inputTranscriptEvents,interimTranscriptEvents:state.interimTranscriptEvents,outputTranscriptEvents:state.outputTranscriptEvents,modelTextEvents:state.modelTextEvents,setupCompleteEvents:state.setupCompleteEvents,generationCompleteEvents:state.generationCompleteEvents,turnCompleteEvents:state.turnCompleteEvents,interruptedEvents:state.interruptedEvents,waitingForInputEvents:state.waitingForInputEvents,sessionResumptionEvents:state.sessionResumptionEvents,goAwayEvents:state.goAwayEvents,bridgeErrors:state.bridgeErrors,lastMime:state.lastMime,lastChunkAgeMs:state.lastChunkAt?Date.now()-state.lastChunkAt:-1,lastAudioAgeMs:state.lastAudioAt?Date.now()-state.lastAudioAt:-1,lastTextAgeMs:state.lastTextAt?Date.now()-state.lastTextAt:-1,lastShape:state.lastShape};
   }
   function reset(){Object.keys(state).forEach(function(k){if(typeof state[k]==='number')state[k]=0;else state[k]='';});diag('RESET',{version:VERSION});return describe();}
 

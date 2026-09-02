@@ -58,14 +58,15 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun onlyCurrentR15ExperimentAndMainAppAreLaunchers() {
+    fun onlyCurrentR16ExperimentAndMainAppAreLaunchers() {
         val manifest = source("src/main/AndroidManifest.xml")
         val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
         assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
-        assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR15Activity\""))
-        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R15 - Real Source Bridge\""))
+        assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR16Activity\""))
+        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R16 - Bidirectional Live\""))
         assertFalse(manifest.contains("AiStudioWebSessionR12LauncherActivity"))
         listOf(
+            "AiStudioWebSessionR15Activity",
             "AiStudioWebSessionR14Activity",
             "AiStudioWebSessionR13Activity",
             "AiStudioWebSessionR11R2Activity",

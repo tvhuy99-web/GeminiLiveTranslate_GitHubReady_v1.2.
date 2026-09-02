@@ -19,6 +19,7 @@ import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionResponseCore
 import org.json.JSONObject
@@ -27,7 +28,7 @@ import org.json.JSONTokener
 /**
  * R10 production-shaped executor for the authenticated AI Studio web session.
  *
- * Android callers use start() + generate(prompt). The executor owns all WebView/JS bridge details,
+ * Android callers use start() + generate(prompt). The executor owns WebView/JS bridge details,
  * enforces single-flight generation, has bounded timeout/cancel behavior, and never copies auth
  * headers/cookies/API-key values out of the page. The page itself remains the authenticated client.
  */
@@ -89,10 +90,15 @@ class AiStudioWebSessionExecutor(
             val decoded = decodeEvalValue(raw)
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             val count = obj?.optInt("candidateCount", 0) ?: 0
+            val readyCount = obj?.optInt("readyCandidateCount", 0) ?: 0
+            val controllerReady = obj?.optBoolean("controllerReady", false) == true
             events?.onLog("R10_DISCOVERY", decoded.take(8000))
             if (pending == null) {
-                if (obj?.optBoolean("ok") == true && count > 0) setState(State.READY, "controller candidates=$count")
-                else setState(State.WAITING_FOR_CONTROLLER, "waiting for listener graph")
+                if (obj?.optBoolean("ok") == true && controllerReady && readyCount > 0) {
+                    setState(State.READY, "ready controllers=$readyCount candidates=$count")
+                } else {
+                    setState(State.WAITING_FOR_CONTROLLER, "waiting for high-confidence controller candidates=$count")
+                }
             }
         }
     }
@@ -170,7 +176,7 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun schedulePolls(requestSeq: Int) {
-        listOf(700L, 1_400L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L).forEach { delay ->
+        listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L).forEach { delay ->
             main.postDelayed({ if (pending?.seq == requestSeq) readNormalized(requestSeq, "poll-$delay") }, delay)
         }
     }
@@ -193,6 +199,10 @@ class AiStudioWebSessionExecutor(
             finish(requestSeq, result)
             return
         }
+        if (!result.ok && result.status >= 400) {
+            finish(requestSeq, result.copy(error = httpErrorName(result.status), complete = true))
+            return
+        }
         val markerSatisfied = p.marker.isBlank() || result.markerFound
         if (result.ok && result.complete && markerSatisfied) finish(requestSeq, result)
     }
@@ -208,14 +218,17 @@ class AiStudioWebSessionExecutor(
     private fun parseNormalized(decoded: String): Result? {
         val obj = runCatching { JSONObject(decoded) }.getOrNull() ?: return null
         if (obj.optString("error") == "no-result") return null
+        val status = obj.optInt("status", -1)
+        val ok = obj.optBoolean("ok")
+        val explicitError = obj.optString("error")
         return Result(
-            ok = obj.optBoolean("ok"),
-            status = obj.optInt("status", -1),
+            ok = ok,
+            status = status,
             modelText = obj.optString("modelText"),
             markerFound = obj.optBoolean("markerFound"),
-            complete = obj.optBoolean("complete"),
+            complete = obj.optBoolean("complete") || (!ok && status >= 400),
             phase = obj.optString("phase"),
-            error = obj.optString("error"),
+            error = explicitError.ifBlank { if (!ok && status >= 400) httpErrorName(status) else "" },
         )
     }
 
@@ -233,6 +246,22 @@ class AiStudioWebSessionExecutor(
                         maybeFinish(p.seq, parseNormalized(payload.toString()) ?: return@post)
                     }
                 }
+                "GENERATE_HTTP_ERROR" -> if (payload != null) {
+                    val status = payload.optInt("status", -1)
+                    if (status >= 400) main.post {
+                        val p = pending ?: return@post
+                        finish(
+                            p.seq,
+                            Result(
+                                ok = false,
+                                status = status,
+                                complete = true,
+                                phase = "http-error",
+                                error = httpErrorName(status),
+                            ),
+                        )
+                    }
+                }
                 "R9_HANDLER_FINAL" -> main.post {
                     val p = pending ?: return@post
                     finish(p.seq, Result(ok = false, error = "NO_HANDLER_TRIGGERED_REQUEST"))
@@ -242,6 +271,13 @@ class AiStudioWebSessionExecutor(
                 }
             }
         }
+    }
+
+    private fun httpErrorName(status: Int): String = when (status) {
+        403 -> "HTTP_403"
+        429 -> "HTTP_429"
+        in 500..599 -> "HTTP_5XX"
+        else -> "HTTP_$status"
     }
 
     private fun setState(next: State, detail: String) {
@@ -281,6 +317,7 @@ class AiStudioWebSessionExecutor(
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionLabScripts.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionHttpStatusGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionResponseCore.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
@@ -317,7 +354,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r10-executor"
+        const val VERSION = "2026-09-02-web-session-r10.1-executor"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"

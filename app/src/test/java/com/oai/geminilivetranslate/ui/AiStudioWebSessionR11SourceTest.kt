@@ -88,13 +88,14 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun onlyCurrentR12ExperimentRemainsOnLauncher() {
+    fun onlyCurrentR121ExperimentRemainsOnLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
         val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
         assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
-        assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR11R2Activity\""))
-        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R12 - Direct Engine\""))
+        assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR12LauncherActivity\""))
+        assertTrue(manifest.contains("android:label=\"AI Studio Web Session R12.1\""))
         listOf(
+            "AiStudioWebSessionR11R2Activity",
             "AiStudioWebSessionR11UnifiedActivity",
             "AiStudioWebSessionR10Activity",
             "AiStudioWebSessionR7Activity",

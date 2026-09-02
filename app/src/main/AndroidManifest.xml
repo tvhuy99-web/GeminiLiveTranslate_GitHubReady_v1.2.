@@ -68,7 +68,7 @@
             android:name=".ui.AiStudioWebSessionR4Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R4 - Không chạm">
+            android:label="AI Studio Web Session R4.1 - Không chạm">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

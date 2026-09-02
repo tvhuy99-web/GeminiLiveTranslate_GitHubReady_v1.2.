@@ -68,6 +68,29 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
+    fun r4UsesPageInternalSubmitWithoutMotionEventOrRunButton() {
+        val manifest = source("src/main/AndroidManifest.xml")
+        val r4 = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR4Activity.kt")
+
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR4Activity"))
+        assertTrue(manifest.contains("AI Studio Web Session R4 - Không chạm"))
+        assertTrue(r4.contains("2026-09-02-web-session-r4"))
+        assertTrue(r4.contains("form-submit-event"))
+        assertTrue(r4.contains("HTMLFormElement.prototype.requestSubmit.call(form)"))
+        assertTrue(r4.contains("ctrl-enter-event"))
+        assertTrue(r4.contains("runElementUsed:false"))
+        assertTrue(r4.contains("motionEventUsed:false"))
+        assertTrue(r4.contains("AiStudioWebSessionLabScripts.DOCUMENT_START"))
+        assertTrue(r4.contains("getLastSafeResponse"))
+        assertFalse(r4.contains("MotionEvent"))
+        assertFalse(r4.contains("dispatchTouchEvent"))
+        assertFalse(r4.contains("runCandidates"))
+        assertFalse(r4.contains("GEMINI_API_KEY"))
+        assertFalse(r4.contains("Authorization="))
+        assertFalse(r4.contains("X-Goog-Api-Key="))
+    }
+
+    @Test
     fun latestLogIsShownOnScreenAndCopiedWithoutZipOrShareSheet() {
         val manifest = source("src/main/AndroidManifest.xml")
         val viewer = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLogShareActivity.kt")

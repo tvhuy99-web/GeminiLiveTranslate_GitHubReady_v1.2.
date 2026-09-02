@@ -1,7 +1,7 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionLabScripts {
-    const val VERSION = "2026-09-01-web-session-r1"
+    const val VERSION = "2026-09-02-web-session-r2"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -10,12 +10,16 @@ object AiStudioWebSessionLabScripts {
 
           const nativeFetch = window.fetch ? window.fetch.bind(window) : null;
           const NativeXHR = window.XMLHttpRequest;
+          const nativeEventAdd = window.EventTarget && window.EventTarget.prototype
+            ? window.EventTarget.prototype.addEventListener
+            : null;
           const state = {
             version: '$VERSION',
             expectedMarker: '',
             captureCount: 0,
             lastResult: null,
-            lastCallStack: ''
+            lastCallStack: '',
+            lastXhrLifecycle: null
           };
 
           function emit(kind, payload) {
@@ -70,15 +74,80 @@ object AiStudioWebSessionLabScripts {
             });
           }
 
-          function recordResult(source,status,ok,text) {
+          function recordResult(source,status,ok,text,responseType,contentType) {
             const raw = String(text || '');
             const marker = state.expectedMarker;
             const markerFound = !!marker && raw.indexOf(marker) >= 0;
             state.lastResult = {
-              source:source,status:Number(status),ok:!!ok,responseChars:raw.length,
-              marker:marker,markerFound:markerFound,at:Date.now()
+              source:source,
+              status:Number(status),
+              ok:!!ok,
+              responseChars:raw.length,
+              responseType:String(responseType||''),
+              contentType:String(contentType||''),
+              marker:marker,
+              markerFound:markerFound,
+              responseText:raw.slice(0,16000),
+              at:Date.now()
             };
             emit('GENERATE_RESULT', state.lastResult);
+          }
+
+          function xhrContentType(xhr) {
+            try { return String(xhr.getResponseHeader('content-type') || ''); }
+            catch (_) { return ''; }
+          }
+
+          function xhrResponseText(xhr, done) {
+            const type = String(xhr.responseType || '');
+            try {
+              if (type === '' || type === 'text') {
+                let text = '';
+                try { text = typeof xhr.responseText === 'string' ? xhr.responseText : ''; } catch (_) {}
+                done(text, type);
+                return;
+              }
+              if (type === 'json') {
+                let text = '';
+                try { text = JSON.stringify(xhr.response); } catch (_) {}
+                done(text, type);
+                return;
+              }
+              if (type === 'arraybuffer') {
+                let text = '';
+                try {
+                  if (xhr.response) text = new TextDecoder('utf-8').decode(new Uint8Array(xhr.response));
+                } catch (_) {}
+                done(text, type);
+                return;
+              }
+              if (type === 'blob' && xhr.response) {
+                try {
+                  if (typeof xhr.response.text === 'function') {
+                    xhr.response.text().then((text) => done(String(text||''), type)).catch(() => done('', type));
+                    return;
+                  }
+                } catch (_) {}
+              }
+              let fallback = '';
+              try { fallback = typeof xhr.response === 'string' ? xhr.response : JSON.stringify(xhr.response); } catch (_) {}
+              done(String(fallback || ''), type);
+            } catch (_) {
+              done('', type);
+            }
+          }
+
+          function attachNativeListener(target, name, listener) {
+            try {
+              if (nativeEventAdd) {
+                nativeEventAdd.call(target, name, listener, false);
+                return true;
+              }
+            } catch (_) {}
+            try {
+              target.addEventListener(name, listener, false);
+              return true;
+            } catch (_) { return false; }
           }
 
           if (nativeFetch) {
@@ -96,9 +165,10 @@ object AiStudioWebSessionLabScripts {
                 promise.then((resp) => {
                   try {
                     const clone = resp.clone();
-                    clone.text().then((text) => recordResult('fetch',resp.status,resp.ok,text)).catch(() => recordResult('fetch',resp.status,resp.ok,''));
-                  } catch (_) { recordResult('fetch',resp.status,resp.ok,''); }
-                }).catch(() => recordResult('fetch',-1,false,''));
+                    clone.text().then((text) => recordResult('fetch',resp.status,resp.ok,text,'fetch',resp.headers.get('content-type')||''))
+                      .catch(() => recordResult('fetch',resp.status,resp.ok,'','fetch',resp.headers.get('content-type')||''));
+                  } catch (_) { recordResult('fetch',resp.status,resp.ok,'','fetch',''); }
+                }).catch(() => recordResult('fetch',-1,false,'','fetch',''));
               }
               return promise;
             };
@@ -110,7 +180,13 @@ object AiStudioWebSessionLabScripts {
             const nativeSet = NativeXHR.prototype.setRequestHeader;
 
             NativeXHR.prototype.open = function(method,url) {
-              this.__aisWsMeta = {method:String(method||'GET'),url:String(url||''),headerSummary:[]};
+              this.__aisWsMeta = {
+                method:String(method||'GET'),
+                url:String(url||''),
+                headerSummary:[],
+                resultRecorded:false,
+                listenersAttached:false
+              };
               return nativeOpen.apply(this,arguments);
             };
             NativeXHR.prototype.setRequestHeader = function(name,value) {
@@ -120,7 +196,8 @@ object AiStudioWebSessionLabScripts {
               return nativeSet.apply(this,arguments);
             };
             NativeXHR.prototype.send = function(body) {
-              const m = this.__aisWsMeta || {method:'POST',url:'',headerSummary:[]};
+              const xhr = this;
+              const m = xhr.__aisWsMeta || {method:'POST',url:'',headerSummary:[],resultRecorded:false,listenersAttached:false};
               if (isGenerateUrl(m.url)) {
                 state.captureCount += 1;
                 state.lastCallStack = safeStack();
@@ -129,13 +206,43 @@ object AiStudioWebSessionLabScripts {
                   source:'xhr',captureCount:state.captureCount,method:m.method,host:p.host,path:p.path,
                   headerSummary:m.headerSummary,bodyChars:bodyChars(body),callStack:state.lastCallStack
                 });
-                this.addEventListener('loadend', () => {
-                  let text='';
-                  try { if (typeof this.responseText === 'string') text=this.responseText; } catch (_) {}
-                  recordResult('xhr',this.status,this.status>=200&&this.status<300,text);
-                });
+
+                const lifecycle = function(eventName) {
+                  let status = -1;
+                  let readyState = -1;
+                  let responseType = '';
+                  try { status = Number(xhr.status); } catch (_) {}
+                  try { readyState = Number(xhr.readyState); } catch (_) {}
+                  try { responseType = String(xhr.responseType || ''); } catch (_) {}
+                  state.lastXhrLifecycle = {event:eventName,status:status,readyState:readyState,responseType:responseType,at:Date.now()};
+                  emit('XHR_LIFECYCLE', state.lastXhrLifecycle);
+                };
+
+                const finish = function(eventName) {
+                  lifecycle(eventName);
+                  if (m.resultRecorded) return;
+                  let readyState = -1;
+                  try { readyState = Number(xhr.readyState); } catch (_) {}
+                  if (eventName === 'readystatechange' && readyState !== 4) return;
+                  m.resultRecorded = true;
+                  xhrResponseText(xhr, function(text, responseType) {
+                    let status = -1;
+                    try { status = Number(xhr.status); } catch (_) {}
+                    recordResult('xhr',status,status>=200&&status<300,text,responseType,xhrContentType(xhr));
+                  });
+                };
+
+                if (!m.listenersAttached) {
+                  m.listenersAttached = true;
+                  attachNativeListener(xhr,'readystatechange',function(){ finish('readystatechange'); });
+                  attachNativeListener(xhr,'load',function(){ finish('load'); });
+                  attachNativeListener(xhr,'loadend',function(){ finish('loadend'); });
+                  attachNativeListener(xhr,'error',function(){ finish('error'); });
+                  attachNativeListener(xhr,'abort',function(){ finish('abort'); });
+                  attachNativeListener(xhr,'timeout',function(){ finish('timeout'); });
+                }
               }
-              return nativeSend.apply(this,arguments);
+              return nativeSend.apply(xhr,arguments);
             };
           }
 
@@ -185,6 +292,7 @@ object AiStudioWebSessionLabScripts {
           state.prepareTrustedSend = function(prompt,marker) {
             state.expectedMarker=String(marker||'');
             state.lastResult=null;
+            state.lastXhrLifecycle=null;
             const prompts=promptCandidates();
             if(!prompts.length) return {ok:false,error:'prompt-not-found'};
             setPrompt(prompts[0].el,String(prompt||''));
@@ -196,10 +304,18 @@ object AiStudioWebSessionLabScripts {
           };
 
           state.inspect = function() {
-            return {version:state.version,href:location.href,readyState:document.readyState,captureCount:state.captureCount,lastResult:state.lastResult,lastCallStack:state.lastCallStack};
+            return {
+              version:state.version,
+              href:location.href,
+              readyState:document.readyState,
+              captureCount:state.captureCount,
+              lastResult:state.lastResult,
+              lastCallStack:state.lastCallStack,
+              lastXhrLifecycle:state.lastXhrLifecycle
+            };
           };
 
-          state.getLastSafeResponse = function() { return state.lastResult || {ok:false,error:'no-result'}; };
+          state.getLastSafeResponse = function() { return state.lastResult || {ok:false,error:'no-result',lastXhrLifecycle:state.lastXhrLifecycle}; };
           window.__AIS_WEB_SESSION__=state;
           emit('DOCUMENT_START_INSTALLED',{version:state.version,href:location.href});
         })();

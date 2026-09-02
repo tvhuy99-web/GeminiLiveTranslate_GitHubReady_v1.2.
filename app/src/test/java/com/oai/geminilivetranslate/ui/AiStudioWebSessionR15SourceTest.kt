@@ -58,12 +58,14 @@ class AiStudioWebSessionR15SourceTest {
     }
 
     @Test
-    fun r15IsExperimentLauncherWhileEarlierLiveStagesRemainInternal() {
+    fun r15BecomesInternalAfterR16TakesExperimentLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR15Activity"))
         assertTrue(manifest.contains("AI Studio Web Session R15 - Real Source Bridge"))
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR16Activity"))
         assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
         listOf(
+            "AiStudioWebSessionR15Activity",
             "AiStudioWebSessionR14Activity",
             "AiStudioWebSessionR13Activity",
             "AiStudioWebSessionR11R2Activity",
@@ -76,9 +78,10 @@ class AiStudioWebSessionR15SourceTest {
     }
 
     @Test
-    fun r15FinalSummaryHasHighestPriorityInBoundedDiagnostics() {
+    fun r15FinalSummaryRemainsAheadOfEventsAfterR16Summary() {
         val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
-        assertTrue(log.contains("\"r15-final-summary.txt\" -> 0"))
-        assertTrue(log.indexOf("\"r15-final-summary.txt\" -> 0") < log.indexOf("\"events.log\" -> 4"))
+        assertTrue(log.contains("\"r16-final-summary.txt\" -> 0"))
+        assertTrue(log.contains("\"r15-final-summary.txt\" -> 1"))
+        assertTrue(log.indexOf("\"r15-final-summary.txt\" -> 1") < log.indexOf("\"events.log\" -> 5"))
     }
 }

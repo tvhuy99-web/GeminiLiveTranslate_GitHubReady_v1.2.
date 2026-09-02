@@ -44,17 +44,23 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R12 uses the proven R11.2 login/model/file lab shell with the page-local Direct Engine. -->
+        <!-- R12.1 launcher adds a native system Google-account chooser experiment before the proven lab. -->
         <activity
-            android:name=".ui.AiStudioWebSessionR11R2Activity"
+            android:name=".ui.AiStudioWebSessionR12LauncherActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R12 - Direct Engine">
+            android:label="AI Studio Web Session R12.1">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Proven R11.2 shell + R12 Direct Engine, now internal behind the R12.1 launcher. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR11R2Activity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R12 - Direct Engine" />
 
         <!-- Historical experiments remain registered only for internal/reference use, not launcher UI. -->
         <activity

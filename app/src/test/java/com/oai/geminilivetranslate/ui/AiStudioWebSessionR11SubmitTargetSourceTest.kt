@@ -32,7 +32,7 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     @Test
     fun executorUsesDirectEngineBeforeLegacyUiFallbackAndContainsNoTouchSimulation() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(src.contains("2026-09-02-web-session-r12.0-direct-engine-executor"))
+        assertTrue(src.contains("2026-09-02-web-session-r12.1-progress-watchdog"))
         assertTrue(src.contains("AiStudioWebSessionDirectEngine.DOCUMENT_START"))
         assertTrue(src.contains("tryDirectEngineRecovery"))
         assertTrue(src.contains("R12_DIRECT_RECOVERY_START"))

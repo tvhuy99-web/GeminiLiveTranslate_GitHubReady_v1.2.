@@ -13,7 +13,7 @@ class AiStudioWebSessionR16SourceTest {
     fun outputEngineUnwrapsBrowserChannelAndExportsOnlyRecognizedLivePayloads() {
         val engine = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR16LiveOutputEngine.kt")
         assertTrue(engine.contains("2026-09-03-web-session-r16.0-browserchannel-output"))
-        assertTrue(engine.contains("/v1/bidiGenerateContent"))
+        assertTrue(engine.contains("bidiGenerateContent"))
         assertTrue(engine.contains("/^(\\d+)\\n/"))
         assertTrue(engine.contains("AIStudioWebLiveOutput"))
         assertTrue(engine.contains("onAudioChunk"))

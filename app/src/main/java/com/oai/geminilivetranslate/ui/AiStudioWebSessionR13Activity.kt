@@ -24,11 +24,12 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R13.1 device lab: observe the transport AI Studio uses for Gemini Live without controlling it yet.
+ * R13.2 device lab.
  *
- * Primary target: gemini-3.1-flash-live-preview. R13 starts with microphone/audio because that is the
- * smallest reliable realtime experiment, while the document-start probe already records video/image
- * modality metadata so R14+ can extend to realtime video without replacing the transport research.
+ * R13.1 proved that AI Studio Live uses Google WebChannel/XHR at /v1/bidiGenerateContent with
+ * gemini-3.1-flash-live-preview. R13.2 keeps that transport probe and adds a deeper, observational
+ * WebChannel/audio pipeline probe so R14 can target the page-local send layer instead of recreating
+ * Google WebChannel from Android.
  */
 class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExecutor.Events {
     private lateinit var executor: AiStudioWebSessionExecutor
@@ -39,11 +40,7 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
     private lateinit var modelView: TextView
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (::micView.isInitialized) micView.text = if (granted) {
-            "Mic Android: đã cấp quyền"
-        } else {
-            "Mic Android: chưa được cấp quyền"
-        }
+        if (::micView.isInitialized) micView.text = if (granted) "Mic Android: đã cấp quyền" else "Mic Android: chưa được cấp quyền"
         log("R13_ANDROID_MIC_PERMISSION", "granted=$granted")
     }
 
@@ -51,12 +48,12 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
         super.onCreate(savedInstanceState)
         labLog = AiStudioWebSessionLabLog(this)
         executor = AiStudioWebSessionExecutor(this, this)
-        installLiveProbe()
+        installLiveProbes()
         installLiveWebPermissions()
         buildUi()
         log(
-            "R13_ACTIVITY_CREATE",
-            "version=$VERSION probe=${AiStudioWebSessionLiveProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL} executor=${AiStudioWebSessionExecutor.VERSION}",
+            "R132_ACTIVITY_CREATE",
+            "version=$VERSION transportProbe=${AiStudioWebSessionLiveProbe.VERSION} deepProbe=${AiStudioWebSessionR13DeepProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL} executor=${AiStudioWebSessionExecutor.VERSION}",
         )
         executor.start(AI_STUDIO_NEW_CHAT)
     }
@@ -67,19 +64,15 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
     }
 
     override fun onStateChanged(state: AiStudioWebSessionExecutor.State, detail: String) {
-        runOnUiThread {
-            if (::stateView.isInitialized) stateView.text = "Web Session: $state | $detail"
-        }
+        runOnUiThread { if (::stateView.isInitialized) stateView.text = "Web Session: $state | $detail" }
         log("R13_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
     }
 
-    override fun onLog(name: String, detail: String) {
-        log(name, detail)
-    }
+    override fun onLog(name: String, detail: String) = log(name, detail)
 
-    private fun installLiveProbe() {
+    private fun installLiveProbes() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            log("R13_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
+            log("R132_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
             return
         }
         WebViewCompat.addDocumentStartJavaScript(
@@ -87,9 +80,14 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
             AiStudioWebSessionLiveProbe.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
+        WebViewCompat.addDocumentStartJavaScript(
+            executor.webView,
+            AiStudioWebSessionR13DeepProbe.DOCUMENT_START,
+            setOf(AI_STUDIO_ORIGIN),
+        )
         log(
-            "R13_DOCUMENT_START_REGISTERED",
-            "origin=$AI_STUDIO_ORIGIN probe=${AiStudioWebSessionLiveProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL}",
+            "R132_DOCUMENT_START_REGISTERED",
+            "origin=$AI_STUDIO_ORIGIN transportProbe=${AiStudioWebSessionLiveProbe.VERSION} deepProbe=${AiStudioWebSessionR13DeepProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL}",
         )
     }
 
@@ -109,8 +107,7 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
                     "origin=${safeUrl(req.origin?.toString())} asksAudio=$asksAudio asksVideo=$asksVideo androidMicGranted=$androidGranted resources=${resources.size}",
                 )
                 runOnUiThread {
-                    // R13 intentionally grants microphone only. Video is observed by the probe but not
-                    // enabled yet, keeping the first transport experiment small and deterministic.
+                    // Keep R13.2 audio-only. Video path is observed but not granted until R14 audio works.
                     if (asksAudio && androidGranted && !asksVideo) {
                         req.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
                         log("R13_WEB_PERMISSION_RESULT", "audioCapture=granted videoCapture=false")
@@ -129,25 +126,24 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, 0, 0, dp(8))
         }
         controls.addView(TextView(this).apply {
-            text = "AI STUDIO WEB SESSION R13.1 - LIVE TRANSPORT PROBE"
+            text = "AI STUDIO WEB SESSION R13.2 - DEEP WEBCHANNEL PROBE"
             textSize = 20f
             gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }, fullWidth())
         controls.addView(TextView(this).apply {
-            text = "Giai đoạn này chỉ nghiên cứu transport. Hãy mở AI Studio Live thủ công, chọn Gemini 3.1 Flash Live Preview nếu AI Studio cho chọn, nói khoảng 10–20 giây rồi dừng."
+            text = "R13.2 tìm tầng gửi Live phía trên XHR. Hãy mở AI Studio Live thủ công bằng Gemini 3.1 Flash Live Preview, nói 10–20 giây, chờ Gemini trả lời rồi dừng."
             textSize = 15f
             setPadding(0, dp(8), 0, dp(6))
         }, fullWidth())
 
         modelView = TextView(this).apply {
-            text = "Model mục tiêu: ${AiStudioWebSessionLiveProbe.TARGET_MODEL}\nProbe sẽ xác nhận model thực tế từ setup/request nếu nhìn thấy."
+            text = "Model mục tiêu: ${AiStudioWebSessionLiveProbe.TARGET_MODEL}\nTransport đã biết: Google WebChannel /v1/bidiGenerateContent"
             textSize = 14f
             setTextIsSelectable(true)
         }
@@ -166,25 +162,11 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
         }
         controls.addView(micView, fullWidth())
 
-        controls.addView(actionButton("Cấp quyền microphone cho thử nghiệm Live") {
-            requestMic.launch(Manifest.permission.RECORD_AUDIO)
-        }, fullWidth())
-        controls.addView(actionButton("1. Xóa probe và bắt đầu phiên đo") {
-            evalProbe(
-                "window.__AIS_LIVE_PROBE__ ? window.__AIS_LIVE_PROBE__.reset('before-live') : ({ok:false,error:'live-probe-not-installed'})",
-                "R13_PROBE_RESET_NATIVE",
-            )
-        }, fullWidth())
-        controls.addView(actionButton("2. Đánh dấu ngay trước khi bật Live") {
-            evalProbe(
-                "window.__AIS_LIVE_PROBE__ ? window.__AIS_LIVE_PROBE__.mark('before-live-start') : ({ok:false,error:'live-probe-not-installed'})",
-                "R13_PROBE_MARK_NATIVE",
-            )
-        }, fullWidth())
-        controls.addView(actionButton("Tải lại AI Studio") {
-            executor.start(AI_STUDIO_NEW_CHAT)
-        }, fullWidth())
-        controls.addView(actionButton("3. Chụp trạng thái sau khi dừng Live") { snapshotProbe() }, fullWidth())
+        controls.addView(actionButton("Cấp quyền microphone cho thử nghiệm Live") { requestMic.launch(Manifest.permission.RECORD_AUDIO) }, fullWidth())
+        controls.addView(actionButton("1. Xóa cả hai probe và bắt đầu phiên đo") { resetProbes() }, fullWidth())
+        controls.addView(actionButton("2. Đánh dấu ngay trước khi bật Live") { markProbes() }, fullWidth())
+        controls.addView(actionButton("Tải lại AI Studio") { executor.start(AI_STUDIO_NEW_CHAT) }, fullWidth())
+        controls.addView(actionButton("3. Chụp trạng thái sau khi dừng Live") { snapshotProbes() }, fullWidth())
         controls.addView(actionButton("Mở / chia sẻ nhật ký AI Studio") {
             startActivity(Intent(this, AiStudioWebSessionLogShareActivity::class.java))
         }, fullWidth())
@@ -202,48 +184,59 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
             isFillViewport = false
             addView(controls)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(365)))
-
-        root.addView(
-            executor.webView,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
-        )
-
+        root.addView(executor.webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
     }
 
-    private fun snapshotProbe() {
+    private fun resetProbes() {
+        evalRaw(
+            "JSON.stringify({transport:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.reset('before-live'):null,deep:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.reset('before-live'):null})",
+            "R132_PROBES_RESET_NATIVE",
+        )
+    }
+
+    private fun markProbes() {
+        evalRaw(
+            "JSON.stringify({transport:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.mark('before-live-start'):null,deep:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.mark('before-live-start'):null})",
+            "R132_PROBES_MARK_NATIVE",
+        )
+    }
+
+    private fun snapshotProbes() {
         executor.webView.evaluateJavascript(
-            "JSON.stringify(window.__AIS_LIVE_PROBE__ ? window.__AIS_LIVE_PROBE__.describe() : ({ok:false,error:'live-probe-not-installed'}))",
+            "JSON.stringify({transport:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.describe():null,deep:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.describe():null})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
-            probeView.text = "Probe: ${safe(decoded, 9000)}"
-            log("R13_PROBE_STATE_NATIVE", safe(decoded, 12000))
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            val models = obj?.optJSONArray("models")
+            probeView.text = "Probe: ${safe(decoded, 12000)}"
+            log("R132_PROBE_STATE_NATIVE", safe(decoded, 18000))
+            val root = runCatching { JSONObject(decoded) }.getOrNull()
+            val transport = root?.optJSONObject("transport")
+            val models = transport?.optJSONArray("models")
             val observed = buildList {
-                if (models != null) for (i in 0 until models.length()) {
-                    models.optString(i).takeIf(String::isNotBlank)?.let(::add)
-                }
+                if (models != null) for (i in 0 until models.length()) models.optString(i).takeIf(String::isNotBlank)?.let(::add)
             }
+            val deep = root?.optJSONObject("deep")
             modelView.text = buildString {
                 append("Model mục tiêu: ").append(AiStudioWebSessionLiveProbe.TARGET_MODEL)
                 append("\nĐã quan sát: ").append(if (observed.isEmpty()) "chưa thấy model ID" else observed.joinToString())
-                append("\nTarget observed: ").append(obj?.optBoolean("targetObserved") == true)
+                append("\nTarget observed: ").append(transport?.optBoolean("targetObserved") == true)
+                append("\nDeep bidi sends: ").append(deep?.optJSONObject("counters")?.optInt("bidiSend") ?: 0)
+                append(" | Audio contexts: ").append(deep?.optJSONObject("counters")?.optInt("audioContext") ?: 0)
             }
         }
         executor.webView.evaluateJavascript(
-            "JSON.stringify(window.__AIS_LIVE_PROBE__ ? window.__AIS_LIVE_PROBE__.recent(220) : ({ok:false,error:'live-probe-not-installed'}))",
-        ) { raw ->
-            val decoded = decodeEvalValue(raw)
-            log("R13_PROBE_RECENT_NATIVE", safe(decoded, 42000))
-        }
+            "JSON.stringify(window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.recent(180):({ok:false,error:'transport-probe-not-installed'}))",
+        ) { raw -> log("R132_TRANSPORT_RECENT_NATIVE", safe(decodeEvalValue(raw), 36000)) }
+        executor.webView.evaluateJavascript(
+            "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(240):({ok:false,error:'deep-probe-not-installed'}))",
+        ) { raw -> log("R132_DEEP_RECENT_NATIVE", safe(decodeEvalValue(raw), 52000)) }
     }
 
-    private fun evalProbe(expression: String, logName: String) {
-        executor.webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
+    private fun evalRaw(expression: String, logName: String) {
+        executor.webView.evaluateJavascript(expression) { raw ->
             val decoded = decodeEvalValue(raw)
-            probeView.text = "Probe: ${safe(decoded, 9000)}"
-            log(logName, safe(decoded, 12000))
+            probeView.text = "Probe: ${safe(decoded, 12000)}"
+            log(logName, safe(decoded, 18000))
         }
     }
 
@@ -260,9 +253,7 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
         }.getOrElse { raw }
     }
 
-    private fun log(name: String, detail: String) {
-        labLog.event("I", name, detail)
-    }
+    private fun log(name: String, detail: String) = labLog.event("I", name, detail)
 
     private fun safeUrl(raw: String?): String {
         val uri = runCatching { android.net.Uri.parse(raw.orEmpty()) }.getOrNull()
@@ -287,7 +278,7 @@ class AiStudioWebSessionR13Activity : AppCompatActivity(), AiStudioWebSessionExe
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r13.1-live-transport-probe-activity"
+        const val VERSION = "2026-09-02-web-session-r13.2-deep-webchannel-probe-activity"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_NEW_CHAT = "https://aistudio.google.com/prompts/new_chat"
     }

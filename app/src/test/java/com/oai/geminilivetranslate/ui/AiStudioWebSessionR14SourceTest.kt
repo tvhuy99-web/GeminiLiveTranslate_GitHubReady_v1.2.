@@ -33,9 +33,9 @@ class AiStudioWebSessionR14SourceTest {
     }
 
     @Test
-    fun r14ActivityInstallsTransportDeepAndDirectLayersBeforeLoadingAiStudio() {
+    fun r14ActivityKeepsDirectEngineAndBoundsLegacyProbeDiagnostics() {
         val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR14Activity.kt")
-        assertTrue(activity.contains("2026-09-02-web-session-r14.0-direct-live-engine-activity"))
+        assertTrue(activity.contains("2026-09-03-web-session-r14.1-diagnostics-proof"))
         assertTrue(activity.indexOf("installDocumentStartLayers()") < activity.indexOf("executor.start(AI_STUDIO_NEW_CHAT)"))
         assertTrue(activity.contains("AiStudioWebSessionLiveProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR13DeepProbe.DOCUMENT_START"))
@@ -49,9 +49,30 @@ class AiStudioWebSessionR14SourceTest {
         assertTrue(activity.contains("window.__AIS_LIVE_DIRECT_ENGINE__.enqueuePcmBase64"))
         assertTrue(activity.contains("window.__AIS_LIVE_DIRECT_ENGINE__.arm"))
         assertTrue(activity.contains("window.__AIS_LIVE_DIRECT_ENGINE__.describe"))
+        assertTrue(activity.contains("LEGACY_PROBE_SAMPLE_EVERY = 100"))
+        assertTrue(activity.contains("LEGACY_PROBE_INITIAL_KEEP = 3"))
+        assertTrue(activity.contains("name.startsWith(\"JS_R132_BIDI_\")"))
+        assertTrue(activity.contains("name.startsWith(\"JS_R13_XHR_\")"))
+        assertTrue(activity.contains("r14-final-summary"))
+        assertTrue(activity.contains("R14_FINAL_SUMMARY"))
+        assertTrue(activity.contains("replacedFrames"))
+        assertTrue(activity.contains("injectedHttp2xx"))
+        assertTrue(activity.contains("shareLogsWithFinalSummary"))
+        assertTrue(activity.contains("recent(12)"))
+        assertFalse(activity.contains("recent(120)"))
         assertFalse(activity.contains("req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))"))
         assertFalse(activity.contains("AccountManager"))
         assertFalse(activity.contains("getAuthToken"))
+    }
+
+    @Test
+    fun r14FinalSummaryIsPrioritizedBeforeEventsLogInTextDiagnostics() {
+        val log = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionLabLog.kt")
+        val summary = log.indexOf("\"r14-final-summary.txt\" -> 0")
+        val events = log.indexOf("\"events.log\" -> 3")
+        assertTrue(summary >= 0)
+        assertTrue(events > summary)
+        assertTrue(log.contains("MAX_REPORT_CHARS = 600_000"))
     }
 
     @Test

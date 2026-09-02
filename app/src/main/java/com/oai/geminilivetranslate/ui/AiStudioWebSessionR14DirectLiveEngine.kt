@@ -9,11 +9,16 @@ package com.oai.geminilivetranslate.ui
  * carrier frame, a queued Android PCM frame can replace only the Base64 audio payload while all
  * session/channel state remains owned by AI Studio.
  *
+ * R14.2 keeps the proven payload-replacement behavior and fixes success accounting for Google
+ * WebChannel, which often aborts/recycles POST XHRs after a valid HTTP 2xx response has already
+ * appeared. Success is therefore latched as soon as readyState >= 2 exposes a 2xx status instead of
+ * waiting only for loadend.
+ *
  * Security: PCM payload values, request bodies, cookies, Authorization values and access tokens are
  * never emitted through the Android bridge. Diagnostics contain counts, lengths and structural state.
  */
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-02-web-session-r14.0-direct-live-audio-piggyback"
+    const val VERSION = "2026-09-03-web-session-r14.2-progress-2xx"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
@@ -22,7 +27,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   'use strict';
   if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-02-web-session-r14.0-direct-live-audio-piggyback';
+  const VERSION='2026-09-03-web-session-r14.2-progress-2xx';
   const MAX_QUEUE=256;
   const state={
     armed:false,
@@ -35,6 +40,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     injectedRequests:0,
     injectedHttp2xx:0,
     injectedHttpError:0,
+    injectedZeroStatusEnd:0,
     templateObserved:false,
     templateMime:'',
     templatePayloadChars:0,
@@ -116,7 +122,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     return {body:body,carrierFrames:carrierFrames,replaced:0};
   }
   function describe(){
-    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};
+    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};
   }
   function enqueue(frames){
     const input=Array.isArray(frames)?frames:[frames];let accepted=0,rejected=0,dropped=0;
@@ -131,7 +137,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   }
   function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}
   function clearQueue(){const n=state.queue.length;state.queue.length=0;emit('QUEUE_CLEARED',{cleared:n});return describe();}
-  function reset(){state.queue.length=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;emit('RESET',{version:VERSION});return describe();}
+  function reset(){state.queue.length=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;emit('RESET',{version:VERSION});return describe();}
 
   try{
     const X=window.XMLHttpRequest;
@@ -144,7 +150,34 @@ object AiStudioWebSessionR14DirectLiveEngine {
         if(!isBidi(meta.raw))return nativeSend.apply(this,arguments);
         const rewritten=rewriteEnvelope(body);
         if(rewritten.replaced>0){
-          try{xhr.addEventListener('loadend',function(){const status=Number(xhr.status||0);state.lastStatus=status;if(status>=200&&status<300)state.injectedHttp2xx++;else state.injectedHttpError++;emit('INJECT_RESULT',{status:status,ok:status>=200&&status<300,replaced:rewritten.replaced,queueDepth:state.queue.length});},{once:true});}catch(_){}
+          let successLatched=false;
+          let errorLatched=false;
+          function observe(phase){
+            try{
+              const status=Number(xhr.status||0);
+              if(status>0)state.lastStatus=status;
+              if(!successLatched&&status>=200&&status<300&&xhr.readyState>=2){
+                successLatched=true;
+                state.injectedHttp2xx++;
+                emit('INJECT_HTTP_2XX',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,queueDepth:state.queue.length,total2xx:state.injectedHttp2xx});
+                return;
+              }
+              if(!successLatched&&!errorLatched&&status>=400&&xhr.readyState>=2){
+                errorLatched=true;
+                state.injectedHttpError++;
+                emit('INJECT_HTTP_ERROR',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,queueDepth:state.queue.length,totalErrors:state.injectedHttpError});
+              }
+            }catch(_){}
+          }
+          try{xhr.addEventListener('readystatechange',function(){observe('readystatechange');});}catch(_){}
+          try{xhr.addEventListener('progress',function(){observe('progress');});}catch(_){}
+          try{xhr.addEventListener('loadend',function(){
+            observe('loadend');
+            if(!successLatched&&!errorLatched){
+              const status=Number(xhr.status||0);
+              if(status===0){state.injectedZeroStatusEnd++;emit('INJECT_ZERO_STATUS_END',{replaced:rewritten.replaced,queueDepth:state.queue.length,totalZeroStatus:state.injectedZeroStatusEnd});}
+            }
+          },{once:true});}catch(_){}
           return nativeSend.call(this,rewritten.body);
         }
         return nativeSend.apply(this,arguments);

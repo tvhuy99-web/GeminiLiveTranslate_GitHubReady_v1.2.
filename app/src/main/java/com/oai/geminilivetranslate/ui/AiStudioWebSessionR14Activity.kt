@@ -41,7 +41,8 @@ import kotlin.math.sin
  * The user still opens AI Studio Live manually once. R14 then piggybacks on AI Studio's own live
  * WebChannel requests: queued Android PCM16/16 kHz frames replace only outgoing audio/pcm Base64
  * payloads while AI Studio keeps ownership of auth, session IDs, offsets, acknowledgements and
- * channel lifecycle. The first milestone is transport proof, not production automation.
+ * channel lifecycle. R14.1 keeps the transport proof intact while making diagnostics bounded and
+ * preserving a dedicated final summary even when legacy probes are very noisy.
  */
 class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExecutor.Events {
     private lateinit var executor: AiStudioWebSessionExecutor
@@ -56,6 +57,7 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
     private var fileJob: Job? = null
     private val fileFrameCount = AtomicInteger(0)
     private val fileFramer = PcmFramer(AiStudioWebSessionR14DirectLiveEngine.FRAME_BYTES)
+    private val noisyProbeLogCounters = mutableMapOf<String, Int>()
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (::micView.isInitialized) micView.text = if (granted) "Mic WebView: Android đã cấp quyền" else "Mic WebView: Android chưa cấp quyền"
@@ -83,7 +85,7 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
         buildUi()
         log(
             "R14_ACTIVITY_CREATE",
-            "version=$VERSION direct=${AiStudioWebSessionR14DirectLiveEngine.VERSION} deep=${AiStudioWebSessionR13DeepProbe.VERSION} transport=${AiStudioWebSessionLiveProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL} executor=${AiStudioWebSessionExecutor.VERSION}",
+            "version=$VERSION direct=${AiStudioWebSessionR14DirectLiveEngine.VERSION} deep=${AiStudioWebSessionR13DeepProbe.VERSION} transport=${AiStudioWebSessionLiveProbe.VERSION} targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL} executor=${AiStudioWebSessionExecutor.VERSION} legacyProbeSampleEvery=$LEGACY_PROBE_SAMPLE_EVERY",
         )
         executor.start(AI_STUDIO_NEW_CHAT)
     }
@@ -99,7 +101,26 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
         log("R14_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
     }
 
-    override fun onLog(name: String, detail: String) = log(name, detail)
+    override fun onLog(name: String, detail: String) {
+        if (isNoisyLegacyProbeLog(name)) {
+            val ordinal = synchronized(noisyProbeLogCounters) {
+                val next = (noisyProbeLogCounters[name] ?: 0) + 1
+                noisyProbeLogCounters[name] = next
+                next
+            }
+            if (ordinal <= LEGACY_PROBE_INITIAL_KEEP || ordinal % LEGACY_PROBE_SAMPLE_EVERY == 0) {
+                log(name, "sampleOrdinal=$ordinal ${safe(detail, LEGACY_PROBE_DETAIL_CHARS)}")
+            }
+            return
+        }
+        log(name, detail)
+    }
+
+    private fun isNoisyLegacyProbeLog(name: String): Boolean =
+        name.startsWith("JS_R132_BIDI_") ||
+            name.startsWith("JS_R13_XHR_") ||
+            name == "JS_R13_BEACON" ||
+            name == "JS_R13_RESOURCE"
 
     private fun installDocumentStartLayers() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -151,13 +172,13 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
         }
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         controls.addView(TextView(this).apply {
-            text = "AI STUDIO WEB SESSION R14 - DIRECT LIVE ENGINE"
+            text = "AI STUDIO WEB SESSION R14.1 - DIRECT LIVE ENGINE"
             textSize = 20f
             gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }, fullWidth())
         controls.addView(TextView(this).apply {
-            text = "Mở Live thủ công bằng Gemini 3.1 Flash Live Preview và giữ microphone của AI Studio đang chạy. Sau đó R14 có thể thay các carrier frame audio/pcm bằng PCM từ Android mà không chạm auth/session WebChannel."
+            text = "Mở Live thủ công bằng Gemini 3.1 Flash Live Preview và giữ microphone của AI Studio đang chạy. R14.1 giảm log nền R13/R13.2 và luôn lưu r14-final-summary.txt để xác nhận chính xác việc thay PCM Android."
             textSize = 15f
             setPadding(0, dp(8), 0, dp(6))
         }, fullWidth())
@@ -181,7 +202,7 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
         controls.addView(actionButton("Dừng tiêm và xóa queue R14") { stopFileInjection(clearQueue = true) }, fullWidth())
         controls.addView(actionButton("Chụp trạng thái R14 + transport") { snapshotAll() }, fullWidth())
         controls.addView(actionButton("Tải lại AI Studio") { executor.start(AI_STUDIO_NEW_CHAT) }, fullWidth())
-        controls.addView(actionButton("Mở / chia sẻ nhật ký AI Studio") { startActivity(Intent(this, AiStudioWebSessionLogShareActivity::class.java)) }, fullWidth())
+        controls.addView(actionButton("Mở / chia sẻ nhật ký AI Studio") { shareLogsWithFinalSummary() }, fullWidth())
 
         root.addView(ScrollView(this).apply { addView(controls) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(455)))
         root.addView(executor.webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -190,10 +211,12 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
 
     private fun resetAll() {
         stopFileInjection(clearQueue = false)
+        synchronized(noisyProbeLogCounters) { noisyProbeLogCounters.clear() }
         eval(
             "JSON.stringify({transport:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.reset('r14-before-live'):null,deep:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.reset('r14-before-live'):null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.reset():null})",
             "R14_RESET_NATIVE",
         )
+        labLog.snapshot("r14-final-summary", "R14 FINAL SUMMARY\nreason=reset\nactivityVersion=$VERSION\nstate=RESET\n")
     }
 
     private fun markAll() {
@@ -308,10 +331,50 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
             val decoded = decodeEvalValue(raw)
             engineView.text = "R14 Engine: ${safe(decoded, 12000)}"
             log("R14_STATE_NATIVE", safe(decoded, 20000))
+            persistR14FinalSummary("snapshot")
         }
         executor.webView.evaluateJavascript(
-            "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(120):({ok:false,error:'deep-probe-not-installed'}))",
-        ) { raw -> log("R14_DEEP_RECENT_NATIVE", safe(decodeEvalValue(raw), 36000)) }
+            "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(12):({ok:false,error:'deep-probe-not-installed'}))",
+        ) { raw -> log("R14_DEEP_RECENT_NATIVE", safe(decodeEvalValue(raw), 6000)) }
+    }
+
+    private fun shareLogsWithFinalSummary() {
+        persistR14FinalSummary("before-share") {
+            startActivity(Intent(this, AiStudioWebSessionLogShareActivity::class.java))
+        }
+    }
+
+    private fun persistR14FinalSummary(reason: String, onDone: (() -> Unit)? = null) {
+        val js = "JSON.stringify(window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():({ok:false,error:'r14-engine-not-installed'}))"
+        executor.webView.evaluateJavascript(js) { raw ->
+            val decoded = decodeEvalValue(raw)
+            val state = runCatching { JSONObject(decoded) }.getOrNull()
+            val summary = buildString {
+                appendLine("R14 FINAL SUMMARY")
+                appendLine("reason=$reason")
+                appendLine("capturedAtEpochMs=${System.currentTimeMillis()}")
+                appendLine("activityVersion=$VERSION")
+                appendLine("directVersion=${AiStudioWebSessionR14DirectLiveEngine.VERSION}")
+                appendLine("targetModel=${AiStudioWebSessionLiveProbe.TARGET_MODEL}")
+                appendLine("fileFramesDecoded=${fileFrameCount.get()}")
+                appendLine("audioFileSelected=${selectedAudioUri != null}")
+                appendLine("legacyProbeSampleEvery=$LEGACY_PROBE_SAMPLE_EVERY")
+                if (state != null) {
+                    FINAL_SUMMARY_KEYS.forEach { key ->
+                        if (state.has(key)) appendLine("$key=${state.opt(key)}")
+                    }
+                } else {
+                    appendLine("stateParseError=true")
+                }
+                appendLine("rawState=${safe(decoded, 12000)}")
+            }
+            labLog.snapshot("r14-final-summary", summary)
+            log(
+                "R14_FINAL_SUMMARY",
+                "reason=$reason templateObserved=${state?.optBoolean("templateObserved", false)} replacedFrames=${state?.optInt("replacedFrames", 0)} injectedRequests=${state?.optInt("injectedRequests", 0)} injectedHttp2xx=${state?.optInt("injectedHttp2xx", 0)} injectedHttpError=${state?.optInt("injectedHttpError", 0)} queueDepth=${state?.optInt("queueDepth", -1)} lastStatus=${state?.optInt("lastStatus", 0)}",
+            )
+            if (onDone != null) runOnUiThread { onDone() }
+        }
     }
 
     private fun eval(expression: String, logName: String) {
@@ -383,10 +446,33 @@ class AiStudioWebSessionR14Activity : AppCompatActivity(), AiStudioWebSessionExe
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r14.0-direct-live-engine-activity"
+        const val VERSION = "2026-09-03-web-session-r14.1-diagnostics-proof"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_NEW_CHAT = "https://aistudio.google.com/prompts/new_chat"
         private const val MAX_FILE_INJECT_MS = 8_000
         private const val MAX_FILE_FRAMES = MAX_FILE_INJECT_MS / AiStudioWebSessionR14DirectLiveEngine.FRAME_MS
+        private const val LEGACY_PROBE_SAMPLE_EVERY = 100
+        private const val LEGACY_PROBE_INITIAL_KEEP = 3
+        private const val LEGACY_PROBE_DETAIL_CHARS = 3_500
+        private val FINAL_SUMMARY_KEYS = listOf(
+            "ok",
+            "version",
+            "armed",
+            "queueDepth",
+            "carrierRequests",
+            "carrierFrames",
+            "replacedFrames",
+            "rejectedFrames",
+            "droppedFrames",
+            "injectedRequests",
+            "injectedHttp2xx",
+            "injectedHttpError",
+            "templateObserved",
+            "templateMime",
+            "templatePayloadChars",
+            "lastCarrierAgeMs",
+            "lastReplaceAgeMs",
+            "lastStatus",
+        )
     }
 }

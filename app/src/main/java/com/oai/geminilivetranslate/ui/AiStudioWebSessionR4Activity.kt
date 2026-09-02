@@ -30,9 +30,10 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R4 experiment: ask the authenticated AI Studio page to submit its own prompt without native
+ * R4.1 experiment: ask the authenticated AI Studio page to submit its own prompt without native
  * MotionEvent, coordinates, or locating/clicking the Run button. Credentials stay inside the page.
- * The proven R3 document-start network probe still captures GenerateContent response text.
+ * The proven R3 document-start network probe captures GenerateContent response text, while R4.1
+ * reassembles model text fragments split across JSON+protobuf streaming chunks.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionR4Activity : AppCompatActivity() {
@@ -74,13 +75,13 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
         }
 
         root.addView(TextView(this).apply {
-            text = "AI Studio Web Session R4 - KHÔNG CHẠM"
+            text = "AI Studio Web Session R4.1 - KHÔNG CHẠM"
             textSize = 20f
-            contentDescription = "AI Studio Web Session R4 không dùng thao tác chạm"
+            contentDescription = "AI Studio Web Session R4.1 không dùng thao tác chạm"
         }, fullWidth())
 
         root.addView(TextView(this).apply {
-            text = "R4 không dùng MotionEvent, tọa độ hay nút Run. Trang AI Studio tự xử lý submit và tự tạo request bằng phiên đăng nhập hiện tại."
+            text = "R4.1 không dùng MotionEvent, tọa độ hay nút Run. Trang AI Studio tự xử lý submit bằng phiên đăng nhập hiện tại; response stream được ghép lại thành text model."
             textSize = 14f
         }, fullWidth())
 
@@ -88,11 +89,11 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
             setText(DEFAULT_PROMPT)
             minLines = 2
             maxLines = 5
-            contentDescription = "Prompt thử nghiệm R4"
+            contentDescription = "Prompt thử nghiệm R4.1"
         }
         root.addView(promptInput, fullWidth())
 
-        root.addView(actionButton("R4. Gửi nội bộ không chạm") { internalSubmitAndCapture() }, fullWidth())
+        root.addView(actionButton("R4.1. Gửi nội bộ không chạm") { internalSubmitAndCapture() }, fullWidth())
         root.addView(actionButton("Đọc kết quả network") { readNetworkResult("manual") }, fullWidth())
         root.addView(actionButton("Mở New Chat") { webView.loadUrl(NEW_CHAT_URL) }, fullWidth())
         root.addView(actionButton("Mở Nhật ký AI Studio") {
@@ -100,23 +101,23 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
         }, fullWidth())
 
         resultView = TextView(this).apply {
-            text = "Kết quả R4: chưa thử"
+            text = "Kết quả R4.1: chưa thử"
             textSize = 15f
             setTextIsSelectable(true)
-            contentDescription = "Kết quả network R4"
+            contentDescription = "Kết quả network R4.1"
             setPadding(dp(4), dp(8), dp(4), dp(8))
         }
         root.addView(resultView, fullWidth())
 
         statusView = TextView(this).apply {
-            text = "Trạng thái R4: đang mở AI Studio"
+            text = "Trạng thái R4.1: đang mở AI Studio"
             setTextIsSelectable(true)
-            contentDescription = "Trạng thái R4"
+            contentDescription = "Trạng thái R4.1"
         }
         root.addView(statusView, fullWidth())
 
         webView = WebView(this).apply {
-            contentDescription = "Google AI Studio dùng để giữ phiên đăng nhập cho R4"
+            contentDescription = "Google AI Studio dùng để giữ phiên đăng nhập cho R4.1"
             isFocusable = true
             isFocusableInTouchMode = true
         }
@@ -130,7 +131,7 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
         liveLogView = TextView(this).apply {
             textSize = 10f
             setTextIsSelectable(true)
-            contentDescription = "Nhật ký trực tiếp R4"
+            contentDescription = "Nhật ký trực tiếp R4.1"
         }
         logScroll.addView(liveLogView)
         root.addView(logScroll, LinearLayout.LayoutParams(
@@ -171,7 +172,7 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
             )
             lab("I", "R4_DOCUMENT_START_REGISTERED", "probe=${AiStudioWebSessionLabScripts.VERSION}")
         } else {
-            statusView.text = "Trạng thái R4: WebView không hỗ trợ document-start probe"
+            statusView.text = "Trạng thái R4.1: WebView không hỗ trợ document-start probe"
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -181,7 +182,7 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 lab("I", "R4_PAGE_FINISHED", "url=${safeUrl(url)} title=${view?.title.orEmpty().take(250)}")
-                statusView.text = "Trạng thái R4: đã tải ${view?.title.orEmpty().ifBlank { "AI Studio" }}"
+                statusView.text = "Trạng thái R4.1: đã tải ${view?.title.orEmpty().ifBlank { "AI Studio" }}"
             }
 
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
@@ -233,12 +234,24 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
             if (kind == "GENERATE_RESULT" && payload != null) {
                 val status = payload.optInt("status", -1)
                 val ok = payload.optBoolean("ok")
-                val markerFound = payload.optBoolean("markerFound")
+                val rawMarkerFound = payload.optBoolean("markerFound")
                 val phase = payload.optString("phase")
-                val response = payload.optString("responseText").take(5_000)
+                val response = payload.optString("responseText")
+                val marker = payload.optString("marker")
+                val assembled = extractModelText(response)
+                val markerFound = rawMarkerFound || (marker.isNotBlank() && assembled.contains(marker))
+                lab(
+                    "I",
+                    "R4_REASSEMBLED_RESULT",
+                    "status=$status rawMarkerFound=$rawMarkerFound markerFound=$markerFound assembledChars=${assembled.length}",
+                )
                 runOnUiThread {
-                    resultView.text = "R4 network: HTTP $status, ok=$ok, markerFound=$markerFound, phase=$phase\n$response"
-                    statusView.text = "Trạng thái R4: đã nhận response trực tiếp từ network"
+                    resultView.text = "R4.1 network: HTTP $status, ok=$ok, markerFound=$markerFound, phase=$phase\nModel text: ${assembled.ifBlank { "(không tách được)" }}\nRaw: ${response.take(3_000)}"
+                    statusView.text = if (markerFound) {
+                        "Trạng thái R4.1: THÀNH CÔNG, đã ghép response model từ AI Studio network"
+                    } else {
+                        "Trạng thái R4.1: đã nhận response network, đang kiểm tra nội dung"
+                    }
                 }
             }
         }
@@ -250,8 +263,8 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
         readSeq += 1
         val seq = readSeq
         lab("I", "R4_INTERNAL_START", "seq=$seq promptChars=${prompt.length} marker=$marker")
-        statusView.text = "Trạng thái R4: đang yêu cầu AI Studio submit nội bộ, không chạm"
-        resultView.text = "Kết quả R4: đang chờ network..."
+        statusView.text = "Trạng thái R4.1: đang yêu cầu AI Studio submit nội bộ, không chạm"
+        resultView.text = "Kết quả R4.1: đang chờ network..."
 
         webView.evaluateJavascript(internalSubmitScript(prompt, marker)) { raw ->
             val decoded = decodeEvalValue(raw)
@@ -260,9 +273,9 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
             val ok = obj?.optBoolean("ok") == true
             val strategy = obj?.optString("primaryStrategy").orEmpty()
             statusView.text = if (ok) {
-                "Trạng thái R4: đã kích hoạt submit nội bộ ($strategy), đang chờ GenerateContent"
+                "Trạng thái R4.1: đã kích hoạt submit nội bộ ($strategy), đang chờ GenerateContent"
             } else {
-                "Trạng thái R4: không kích hoạt được submit nội bộ: ${obj?.optString("error") ?: decoded.take(300)}"
+                "Trạng thái R4.1: không kích hoạt được submit nội bộ: ${obj?.optString("error") ?: decoded.take(300)}"
             }
             scheduleNetworkReads(seq)
         }
@@ -410,7 +423,7 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
 
                 return JSON.stringify({
                   ok:true,
-                  version:'2026-09-02-web-session-r4',
+                  version:'2026-09-02-web-session-r4.1',
                   primaryStrategy:primaryStrategy,
                   formFound:!!form,
                   promptTag:String(el.tagName||''),
@@ -445,14 +458,39 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
             if (value != null) {
                 val ok = value.optBoolean("ok")
                 val status = value.optInt("status", -1)
-                val markerFound = value.optBoolean("markerFound")
+                val rawMarkerFound = value.optBoolean("markerFound")
+                val marker = value.optString("marker")
                 val phase = value.optString("phase")
-                val response = value.optString("responseText").take(5_000)
-                resultView.text = "R4 network: HTTP $status, ok=$ok, markerFound=$markerFound, phase=$phase\n$response"
-                if (ok || markerFound) statusView.text = "Trạng thái R4: thành công, response lấy trực tiếp từ AI Studio network"
+                val response = value.optString("responseText")
+                val assembled = extractModelText(response)
+                val markerFound = rawMarkerFound || (marker.isNotBlank() && assembled.contains(marker))
+                lab(
+                    "I",
+                    "R4_REASSEMBLED_READ",
+                    "source=$source status=$status rawMarkerFound=$rawMarkerFound markerFound=$markerFound assembledChars=${assembled.length}",
+                )
+                resultView.text = "R4.1 network: HTTP $status, ok=$ok, markerFound=$markerFound, phase=$phase\nModel text: ${assembled.ifBlank { "(không tách được)" }}\nRaw: ${response.take(3_000)}"
+                if (ok || markerFound) {
+                    statusView.text = if (markerFound) {
+                        "Trạng thái R4.1: THÀNH CÔNG, response model đã được ghép đúng"
+                    } else {
+                        "Trạng thái R4.1: đã nhận response trực tiếp từ AI Studio network"
+                    }
+                }
             }
         }
     }
+
+    private fun extractModelText(raw: String): String {
+        if (raw.isBlank()) return ""
+        return MODEL_FRAGMENT_REGEX.findAll(raw)
+            .mapNotNull { match -> decodeJsonStringFragment(match.groupValues[1]) }
+            .joinToString(separator = "")
+    }
+
+    private fun decodeJsonStringFragment(escaped: String): String? = runCatching {
+        JSONTokener("\"$escaped\"").nextValue() as? String
+    }.getOrNull()
 
     private fun decodeEvalValue(raw: String?): String {
         if (raw.isNullOrBlank() || raw == "null") return ""
@@ -499,10 +537,11 @@ class AiStudioWebSessionR4Activity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val R4_VERSION = "2026-09-02-web-session-r4"
+        private const val R4_VERSION = "2026-09-02-web-session-r4.1"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_MARKER = "AIS_WEB_SESSION_R4_OK_20260902"
         private const val DEFAULT_PROMPT = "Reply with exactly AIS_WEB_SESSION_R4_OK_20260902 and nothing else."
+        private val MODEL_FRAGMENT_REGEX = Regex("null,\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"\\]\\],\\\"model\\\"")
     }
 }

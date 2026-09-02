@@ -8,7 +8,7 @@ import android.content.Context
  * Older R12.1 installs may still have a pending account hint in SharedPreferences. The executor
  * calls consumeStartUrl() once at startup, so this tiny shim clears that legacy state and always
  * returns null. It cannot select accounts, store new account names, request tokens or redirect to
- * accounts.google.com.
+ * the Google sign-in site.
  */
 object AiStudioGoogleAccountBootstrap {
     const val VERSION = "2026-09-02-r13-account-bootstrap-removed"

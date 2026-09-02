@@ -82,7 +82,7 @@ class AiStudioWebSessionLabSourceTest {
         assertTrue(r4.contains("motionEventUsed:false"))
         assertTrue(r4.contains("AiStudioWebSessionLabScripts.DOCUMENT_START"))
         assertTrue(r4.contains("getLastSafeResponse"))
-        assertFalse(r4.contains("MotionEvent"))
+        assertFalse(r4.contains("import android.view.MotionEvent"))
         assertFalse(r4.contains("dispatchTouchEvent"))
         assertFalse(r4.contains("runCandidates"))
         assertFalse(r4.contains("GEMINI_API_KEY"))

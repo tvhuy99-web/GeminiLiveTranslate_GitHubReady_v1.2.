@@ -44,12 +44,12 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R11.1 is the only AI Studio experiment exposed on the launcher. -->
+        <!-- R11.2 is the only AI Studio experiment exposed on the launcher. -->
         <activity
-            android:name=".ui.AiStudioWebSessionR11UnifiedActivity"
+            android:name=".ui.AiStudioWebSessionR11R2Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R11">
+            android:label="AI Studio Web Session R11.2">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -57,6 +57,11 @@
         </activity>
 
         <!-- Historical experiments remain registered only for internal/reference use, not launcher UI. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR11UnifiedActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R11.1 internal" />
         <activity
             android:name=".ui.AiStudioWebSessionR11Activity"
             android:exported="false"

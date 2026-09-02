@@ -21,6 +21,7 @@ import androidx.webkit.WebViewFeature
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11SubmitTargetFix
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionResponseCore
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -31,6 +32,10 @@ import org.json.JSONTokener
  * Android callers use start() + generate(prompt). The executor owns WebView/JS bridge details,
  * enforces single-flight generation, has bounded timeout/cancel behavior, and never copies auth
  * headers/cookies/API-key values out of the page. The page itself remains the authenticated client.
+ *
+ * R10.2 adds one attachment-only recovery hook: if the proven text handler route reaches
+ * R9_HANDLER_FINAL, Android asks the R11.4 composer-aware submit runtime to press the submit control
+ * that belongs to the active prompt+attachment composer before declaring failure.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
@@ -215,6 +220,39 @@ class AiStudioWebSessionExecutor(
         if (!destroyed) setState(if (pageFinished) State.READY else State.LOADING, if (result.ok) "completed" else "failed:${result.error}")
     }
 
+    private fun tryAttachmentSubmitRecovery(requestSeq: Int) {
+        if (pending?.seq != requestSeq) return
+        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.submitIfAttachment() : ({ok:false,error:'submit-target-not-installed'}))"
+        webView.evaluateJavascript(expression) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            events?.onLog("R11_SUBMIT_RECOVERY_DISPATCH", decoded.take(10000))
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val attempted = obj?.optBoolean("attempted") == true || obj?.optBoolean("pending") == true
+            val baseline = obj?.optInt("baselineCaptureCount", -1) ?: -1
+            if (!attempted) {
+                finish(requestSeq, Result(ok = false, error = "NO_HANDLER_TRIGGERED_REQUEST"))
+                return@evaluateJavascript
+            }
+            main.postDelayed({
+                if (pending?.seq != requestSeq) return@postDelayed
+                val check = "JSON.stringify((function(b){var n=window.__AIS_WEB_SESSION__;return {ok:true,baseline:b,captureCount:Number(n&&n.captureCount||0),started:Number(n&&n.captureCount||0)>b};})($baseline))"
+                webView.evaluateJavascript(check) check@{ captureRaw ->
+                    if (pending?.seq != requestSeq) return@check
+                    val captureDecoded = decodeEvalValue(captureRaw)
+                    events?.onLog("R11_SUBMIT_RECOVERY_RESULT", captureDecoded.take(4000))
+                    val captureObj = runCatching { JSONObject(captureDecoded) }.getOrNull()
+                    if (captureObj?.optBoolean("started") == true) {
+                        setState(State.GENERATING, "attachment composer submit triggered GenerateContent")
+                        readNormalized(requestSeq, "attachment-submit-recovery")
+                    } else {
+                        finish(requestSeq, Result(ok = false, error = "NO_HANDLER_TRIGGERED_REQUEST"))
+                    }
+                }
+            }, ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS)
+        }
+    }
+
     private fun parseNormalized(decoded: String): Result? {
         val obj = runCatching { JSONObject(decoded) }.getOrNull() ?: return null
         if (obj.optString("error") == "no-result") return null
@@ -264,7 +302,7 @@ class AiStudioWebSessionExecutor(
                 }
                 "R9_HANDLER_FINAL" -> main.post {
                     val p = pending ?: return@post
-                    finish(p.seq, Result(ok = false, error = "NO_HANDLER_TRIGGERED_REQUEST"))
+                    tryAttachmentSubmitRecovery(p.seq)
                 }
                 "R9_HANDLER_SUCCESS" -> main.post {
                     if (pending != null) setState(State.GENERATING, "page handler triggered GenerateContent")
@@ -320,6 +358,7 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionHttpStatusGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionResponseCore.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
             setState(State.ERROR, "DOCUMENT_START_SCRIPT unsupported")
         }
@@ -354,10 +393,11 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r10.1-executor"
+        const val VERSION = "2026-09-02-web-session-r10.2-attachment-submit-target"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
+        private const val ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS = 850L
     }
 }

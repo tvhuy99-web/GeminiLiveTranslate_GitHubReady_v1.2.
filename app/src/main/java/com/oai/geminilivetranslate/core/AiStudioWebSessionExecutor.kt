@@ -6,6 +6,10 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
@@ -33,11 +37,12 @@ import org.json.JSONTokener
  * enforces single-flight generation, has bounded timeout/cancel behavior, and never copies auth
  * headers/cookies/API-key values out of the page. The page itself remains the authenticated client.
  *
- * R10.2 adds one attachment-only recovery hook: if the proven text handler route reaches
- * R9_HANDLER_FINAL, Android asks the R11.4 composer-aware submit runtime to press the submit control
- * that belongs to the active prompt+attachment composer before declaring failure. A document-start
- * guard also marks the broad R11.3 Send/Run fallback as superseded, so it cannot click an unrelated
- * control before the composer-aware recovery runs.
+ * R10.2/R11.4 attachment recovery is deliberately separate from the proven text path. If R9 reaches
+ * R9_HANDLER_FINAL while a file is attached, Android asks the composer-aware runtime for the exact
+ * submit control that belongs to the prompt+attachment composer. Android then maps its DOM viewport
+ * coordinates to WebView coordinates and dispatches a touchscreen DOWN/UP pair. This mirrors the
+ * real manual click that device diagnostics proved can start video GenerateContent. Only if that
+ * trusted tap fails does the JS button/listener fallback run.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
@@ -74,6 +79,12 @@ class AiStudioWebSessionExecutor(
         val seq: Int,
         val marker: String,
         val callback: (Result) -> Unit,
+    )
+
+    private data class HiddenViewState(
+        val view: View,
+        val visibility: Int,
+        val alpha: Float,
     )
 
     init {
@@ -224,6 +235,76 @@ class AiStudioWebSessionExecutor(
 
     private fun tryAttachmentSubmitRecovery(requestSeq: Int) {
         if (pending?.seq != requestSeq) return
+        val expression = """
+            JSON.stringify((function(){
+              var api=window.__AIS_R11_SUBMIT_TARGET__;
+              if(!api||typeof api.discover!=='function')return {ok:false,error:'submit-target-not-installed'};
+              var d=api.discover()||{};
+              var n=window.__AIS_WEB_SESSION__;
+              d.baselineCaptureCount=Number(n&&n.captureCount||0);
+              d.viewportWidth=Number(window.innerWidth||0);
+              d.viewportHeight=Number(window.innerHeight||0);
+              return d;
+            })())
+        """.trimIndent()
+        webView.evaluateJavascript(expression) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            events?.onLog("R11_SUBMIT_TRUSTED_TARGET", decoded.take(12000))
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val baseline = obj?.optInt("baselineCaptureCount", -1) ?: -1
+            val attachmentPresent = obj?.optBoolean("attachmentPresent") == true
+            val candidates = obj?.optJSONArray("candidates")
+            val best = candidates?.optJSONObject(0)
+            val fingerprint = best?.optJSONObject("fingerprint")
+            val score = best?.optInt("score", Int.MIN_VALUE) ?: Int.MIN_VALUE
+            val disabled = best?.optBoolean("disabled") == true
+            val viewportWidth = obj?.optDouble("viewportWidth", 0.0) ?: 0.0
+            val viewportHeight = obj?.optDouble("viewportHeight", 0.0) ?: 0.0
+            val cssX = (fingerprint?.optDouble("x", Double.NaN) ?: Double.NaN) +
+                (fingerprint?.optDouble("w", Double.NaN) ?: Double.NaN) / 2.0
+            val cssY = (fingerprint?.optDouble("y", Double.NaN) ?: Double.NaN) +
+                (fingerprint?.optDouble("h", Double.NaN) ?: Double.NaN) / 2.0
+
+            val trustedTargetReady = attachmentPresent && best != null && !disabled && score >= TRUSTED_SUBMIT_MIN_SCORE &&
+                cssX.isFinite() && cssY.isFinite() && viewportWidth > 1.0 && viewportHeight > 1.0
+            if (!trustedTargetReady) {
+                tryProgrammaticAttachmentSubmitRecovery(requestSeq)
+                return@evaluateJavascript
+            }
+
+            dispatchTrustedWebViewTap(
+                cssX = cssX,
+                cssY = cssY,
+                viewportWidth = viewportWidth,
+                viewportHeight = viewportHeight,
+            ) { dispatched ->
+                if (pending?.seq != requestSeq) return@dispatchTrustedWebViewTap
+                events?.onLog(
+                    "R11_SUBMIT_TRUSTED_TOUCH_DISPATCHED",
+                    "ok=$dispatched score=$score cssX=$cssX cssY=$cssY viewport=${viewportWidth}x$viewportHeight baseline=$baseline label=${best.optString("label").take(300)}",
+                )
+                if (!dispatched) {
+                    tryProgrammaticAttachmentSubmitRecovery(requestSeq)
+                    return@dispatchTrustedWebViewTap
+                }
+                main.postDelayed({
+                    checkCaptureStarted(requestSeq, baseline, "trusted-touch") { started ->
+                        if (pending?.seq != requestSeq) return@checkCaptureStarted
+                        if (started) {
+                            setState(State.GENERATING, "trusted attachment submit triggered GenerateContent")
+                            readNormalized(requestSeq, "trusted-attachment-submit")
+                        } else {
+                            tryProgrammaticAttachmentSubmitRecovery(requestSeq)
+                        }
+                    }
+                }, TRUSTED_SUBMIT_CAPTURE_CHECK_MS)
+            }
+        }
+    }
+
+    private fun tryProgrammaticAttachmentSubmitRecovery(requestSeq: Int) {
+        if (pending?.seq != requestSeq) return
         val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.submitIfAttachment() : ({ok:false,error:'submit-target-not-installed'}))"
         webView.evaluateJavascript(expression) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
@@ -237,14 +318,9 @@ class AiStudioWebSessionExecutor(
                 return@evaluateJavascript
             }
             main.postDelayed({
-                if (pending?.seq != requestSeq) return@postDelayed
-                val check = "JSON.stringify((function(b){var n=window.__AIS_WEB_SESSION__;return {ok:true,baseline:b,captureCount:Number(n&&n.captureCount||0),started:Number(n&&n.captureCount||0)>b};})($baseline))"
-                webView.evaluateJavascript(check) check@{ captureRaw ->
-                    if (pending?.seq != requestSeq) return@check
-                    val captureDecoded = decodeEvalValue(captureRaw)
-                    events?.onLog("R11_SUBMIT_RECOVERY_RESULT", captureDecoded.take(4000))
-                    val captureObj = runCatching { JSONObject(captureDecoded) }.getOrNull()
-                    if (captureObj?.optBoolean("started") == true) {
+                checkCaptureStarted(requestSeq, baseline, "programmatic-fallback") { started ->
+                    if (pending?.seq != requestSeq) return@checkCaptureStarted
+                    if (started) {
                         setState(State.GENERATING, "attachment composer submit triggered GenerateContent")
                         readNormalized(requestSeq, "attachment-submit-recovery")
                     } else {
@@ -252,6 +328,83 @@ class AiStudioWebSessionExecutor(
                     }
                 }
             }, ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS)
+        }
+    }
+
+    private fun checkCaptureStarted(
+        requestSeq: Int,
+        baseline: Int,
+        source: String,
+        onDone: (Boolean) -> Unit,
+    ) {
+        if (pending?.seq != requestSeq) return
+        val check = "JSON.stringify((function(b){var n=window.__AIS_WEB_SESSION__;return {ok:true,baseline:b,captureCount:Number(n&&n.captureCount||0),started:Number(n&&n.captureCount||0)>b};})($baseline))"
+        webView.evaluateJavascript(check) { captureRaw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val captureDecoded = decodeEvalValue(captureRaw)
+            events?.onLog("R11_SUBMIT_RECOVERY_RESULT", "source=$source ${captureDecoded.take(4000)}")
+            val captureObj = runCatching { JSONObject(captureDecoded) }.getOrNull()
+            onDone(captureObj?.optBoolean("started") == true)
+        }
+    }
+
+    private fun dispatchTrustedWebViewTap(
+        cssX: Double,
+        cssY: Double,
+        viewportWidth: Double,
+        viewportHeight: Double,
+        onDone: (Boolean) -> Unit,
+    ) {
+        val hidden = mutableListOf<HiddenViewState>()
+        var node: View? = webView
+        var guard = 0
+        while (node != null && guard++ < 8) {
+            if (node.visibility != View.VISIBLE) {
+                hidden += HiddenViewState(node, node.visibility, node.alpha)
+                node.alpha = 0f
+                node.visibility = View.VISIBLE
+            }
+            node = node.parent as? View
+        }
+        webView.requestLayout()
+        webView.postDelayed({
+            val width = webView.width
+            val height = webView.height
+            if (width <= 2 || height <= 2 || viewportWidth <= 1.0 || viewportHeight <= 1.0) {
+                restoreHiddenViews(hidden)
+                events?.onLog("R11_SUBMIT_TRUSTED_TOUCH", "ok=false reason=WEBVIEW_NOT_LAID_OUT width=$width height=$height viewport=${viewportWidth}x$viewportHeight")
+                onDone(false)
+                return@postDelayed
+            }
+            val x = (cssX / viewportWidth * width).toFloat().coerceIn(1f, (width - 2).toFloat())
+            val y = (cssY / viewportHeight * height).toFloat().coerceIn(1f, (height - 2).toFloat())
+            val downAt = SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(downAt, downAt, MotionEvent.ACTION_DOWN, x, y, 0).apply {
+                source = InputDevice.SOURCE_TOUCHSCREEN
+            }
+            val up = MotionEvent.obtain(downAt, downAt + TRUSTED_TAP_DURATION_MS, MotionEvent.ACTION_UP, x, y, 0).apply {
+                source = InputDevice.SOURCE_TOUCHSCREEN
+            }
+            val downHandled = runCatching { webView.dispatchTouchEvent(down) }.getOrDefault(false)
+            val upHandled = runCatching { webView.dispatchTouchEvent(up) }.getOrDefault(false)
+            down.recycle()
+            up.recycle()
+            val handled = downHandled || upHandled
+            events?.onLog(
+                "R11_SUBMIT_TRUSTED_TOUCH",
+                "ok=$handled x=${x.toInt()} y=${y.toInt()} width=$width height=$height cssX=$cssX cssY=$cssY viewport=${viewportWidth}x$viewportHeight downHandled=$downHandled upHandled=$upHandled",
+            )
+            main.postDelayed({
+                restoreHiddenViews(hidden)
+                onDone(handled)
+            }, 300L)
+        }, 120L)
+    }
+
+    private fun restoreHiddenViews(hidden: List<HiddenViewState>) {
+        hidden.asReversed().forEach { item ->
+            item.view.alpha = item.alpha
+            item.view.visibility = item.visibility
         }
     }
 
@@ -396,12 +549,15 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r10.2-attachment-submit-target"
+        const val VERSION = "2026-09-02-web-session-r10.3-trusted-attachment-submit"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
+        private const val TRUSTED_SUBMIT_MIN_SCORE = 2_500
+        private const val TRUSTED_SUBMIT_CAPTURE_CHECK_MS = 850L
         private const val ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS = 850L
+        private const val TRUSTED_TAP_DURATION_MS = 70L
         private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

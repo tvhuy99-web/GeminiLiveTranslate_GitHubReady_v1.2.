@@ -3,13 +3,15 @@ package com.oai.geminilivetranslate.ui
 /**
  * R8/R9 adaptive page runtime.
  *
- * R8: discovers the prompt controller from the listener graph itself. No querySelector is used to
- * locate a textarea/input before sending.
- * R9: discovery is rebuilt from active listeners on every execution, uses no fixed listener IDs,
- * tracks success/failure per target, and self-heals after reload or listener replacement.
+ * R8 discovers the prompt controller from the listener graph itself, without DOM selector lookup.
+ * R9 rebuilds discovery from active listeners on every execution and never relies on fixed IDs.
+ *
+ * R9.1 fixes a device-found regression: ancestor/document/body support handlers now receive
+ * cumulative relationship scores, matching the proven R7 behavior. READY candidates are also
+ * restricted to connected prompt-like targets that own both input and keydown handlers.
  */
 object AiStudioWebSessionAdaptiveRuntime {
-    const val VERSION = "2026-09-02-web-session-r9-adaptive-runtime"
+    const val VERSION = "2026-09-02-web-session-r9.1-adaptive-runtime"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -40,9 +42,9 @@ object AiStudioWebSessionAdaptiveRuntime {
 
           function targetMeta(target) {
             try {
-              if (target===window) return {kind:'window',tag:'',role:'',valueCapable:false,connected:true};
-              if (target===document) return {kind:'document',tag:'',role:'',valueCapable:false,connected:true};
-              if (target&&target.nodeType===11&&target.host) return {kind:'shadow-root',tag:String(target.host.tagName||''),role:'',valueCapable:false,connected:!!target.host.isConnected};
+              if (target===window) return {kind:'window',tag:'',role:'',valueCapable:false,contentEditable:false,connected:true};
+              if (target===document) return {kind:'document',tag:'',role:'',valueCapable:false,contentEditable:false,connected:true};
+              if (target&&target.nodeType===11&&target.host) return {kind:'shadow-root',tag:String(target.host.tagName||''),role:'',valueCapable:false,contentEditable:false,connected:!!target.host.isConnected};
               return {
                 kind:'element',
                 tag:String(target&&target.tagName||'').slice(0,40),
@@ -51,7 +53,7 @@ object AiStudioWebSessionAdaptiveRuntime {
                 contentEditable:!!(target&&target.isContentEditable),
                 connected:target&&typeof target.isConnected==='boolean'?!!target.isConnected:true
               };
-            } catch (_) { return {kind:'unknown',tag:'',role:'',valueCapable:false,connected:false}; }
+            } catch (_) { return {kind:'unknown',tag:'',role:'',valueCapable:false,contentEditable:false,connected:false}; }
           }
 
           function groupFor(target) {
@@ -95,16 +97,20 @@ object AiStudioWebSessionAdaptiveRuntime {
             return entries.filter(function(e){return e.active&&e.groupId===groupId&&(!type||e.type===type);});
           }
 
+          // Cumulative scoring is intentional. A BODY/document ancestor may satisfy more than one
+          // relationship at once, exactly as in the device-proven R7 implementation.
           function relationScore(entry,target) {
             if(!entry.active) return -100000;
             let score=0;
             try {
-              if(entry.target===target) score+=1400;
-              else if(entry.target===document) score+=320;
-              else if(entry.target===window) score+=260;
-              else if(entry.target===document.body) score+=240;
-              else if(entry.target&&typeof entry.target.contains==='function'&&entry.target.contains(target)) score+=700;
-              else if(entry.target&&entry.target.nodeType===11&&entry.target.host&&typeof entry.target.host.contains==='function'&&entry.target.host.contains(target)) score+=620;
+              if(entry.target===target) score+=1200;
+              if(entry.target&&typeof entry.target.contains==='function'&&entry.target.contains(target)) score+=700;
+              if(entry.target===target.parentElement) score+=350;
+              if(entry.target===document) score+=260;
+              if(entry.target===window) score+=220;
+              if(entry.target===document.body) score+=200;
+              if(entry.target&&entry.target.nodeType===11) score+=160;
+              if(entry.target&&entry.target.nodeType===11&&entry.target.host&&typeof entry.target.host.contains==='function'&&entry.target.host.contains(target)) score+=620;
               if(Date.now()-Number(entry.at||0)<120000) score+=40;
             } catch (_) {}
             return score;
@@ -132,10 +138,22 @@ object AiStudioWebSessionAdaptiveRuntime {
             return score;
           }
 
+          function isReadyCandidate(item) {
+            const m=item&&item.meta||{};
+            if(!m.connected) return false;
+            if(!(m.valueCapable||m.contentEditable||m.role==='textbox')) return false;
+            if(item.score<3000) return false;
+            return activeFor(item.group.id,'input').length>0 && activeFor(item.group.id,'keydown').length>0;
+          }
+
           function candidates() {
             return groups.map(function(g){return {group:g,score:candidateScore(g),meta:targetMeta(g.target)};})
               .filter(function(x){return x.score>-50000;})
-              .sort(function(a,b){return b.score-a.score;});
+              .sort(function(a,b)=>b.score-a.score);
+          }
+
+          function readyCandidates() {
+            return candidates().filter(isReadyCandidate);
           }
 
           function eventPath(target) {
@@ -145,8 +163,19 @@ object AiStudioWebSessionAdaptiveRuntime {
           }
 
           function promptTargetProxy(target,prompt) {
+            const wanted=String(prompt||'');
             try {
-              return new Proxy(target,{get:function(obj,prop){if(prop==='value'||prop==='textContent')return String(prompt||'');const v=Reflect.get(obj,prop,obj);return typeof v==='function'?v.bind(obj):v;}});
+              return new Proxy(target,{
+                get:function(obj,prop){
+                  if(prop==='value'||prop==='textContent')return wanted;
+                  if(prop==='selectionStart'||prop==='selectionEnd')return wanted.length;
+                  const v=Reflect.get(obj,prop,obj);return typeof v==='function'?v.bind(obj):v;
+                },
+                set:function(obj,prop,value){
+                  if(prop==='value'||prop==='textContent'||prop==='selectionStart'||prop==='selectionEnd')return true;
+                  try{return Reflect.set(obj,prop,value,obj);}catch(_){return true;}
+                }
+              });
             } catch (_) { return target; }
           }
 
@@ -175,9 +204,20 @@ object AiStudioWebSessionAdaptiveRuntime {
 
           function supportEntries(type,target,limit) {
             return entries.filter(function(e){return e.active&&e.type===type;})
-              .map(function(e){return {entry:e,score:relationScore(e,target)};})
+              .map(function(e){return {entry:e,score:relationScore(e,target),meta:targetMeta(e.target)};})
               .filter(function(x){return x.score>=500;})
               .sort(function(a,b){return b.score-a.score;}).slice(0,limit||16);
+          }
+
+          function supportClass(entry,target) {
+            try {
+              if(entry.target===target) return 'direct';
+              if(entry.target===document) return 'document';
+              if(entry.target===window) return 'window';
+              if(entry.target===document.body) return 'body';
+              if(entry.target&&typeof entry.target.contains==='function'&&entry.target.contains(target)) return 'ancestor';
+            } catch (_) {}
+            return 'other';
           }
 
           const state={
@@ -185,10 +225,12 @@ object AiStudioWebSessionAdaptiveRuntime {
             lastRun:null,
             cancelledGeneration:0,
             discover:function(){
-              const c=candidates();
+              const all=candidates();
+              const ready=all.filter(isReadyCandidate);
               return {ok:true,version:this.version,generation:generation,entryCount:entries.filter(function(e){return e.active;}).length,
-                candidateCount:c.length,selectorQueryUsed:false,fixedListenerIdsUsed:false,
-                top:c.slice(0,10).map(function(x){return {groupId:x.group.id,score:x.score,meta:x.meta,successes:x.group.successes,failures:x.group.failures};})};
+                candidateCount:all.length,readyCandidateCount:ready.length,controllerReady:ready.length>0,
+                selectorQueryUsed:false,fixedListenerIdsUsed:false,
+                top:all.slice(0,10).map(function(x){return {groupId:x.group.id,score:x.score,ready:isReadyCandidate(x),meta:x.meta,successes:x.group.successes,failures:x.group.failures};})};
             },
             cancel:function(){this.cancelledGeneration+=1;return {ok:true,cancelledGeneration:this.cancelledGeneration};},
             generate:function(prompt,marker){
@@ -197,8 +239,8 @@ object AiStudioWebSessionAdaptiveRuntime {
                 if(!net)return {ok:false,error:'network-probe-not-installed'};
                 net.expectedMarker=String(marker||'');net.lastResult=null;net.lastProgress=null;net.lastXhrLifecycle=null;
                 const baseline=Number(net.captureCount||0);
-                const list=candidates();
-                if(!list.length)return {ok:false,error:'no-controller-candidate',generation:generation};
+                const list=readyCandidates();
+                if(!list.length)return {ok:false,error:'no-ready-controller',generation:generation};
                 const cancelToken=this.cancelledGeneration;
                 const run={startedAt:Date.now(),baselineCaptureCount:baseline,candidateCount:list.length,candidateAttempts:0,inputAttempts:0,keyAttempts:0,
                   successfulGroupId:null,captureStarted:false,finished:false,generation:generation};
@@ -214,13 +256,15 @@ object AiStudioWebSessionAdaptiveRuntime {
                   if(ci>=list.length){run.finished=true;emit('R9_HANDLER_FINAL',{captureStarted:false,candidateAttempts:run.candidateAttempts,candidateCount:list.length,captureCount:Number(net.captureCount||0)});return;}
                   const item=list[ci++],group=item.group,target=group.target,promptProxy=promptTargetProxy(target,prompt);
                   run.candidateAttempts+=1;run.successfulGroupId=group.id;
-                  const inputs=supportEntries('input',target,12).concat(supportEntries('change',target,8)).sort(function(a,b){return b.score-a.score;});
-                  const keys=supportEntries('keydown',target,20);
-                  emit('R9_CANDIDATE_ATTEMPT',{groupId:group.id,score:item.score,meta:item.meta,inputCandidates:inputs.length,keyCandidates:keys.length,attempt:run.candidateAttempts});
+                  const inputs=supportEntries('input',target,16).concat(supportEntries('change',target,12)).sort(function(a,b){return b.score-a.score;});
+                  const keys=supportEntries('keydown',target,24);
+                  const supportCounts={direct:0,document:0,body:0,ancestor:0,window:0,other:0};
+                  inputs.forEach(function(x){const k=supportClass(x.entry,target);supportCounts[k]=(supportCounts[k]||0)+1;});
+                  emit('R9_CANDIDATE_ATTEMPT',{groupId:group.id,score:item.score,meta:item.meta,inputCandidates:inputs.length,keyCandidates:keys.length,supportCounts:supportCounts,attempt:run.candidateAttempts});
                   inputs.forEach(function(x){
                     run.inputAttempts+=1;
                     try{const ev=directEvent(x.entry.type,target,x.entry.target,prompt,promptProxy);const r=invoke(x.entry,ev,target,promptProxy);
-                      emit('R9_INPUT_HANDLER_ATTEMPT',{groupId:group.id,entryId:x.entry.id,type:x.entry.type,score:x.score,resultKind:r&&typeof r.then==='function'?'promise':'return'});
+                      emit('R9_INPUT_HANDLER_ATTEMPT',{groupId:group.id,entryId:x.entry.id,type:x.entry.type,score:x.score,supportClass:supportClass(x.entry,target),resultKind:r&&typeof r.then==='function'?'promise':'return'});
                       if(r&&typeof r.then==='function')r.catch(function(err){emit('R9_INPUT_ASYNC_ERROR',{groupId:group.id,entryId:x.entry.id,error:String(err).slice(0,800)});});
                     }catch(err){emit('R9_INPUT_HANDLER_ERROR',{groupId:group.id,entryId:x.entry.id,error:String(err).slice(0,800)});}
                   });
@@ -233,7 +277,7 @@ object AiStudioWebSessionAdaptiveRuntime {
                     if(ki>=keys.length){group.failures+=1;group.lastFailureAt=Date.now();setTimeout(tryCandidate,80);return;}
                     const x=keys[ki++];run.keyAttempts+=1;
                     try{const ev=directEvent('keydown',target,x.entry.target,prompt,promptProxy);const r=invoke(x.entry,ev,target,promptProxy);
-                      emit('R9_KEYDOWN_HANDLER_ATTEMPT',{groupId:group.id,entryId:x.entry.id,score:x.score,resultKind:r&&typeof r.then==='function'?'promise':'return'});
+                      emit('R9_KEYDOWN_HANDLER_ATTEMPT',{groupId:group.id,entryId:x.entry.id,score:x.score,supportClass:supportClass(x.entry,target),resultKind:r&&typeof r.then==='function'?'promise':'return'});
                       if(r&&typeof r.then==='function')r.catch(function(err){emit('R9_KEYDOWN_ASYNC_ERROR',{groupId:group.id,entryId:x.entry.id,error:String(err).slice(0,800)});});
                     }catch(err){emit('R9_KEYDOWN_HANDLER_ERROR',{groupId:group.id,entryId:x.entry.id,error:String(err).slice(0,800)});}
                     setTimeout(tryKey,220);
@@ -242,7 +286,8 @@ object AiStudioWebSessionAdaptiveRuntime {
                 }
                 setTimeout(tryCandidate,80);
                 return {ok:true,version:this.version,generation:generation,candidateCount:list.length,baselineCaptureCount:baseline,
-                  selectorQueryUsed:false,fixedListenerIdsUsed:false,domEventDispatchUsed:false,keyboardDispatchUsed:false,realPromptValueMutated:false,runElementUsed:false,motionEventUsed:false};
+                  controllerReady:true,selectorQueryUsed:false,fixedListenerIdsUsed:false,domEventDispatchUsed:false,keyboardDispatchUsed:false,
+                  realPromptValueMutated:false,runElementUsed:false,motionEventUsed:false};
               } catch(e) { return {ok:false,error:String(e),stack:String(e&&e.stack||'').slice(0,3000)}; }
             }
           };

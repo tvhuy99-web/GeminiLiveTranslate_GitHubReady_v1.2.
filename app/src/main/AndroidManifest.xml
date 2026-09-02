@@ -57,7 +57,7 @@
             android:name=".ui.AiStudioWebSessionLogShareActivity"
             android:exported="true"
             android:excludeFromRecents="true"
-            android:label="Chia sẻ log AI Studio">
+            android:label="Nhật ký AI Studio">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

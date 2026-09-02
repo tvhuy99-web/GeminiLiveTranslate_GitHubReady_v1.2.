@@ -30,34 +30,30 @@
         android:theme="@style/Theme.GeminiLiveTranslate"
         android:usesCleartextTraffic="false">
 
-        <activity
-            android:name=".ui.HistoryActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SubtitlePlaybackActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.LogViewerActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.TtsSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.ApiSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.MiniBrowserActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize" />
+        <activity android:name=".ui.HistoryActivity" android:exported="false" />
+        <activity android:name=".ui.SubtitlePlaybackActivity" android:exported="false" />
+        <activity android:name=".ui.LogViewerActivity" android:exported="false" />
+        <activity android:name=".ui.TtsSettingsActivity" android:exported="false" />
+        <activity android:name=".ui.ApiSettingsActivity" android:exported="false" />
+        <activity android:name=".ui.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
 
         <activity
             android:name=".ui.AiStudioWebSessionLogShareActivity"
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.AiStudioWebSessionR6Activity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R6 - Prompt state trực tiếp">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -97,9 +93,7 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

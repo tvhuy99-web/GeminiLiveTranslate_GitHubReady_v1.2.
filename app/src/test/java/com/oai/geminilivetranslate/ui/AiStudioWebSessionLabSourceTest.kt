@@ -24,9 +24,10 @@ class AiStudioWebSessionLabSourceTest {
     @Test
     fun probeCapturesGenerateNetworkResultWithoutExportingCredentialValues() {
         val scripts = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLabScripts.kt")
-        assertTrue(scripts.contains("2026-09-02-web-session-r2"))
+        assertTrue(scripts.contains("2026-09-02-web-session-r3"))
         assertTrue(scripts.contains("GENERATE_START"))
         assertTrue(scripts.contains("GENERATE_RESULT"))
+        assertTrue(scripts.contains("GENERATE_PROGRESS"))
         assertTrue(scripts.contains("MakerSuiteService"))
         assertTrue(scripts.contains("resp.clone"))
         assertTrue(scripts.contains("callStack"))
@@ -37,18 +38,21 @@ class AiStudioWebSessionLabSourceTest {
     }
 
     @Test
-    fun xhrCompletionUsesNativeEventListenerAndAllTerminalSignals() {
+    fun xhrStreamingIsCapturedAtReadyStateThreeBeforeAiStudioResetsIt() {
         val scripts = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionLabScripts.kt")
         assertTrue(scripts.contains("window.EventTarget.prototype.addEventListener"))
         assertTrue(scripts.contains("nativeEventAdd.call(target"))
         assertTrue(scripts.contains("XHR_LIFECYCLE"))
-        assertTrue(scripts.contains("readystatechange"))
-        assertTrue(scripts.contains("loadend"))
-        assertTrue(scripts.contains("timeout"))
+        assertTrue(scripts.contains("readyState === 3"))
+        assertTrue(scripts.contains("captureStreaming"))
+        assertTrue(scripts.contains("xhrTextNow"))
+        assertTrue(scripts.contains("bestText"))
+        assertTrue(scripts.contains("stream-marker"))
+        assertTrue(scripts.contains("reset-after-stream"))
+        assertTrue(scripts.contains("progress"))
+        assertTrue(scripts.contains("lastProgress"))
         assertTrue(scripts.contains("arraybuffer"))
         assertTrue(scripts.contains("TextDecoder('utf-8')"))
-        assertTrue(scripts.contains("xhr.response.text"))
-        assertTrue(scripts.contains("lastXhrLifecycle"))
     }
 
     @Test

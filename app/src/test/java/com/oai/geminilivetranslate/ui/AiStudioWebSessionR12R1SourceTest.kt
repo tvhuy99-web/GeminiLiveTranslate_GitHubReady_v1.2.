@@ -44,8 +44,9 @@ class AiStudioWebSessionR12R1SourceTest {
     fun executorUsesOneShotHintAndDoesNotLogAccountAddress() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
         assertTrue(executor.contains("AiStudioGoogleAccountBootstrap.consumeStartUrl(appContext)"))
-        assertTrue(executor.contains("source=google-account-hint"))
+        assertTrue(executor.contains("bootstrapUrl != null -> \"google-account-hint\""))
         assertTrue(executor.contains("R12_START_URL"))
+        assertTrue(executor.contains("host=${'$'}{runCatching"))
         assertFalse(executor.contains("selectedAccount(appContext)"))
         assertFalse(executor.contains("KEY_ACCOUNT_NAME"))
     }

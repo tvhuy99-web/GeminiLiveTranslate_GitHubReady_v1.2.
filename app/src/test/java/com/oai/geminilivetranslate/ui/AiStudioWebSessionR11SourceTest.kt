@@ -45,39 +45,44 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11UnifiedActivityUsesOneSelectedUriAndInternalTrustedPulse() {
-        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11UnifiedActivity.kt")
+    fun r11R2SeparatesModelVerificationFromAttachmentAndRequiresStableComposer() {
+        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11R2Activity.kt")
         val manifest = source("src/main/AndroidManifest.xml")
-        assertTrue(manifest.contains(".ui.AiStudioWebSessionR11UnifiedActivity"))
-        assertTrue(manifest.contains("AI Studio Web Session R11"))
-        assertTrue(activity.contains("AiStudioWebSessionExecutor"))
-        assertTrue(activity.contains("ActivityResultContracts.OpenDocument"))
-        assertTrue(activity.contains("takePersistableUriPermission"))
-        assertTrue(activity.contains("onShowFileChooser"))
+        assertTrue(activity.contains("2026-09-02-web-session-r11.2-preflight-stable-attachment"))
+        assertTrue(manifest.contains(".ui.AiStudioWebSessionR11R2Activity"))
+        assertTrue(manifest.contains("AI Studio Web Session R11.2"))
+        assertTrue(activity.contains("verifySelectedModelWithText"))
+        assertTrue(activity.contains("MODEL_PREFLIGHT_MARKER"))
+        assertTrue(activity.contains("R11_MODEL_PREFLIGHT_START"))
+        assertTrue(activity.contains("R11_MODEL_PREFLIGHT_RESULT"))
+        assertTrue(activity.contains("rewriteCount > baselineRewrite"))
+        assertTrue(activity.contains("pollAttachmentStrict"))
+        assertTrue(activity.contains("attachmentBusyVisual"))
+        assertTrue(activity.contains("REQUIRED_STABLE_POLLS"))
+        assertTrue(activity.contains("MIN_ATTACHMENT_STABLE_MS"))
+        assertTrue(activity.contains("R11_ATTACHMENT_STRICT_POLL"))
+        assertTrue(activity.contains("R11_ATTACHMENT_STABLE_READY"))
+        assertTrue(activity.contains("waitForControllerReady"))
+        assertTrue(activity.contains("R11_CONTROLLER_REDISCOVERY_POLL"))
+        assertTrue(activity.contains("R11_ATTACHMENT_CONTROLLER_RESULT"))
+        assertTrue(activity.contains("R11_VIDEO_GENERATE_RECOVERY"))
+        assertTrue(activity.contains("NO_HANDLER_TRIGGERED_REQUEST"))
         assertTrue(activity.contains("filePathCallback.onReceiveValue(arrayOf(selected.uri))"))
-        assertTrue(activity.contains("AiStudioWebSessionR11Support.DOCUMENT_START"))
-        assertTrue(activity.contains("AiStudioWebSessionR11RequestFix.DOCUMENT_START"))
-        assertTrue(activity.contains("dispatchTrustedFileActivationPulse"))
         assertTrue(activity.contains("InputDevice.SOURCE_TOUCHSCREEN"))
-        assertTrue(activity.contains("R11_FILE_ACTIVATION_PULSE"))
-        assertTrue(activity.contains("selectCurrentModel"))
-        assertTrue(activity.contains("attachSelectedFile"))
-        assertTrue(activity.contains("observed == expectedModel && rewriteCount > 0"))
-        assertTrue(activity.contains("R11_E2E_RESULT"))
         assertTrue(activity.contains("Hãy xem toàn bộ video này và tóm tắt chi tiết"))
+        assertFalse(activity.contains("document.cookie"))
         assertFalse(activity.contains("Gemini API Key"))
         assertFalse(activity.contains("Mật khẩu:"))
-        assertFalse(activity.contains("type=\"password\""))
-        assertFalse(activity.contains("document.cookie"))
     }
 
     @Test
-    fun onlyR11ExperimentRemainsOnLauncher() {
+    fun onlyR11R2ExperimentRemainsOnLauncher() {
         val manifest = source("src/main/AndroidManifest.xml")
         val launcherCount = Regex("android.intent.category.LAUNCHER").findAll(manifest).count()
-        // Main application + exactly one AI Studio R11 experiment.
         assertTrue("Launcher count phải là 2 nhưng là $launcherCount", launcherCount == 2)
+        assertTrue(manifest.contains("android:name=\".ui.AiStudioWebSessionR11R2Activity\""))
         listOf(
+            "AiStudioWebSessionR11UnifiedActivity",
             "AiStudioWebSessionR10Activity",
             "AiStudioWebSessionR7Activity",
             "AiStudioWebSessionR6Activity",
@@ -93,8 +98,8 @@ class AiStudioWebSessionR11SourceTest {
     }
 
     @Test
-    fun r11LoggingHasEnoughMilestonesForDeviceDiagnosis() {
-        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11UnifiedActivity.kt")
+    fun r11R2LoggingHasEnoughMilestonesForDeviceDiagnosis() {
+        val activity = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11R2Activity.kt")
         val support = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Support.kt")
         val fix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
         listOf(
@@ -102,14 +107,20 @@ class AiStudioWebSessionR11SourceTest {
             "R11_AUTH_PROBE_NATIVE",
             "R11_MODEL_CATALOG_NATIVE",
             "R11_MODEL_SELECT_VERIFY",
+            "R11_MODEL_PREFLIGHT_START",
+            "R11_MODEL_PREFLIGHT_RESULT",
             "R11_FILE_SELECTED",
             "R11_FILE_CHOOSER_REQUEST",
             "R11_FILE_CHOOSER_SERVED",
             "R11_FILE_ACTIVATION_ARM_NATIVE",
             "R11_FILE_ACTIVATION_PULSE",
             "R11_ATTACH_NATIVE_START",
-            "R11_ATTACHMENT_POLL",
-            "R11_ATTACHMENT_READY",
+            "R11_ATTACHMENT_STRICT_POLL",
+            "R11_ATTACHMENT_STABLE_READY",
+            "R11_CONTROLLER_REDISCOVERY_POLL",
+            "R11_ATTACHMENT_CONTROLLER_RESULT",
+            "R11_VIDEO_GENERATE_ATTEMPT",
+            "R11_VIDEO_GENERATE_RECOVERY",
             "R11_E2E_START",
             "R11_E2E_RESULT",
         ).forEach { assertTrue("Thiếu log $it", activity.contains(it)) }

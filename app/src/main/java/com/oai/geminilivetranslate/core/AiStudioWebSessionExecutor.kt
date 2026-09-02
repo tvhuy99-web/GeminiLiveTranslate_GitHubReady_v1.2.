@@ -6,10 +6,6 @@ import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
-import android.view.InputDevice
-import android.view.MotionEvent
-import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
@@ -23,6 +19,7 @@ import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionDirectEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11SubmitTargetFix
@@ -31,18 +28,16 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R10 production-shaped executor for the authenticated AI Studio web session.
+ * R12 production-shaped executor for an authenticated AI Studio web session.
  *
- * Android callers use start() + generate(prompt). The executor owns WebView/JS bridge details,
- * enforces single-flight generation, has bounded timeout/cancel behavior, and never copies auth
- * headers/cookies/API-key values out of the page. The page itself remains the authenticated client.
+ * The proven R9 adaptive path remains first for text because it already generates real
+ * MakerSuiteService/GenerateContent requests reliably. If R9 reaches R9_HANDLER_FINAL, R12 no
+ * longer tries to synthesize a physical tap. It invokes the page-local Direct Engine, which calls
+ * AI Studio's own prompt/input and submit/click handlers directly. Only if that deep path cannot
+ * create GenerateContent do we retain the old programmatic composer click as a diagnostic fallback.
  *
- * R10.2/R11.4 attachment recovery is deliberately separate from the proven text path. If R9 reaches
- * R9_HANDLER_FINAL while a file is attached, Android asks the composer-aware runtime for the exact
- * submit control that belongs to the prompt+attachment composer. Android then maps its DOM viewport
- * coordinates to WebView coordinates and dispatches a touchscreen DOWN/UP pair. This mirrors the
- * real manual click that device diagnostics proved can start video GenerateContent. Only if that
- * trusted tap fails does the JS button/listener fallback run.
+ * Auth headers/cookies/API-key values never leave the page. R12 may retain a GenerateContent request
+ * template privately in JavaScript memory for research/replay, but native logs receive metadata only.
  */
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
@@ -74,17 +69,13 @@ class AiStudioWebSessionExecutor(
     private var pageFinished = false
     private var seq = 0
     private var pending: Pending? = null
+    private var directRecoverySeq = -1
 
     private data class Pending(
         val seq: Int,
+        val prompt: String,
         val marker: String,
         val callback: (Result) -> Unit,
-    )
-
-    private data class HiddenViewState(
-        val view: View,
-        val visibility: Int,
-        val alpha: Float,
     )
 
     init {
@@ -146,8 +137,9 @@ class AiStudioWebSessionExecutor(
         }
 
         seq += 1
-        val request = Pending(seq, marker, callback)
+        val request = Pending(seq, prompt, marker, callback)
         pending = request
+        directRecoverySeq = -1
         setState(State.GENERATING, "request=${request.seq}")
         val expression = "window.__AIS_ADAPTIVE_RUNTIME__ ? window.__AIS_ADAPTIVE_RUNTIME__.generate(${JSONObject.quote(prompt)},${JSONObject.quote(marker)}) : ({ok:false,error:'runtime-not-installed'})"
         webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
@@ -156,7 +148,7 @@ class AiStudioWebSessionExecutor(
             events?.onLog("R10_DISPATCH", decoded.take(8000))
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             if (obj?.optBoolean("ok") != true) {
-                finish(request.seq, Result(ok = false, error = obj?.optString("error").orEmpty().ifBlank { "DISPATCH_FAILED" }))
+                tryDirectEngineRecovery(request.seq, "R9_DISPATCH_FAILED")
             } else {
                 schedulePolls(request.seq)
             }
@@ -174,6 +166,7 @@ class AiStudioWebSessionExecutor(
     fun cancelCurrent(): Boolean {
         val p = pending ?: return false
         pending = null
+        directRecoverySeq = -1
         runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
         p.callback(Result(ok = false, error = "CANCELLED"))
         setState(if (pageFinished) State.READY else State.LOADING, "cancelled request=${p.seq}")
@@ -229,87 +222,51 @@ class AiStudioWebSessionExecutor(
         val p = pending ?: return
         if (p.seq != requestSeq) return
         pending = null
+        directRecoverySeq = -1
         p.callback(result)
         if (!destroyed) setState(if (pageFinished) State.READY else State.LOADING, if (result.ok) "completed" else "failed:${result.error}")
     }
 
-    private fun tryAttachmentSubmitRecovery(requestSeq: Int) {
-        if (pending?.seq != requestSeq) return
-        val expression = """
-            JSON.stringify((function(){
-              var api=window.__AIS_R11_SUBMIT_TARGET__;
-              if(!api||typeof api.discover!=='function')return {ok:false,error:'submit-target-not-installed'};
-              var d=api.discover()||{};
-              var n=window.__AIS_WEB_SESSION__;
-              d.baselineCaptureCount=Number(n&&n.captureCount||0);
-              d.viewportWidth=Number(window.innerWidth||0);
-              d.viewportHeight=Number(window.innerHeight||0);
-              return d;
-            })())
-        """.trimIndent()
-        webView.evaluateJavascript(expression) { raw ->
+    private fun tryDirectEngineRecovery(requestSeq: Int, reason: String) {
+        val p = pending ?: return
+        if (p.seq != requestSeq || directRecoverySeq == requestSeq) return
+        directRecoverySeq = requestSeq
+        events?.onLog("R12_DIRECT_RECOVERY_START", "seq=$requestSeq reason=$reason promptChars=${p.prompt.length} markerChars=${p.marker.length}")
+        val expression = "window.__AIS_DIRECT_ENGINE__ ? window.__AIS_DIRECT_ENGINE__.invokeDirect(${JSONObject.quote(p.prompt)},${JSONObject.quote(p.marker)}) : ({ok:false,error:'direct-engine-not-installed'})"
+        webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
-            events?.onLog("R11_SUBMIT_TRUSTED_TARGET", decoded.take(12000))
+            events?.onLog("R12_DIRECT_DISPATCH", decoded.take(12000))
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            val baseline = obj?.optInt("baselineCaptureCount", -1) ?: -1
-            val attachmentPresent = obj?.optBoolean("attachmentPresent") == true
-            val candidates = obj?.optJSONArray("candidates")
-            val best = candidates?.optJSONObject(0)
-            val fingerprint = best?.optJSONObject("fingerprint")
-            val score = best?.optInt("score", Int.MIN_VALUE) ?: Int.MIN_VALUE
-            val disabled = best?.optBoolean("disabled") == true
-            val viewportWidth = obj?.optDouble("viewportWidth", 0.0) ?: 0.0
-            val viewportHeight = obj?.optDouble("viewportHeight", 0.0) ?: 0.0
-            val cssX = (fingerprint?.optDouble("x", Double.NaN) ?: Double.NaN) +
-                (fingerprint?.optDouble("w", Double.NaN) ?: Double.NaN) / 2.0
-            val cssY = (fingerprint?.optDouble("y", Double.NaN) ?: Double.NaN) +
-                (fingerprint?.optDouble("h", Double.NaN) ?: Double.NaN) / 2.0
-
-            val trustedTargetReady = attachmentPresent && best != null && !disabled && score >= TRUSTED_SUBMIT_MIN_SCORE &&
-                cssX.isFinite() && cssY.isFinite() && viewportWidth > 1.0 && viewportHeight > 1.0
-            if (!trustedTargetReady) {
-                tryProgrammaticAttachmentSubmitRecovery(requestSeq)
-                return@evaluateJavascript
-            }
-
-            dispatchTrustedWebViewTap(
-                cssX = cssX,
-                cssY = cssY,
-                viewportWidth = viewportWidth,
-                viewportHeight = viewportHeight,
-            ) { dispatched ->
-                if (pending?.seq != requestSeq) return@dispatchTrustedWebViewTap
-                events?.onLog(
-                    "R11_SUBMIT_TRUSTED_TOUCH_DISPATCHED",
-                    "ok=$dispatched score=$score cssX=$cssX cssY=$cssY viewport=${viewportWidth}x$viewportHeight baseline=$baseline label=${best.optString("label").take(300)}",
-                )
-                if (!dispatched) {
-                    tryProgrammaticAttachmentSubmitRecovery(requestSeq)
-                    return@dispatchTrustedWebViewTap
-                }
+            if (obj?.optBoolean("ok") != true) {
+                directRecoverySeq = -1
+                tryLegacyProgrammaticFallback(requestSeq, "DIRECT_DISPATCH_FAILED")
+            } else {
+                setState(State.GENERATING, "R12 Direct Engine invoking AI Studio handlers")
                 main.postDelayed({
-                    checkCaptureStarted(requestSeq, baseline, "trusted-touch") { started ->
-                        if (pending?.seq != requestSeq) return@checkCaptureStarted
-                        if (started) {
-                            setState(State.GENERATING, "trusted attachment submit triggered GenerateContent")
-                            readNormalized(requestSeq, "trusted-attachment-submit")
-                        } else {
-                            tryProgrammaticAttachmentSubmitRecovery(requestSeq)
+                    if (pending?.seq == requestSeq && directRecoverySeq == requestSeq) {
+                        checkGenerateCapture(requestSeq, obj.optInt("baselineCaptureCount", -1), "r12-watchdog") { started ->
+                            if (pending?.seq != requestSeq) return@checkGenerateCapture
+                            if (started) {
+                                directRecoverySeq = -1
+                                setState(State.GENERATING, "R12 Direct Engine triggered GenerateContent")
+                                readNormalized(requestSeq, "r12-direct-watchdog")
+                            }
                         }
                     }
-                }, TRUSTED_SUBMIT_CAPTURE_CHECK_MS)
+                }, DIRECT_ENGINE_WATCHDOG_MS)
             }
         }
     }
 
-    private fun tryProgrammaticAttachmentSubmitRecovery(requestSeq: Int) {
+    private fun tryLegacyProgrammaticFallback(requestSeq: Int, reason: String) {
         if (pending?.seq != requestSeq) return
+        events?.onLog("R12_LEGACY_FALLBACK_START", "seq=$requestSeq reason=$reason")
         val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.submitIfAttachment() : ({ok:false,error:'submit-target-not-installed'}))"
         webView.evaluateJavascript(expression) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
-            events?.onLog("R11_SUBMIT_RECOVERY_DISPATCH", decoded.take(10000))
+            events?.onLog("R12_LEGACY_FALLBACK_DISPATCH", decoded.take(10000))
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             val attempted = obj?.optBoolean("attempted") == true || obj?.optBoolean("pending") == true
             val baseline = obj?.optInt("baselineCaptureCount", -1) ?: -1
@@ -318,93 +275,33 @@ class AiStudioWebSessionExecutor(
                 return@evaluateJavascript
             }
             main.postDelayed({
-                checkCaptureStarted(requestSeq, baseline, "programmatic-fallback") { started ->
-                    if (pending?.seq != requestSeq) return@checkCaptureStarted
+                checkGenerateCapture(requestSeq, baseline, "legacy-programmatic") { started ->
+                    if (pending?.seq != requestSeq) return@checkGenerateCapture
                     if (started) {
-                        setState(State.GENERATING, "attachment composer submit triggered GenerateContent")
-                        readNormalized(requestSeq, "attachment-submit-recovery")
+                        setState(State.GENERATING, "legacy diagnostic fallback triggered GenerateContent")
+                        readNormalized(requestSeq, "legacy-fallback")
                     } else {
                         finish(requestSeq, Result(ok = false, error = "NO_HANDLER_TRIGGERED_REQUEST"))
                     }
                 }
-            }, ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS)
+            }, LEGACY_FALLBACK_CHECK_MS)
         }
     }
 
-    private fun checkCaptureStarted(
+    private fun checkGenerateCapture(
         requestSeq: Int,
         baseline: Int,
         source: String,
         onDone: (Boolean) -> Unit,
     ) {
         if (pending?.seq != requestSeq) return
-        val check = "JSON.stringify((function(b){var n=window.__AIS_WEB_SESSION__;return {ok:true,baseline:b,captureCount:Number(n&&n.captureCount||0),started:Number(n&&n.captureCount||0)>b};})($baseline))"
+        val check = "JSON.stringify((function(b){var n=window.__AIS_WEB_SESSION__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,started:b>=0&&c>b};})($baseline))"
         webView.evaluateJavascript(check) { captureRaw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
-            val captureDecoded = decodeEvalValue(captureRaw)
-            events?.onLog("R11_SUBMIT_RECOVERY_RESULT", "source=$source ${captureDecoded.take(4000)}")
-            val captureObj = runCatching { JSONObject(captureDecoded) }.getOrNull()
-            onDone(captureObj?.optBoolean("started") == true)
-        }
-    }
-
-    private fun dispatchTrustedWebViewTap(
-        cssX: Double,
-        cssY: Double,
-        viewportWidth: Double,
-        viewportHeight: Double,
-        onDone: (Boolean) -> Unit,
-    ) {
-        val hidden = mutableListOf<HiddenViewState>()
-        var node: View? = webView
-        var guard = 0
-        while (node != null && guard++ < 8) {
-            if (node.visibility != View.VISIBLE) {
-                hidden += HiddenViewState(node, node.visibility, node.alpha)
-                node.alpha = 0f
-                node.visibility = View.VISIBLE
-            }
-            node = node.parent as? View
-        }
-        webView.requestLayout()
-        webView.postDelayed({
-            val width = webView.width
-            val height = webView.height
-            if (width <= 2 || height <= 2 || viewportWidth <= 1.0 || viewportHeight <= 1.0) {
-                restoreHiddenViews(hidden)
-                events?.onLog("R11_SUBMIT_TRUSTED_TOUCH", "ok=false reason=WEBVIEW_NOT_LAID_OUT width=$width height=$height viewport=${viewportWidth}x$viewportHeight")
-                onDone(false)
-                return@postDelayed
-            }
-            val x = (cssX / viewportWidth * width).toFloat().coerceIn(1f, (width - 2).toFloat())
-            val y = (cssY / viewportHeight * height).toFloat().coerceIn(1f, (height - 2).toFloat())
-            val downAt = SystemClock.uptimeMillis()
-            val down = MotionEvent.obtain(downAt, downAt, MotionEvent.ACTION_DOWN, x, y, 0).apply {
-                source = InputDevice.SOURCE_TOUCHSCREEN
-            }
-            val up = MotionEvent.obtain(downAt, downAt + TRUSTED_TAP_DURATION_MS, MotionEvent.ACTION_UP, x, y, 0).apply {
-                source = InputDevice.SOURCE_TOUCHSCREEN
-            }
-            val downHandled = runCatching { webView.dispatchTouchEvent(down) }.getOrDefault(false)
-            val upHandled = runCatching { webView.dispatchTouchEvent(up) }.getOrDefault(false)
-            down.recycle()
-            up.recycle()
-            val handled = downHandled || upHandled
-            events?.onLog(
-                "R11_SUBMIT_TRUSTED_TOUCH",
-                "ok=$handled x=${x.toInt()} y=${y.toInt()} width=$width height=$height cssX=$cssX cssY=$cssY viewport=${viewportWidth}x$viewportHeight downHandled=$downHandled upHandled=$upHandled",
-            )
-            main.postDelayed({
-                restoreHiddenViews(hidden)
-                onDone(handled)
-            }, 300L)
-        }, 120L)
-    }
-
-    private fun restoreHiddenViews(hidden: List<HiddenViewState>) {
-        hidden.asReversed().forEach { item ->
-            item.view.alpha = item.alpha
-            item.view.visibility = item.visibility
+            val decoded = decodeEvalValue(captureRaw)
+            events?.onLog("R12_CAPTURE_CHECK", "source=$source ${decoded.take(4000)}")
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            onDone(obj?.optBoolean("started") == true)
         }
     }
 
@@ -457,10 +354,23 @@ class AiStudioWebSessionExecutor(
                 }
                 "R9_HANDLER_FINAL" -> main.post {
                     val p = pending ?: return@post
-                    tryAttachmentSubmitRecovery(p.seq)
+                    tryDirectEngineRecovery(p.seq, "R9_HANDLER_FINAL")
                 }
                 "R9_HANDLER_SUCCESS" -> main.post {
-                    if (pending != null) setState(State.GENERATING, "page handler triggered GenerateContent")
+                    if (pending != null) setState(State.GENERATING, "R9 page handler triggered GenerateContent")
+                }
+                "R12_DIRECT_SUBMIT_SUCCESS" -> main.post {
+                    val p = pending ?: return@post
+                    directRecoverySeq = -1
+                    setState(State.GENERATING, "R12 Direct Engine triggered GenerateContent")
+                    readNormalized(p.seq, "r12-direct-success")
+                }
+                "R12_DIRECT_SUBMIT_FINAL" -> main.post {
+                    val p = pending ?: return@post
+                    if (directRecoverySeq == p.seq) {
+                        directRecoverySeq = -1
+                        tryLegacyProgrammaticFallback(p.seq, "R12_DIRECT_SUBMIT_FINAL")
+                    }
                 }
             }
         }
@@ -515,6 +425,7 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, R11_BROAD_FALLBACK_GUARD, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionDirectEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
             setState(State.ERROR, "DOCUMENT_START_SCRIPT unsupported")
         }
@@ -530,6 +441,7 @@ class AiStudioWebSessionExecutor(
                 pageFinished = true
                 setState(State.WAITING_FOR_CONTROLLER, "page finished")
                 listOf(350L, 800L, 1_500L, 2_500L).forEach { main.postDelayed({ refreshDiscovery() }, it) }
+                main.postDelayed({ inspectDirectEngine("page-finished") }, 1_100L)
             }
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -548,16 +460,22 @@ class AiStudioWebSessionExecutor(
         webView.webChromeClient = WebChromeClient()
     }
 
+    private fun inspectDirectEngine(source: String) {
+        if (destroyed || !pageFinished) return
+        val script = "JSON.stringify(window.__AIS_DIRECT_ENGINE__ ? window.__AIS_DIRECT_ENGINE__.describe() : ({ok:false,error:'direct-engine-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            events?.onLog("R12_DIRECT_ENGINE_STATE", "source=$source ${decodeEvalValue(raw).take(12000)}")
+        }
+    }
+
     companion object {
-        const val VERSION = "2026-09-02-web-session-r10.3-trusted-attachment-submit"
+        const val VERSION = "2026-09-02-web-session-r12.0-direct-engine-executor"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
-        private const val TRUSTED_SUBMIT_MIN_SCORE = 2_500
-        private const val TRUSTED_SUBMIT_CAPTURE_CHECK_MS = 850L
-        private const val ATTACHMENT_SUBMIT_RECOVERY_CHECK_MS = 850L
-        private const val TRUSTED_TAP_DURATION_MS = 70L
+        private const val DIRECT_ENGINE_WATCHDOG_MS = 7_500L
+        private const val LEGACY_FALLBACK_CHECK_MS = 900L
         private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

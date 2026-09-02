@@ -107,11 +107,12 @@ class AiStudioWebSessionLabLog(private val context: Context) {
         }
 
         private fun reportPriority(name: String): Int = when (name) {
-            "r15-final-summary.txt" -> 0
-            "r14-final-summary.txt" -> 1
-            "last-generate-call-stack.txt" -> 2
-            "android-summary.txt" -> 3
-            "events.log" -> 4
+            "r16-final-summary.txt" -> 0
+            "r15-final-summary.txt" -> 1
+            "r14-final-summary.txt" -> 2
+            "last-generate-call-stack.txt" -> 3
+            "android-summary.txt" -> 4
+            "events.log" -> 5
             else -> 10
         }
 

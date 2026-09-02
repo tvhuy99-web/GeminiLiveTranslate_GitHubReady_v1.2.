@@ -44,17 +44,24 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R13.2: deep AI Studio Live WebChannel/audio probe. Account chooser experiment removed. -->
+        <!-- R14: direct Live audio piggyback PoC. User opens AI Studio Live once; Android PCM replaces carrier audio payloads. -->
         <activity
-            android:name=".ui.AiStudioWebSessionR13Activity"
+            android:name=".ui.AiStudioWebSessionR14Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R13.2 - Deep Live Probe">
+            android:label="AI Studio Web Session R14 - Direct Live Engine">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- R13.2 transport/deep probe remains internal for regression comparison. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR13Activity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio Web Session R13.2 - Deep Live Probe" />
 
         <!-- Proven R11.2 shell + R12 Direct Engine remains internal for closed-request regression tests. -->
         <activity

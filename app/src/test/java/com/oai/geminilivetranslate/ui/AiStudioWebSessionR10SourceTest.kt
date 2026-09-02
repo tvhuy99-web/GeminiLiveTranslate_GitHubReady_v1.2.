@@ -71,9 +71,9 @@ class AiStudioWebSessionR10SourceTest {
     }
 
     @Test
-    fun r101ExecutorRequiresReadyControllerAndPropagatesHttpErrorsImmediately() {
+    fun r103ExecutorRequiresReadyControllerPropagatesHttpErrorsAndUsesTrustedAttachmentRecovery() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-02-web-session-r10.1-executor"))
+        assertTrue(executor.contains("2026-09-02-web-session-r10.3-trusted-attachment-submit"))
         assertTrue(executor.contains("fun generate("))
         assertTrue(executor.contains("fun cancelCurrent()"))
         assertTrue(executor.contains("fun destroy()"))
@@ -84,14 +84,18 @@ class AiStudioWebSessionR10SourceTest {
         assertTrue(executor.contains("AiStudioWebSessionHttpStatusGuard.DOCUMENT_START"))
         assertTrue(executor.contains("AiStudioWebSessionResponseCore.DOCUMENT_START"))
         assertTrue(executor.contains("AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START"))
+        assertTrue(executor.contains("AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START"))
         assertTrue(executor.contains("GENERATE_HTTP_ERROR"))
         assertTrue(executor.contains("HTTP_403"))
         assertTrue(executor.contains("HTTP_429"))
         assertTrue(executor.contains("HTTP_5XX"))
         assertTrue(executor.contains("NORMALIZED_GENERATE_RESULT"))
         assertTrue(executor.contains("R9_HANDLER_FINAL"))
+        assertTrue(executor.contains("tryAttachmentSubmitRecovery"))
+        assertTrue(executor.contains("dispatchTrustedWebViewTap"))
+        assertTrue(executor.contains("dispatchTouchEvent"))
+        assertTrue(executor.contains("InputDevice.SOURCE_TOUCHSCREEN"))
         assertFalse(executor.contains("querySelector("))
-        assertFalse(executor.contains("dispatchTouchEvent"))
         assertFalse(executor.contains("GEMINI_API_KEY"))
         assertFalse(executor.contains("Authorization="))
         assertFalse(executor.contains("X-Goog-Api-Key="))

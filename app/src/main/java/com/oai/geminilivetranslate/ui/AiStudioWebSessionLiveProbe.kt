@@ -10,7 +10,7 @@ package com.oai.geminilivetranslate.ui
 object AiStudioWebSessionLiveProbe {
     const val VERSION = "2026-09-02-web-session-r13-live-transport-probe"
 
-    val DOCUMENT_START = r"""
+    val DOCUMENT_START = """
 (function(){
   'use strict';
   if(window.__AIS_LIVE_PROBE__&&window.__AIS_LIVE_PROBE__.version){return;}

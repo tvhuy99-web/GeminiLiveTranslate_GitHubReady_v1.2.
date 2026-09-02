@@ -25,13 +25,21 @@ class AiStudioWebSessionR10SourceTest {
     }
 
     @Test
-    fun r8R9DiscoverControllerFromListenerGraphWithoutTextareaSelectorOrFixedIds() {
+    fun r91UsesCumulativeSupportScoringAndHighConfidenceControllerGate() {
         val runtime = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionAdaptiveRuntime.kt")
-        assertTrue(runtime.contains("2026-09-02-web-session-r9-adaptive-runtime"))
+        assertTrue(runtime.contains("2026-09-02-web-session-r9.1-adaptive-runtime"))
         assertTrue(runtime.contains("groupFor(target)"))
         assertTrue(runtime.contains("candidateScore(group)"))
-        assertTrue(runtime.contains("successes"))
-        assertTrue(runtime.contains("failures"))
+        assertTrue(runtime.contains("readyCandidates()"))
+        assertTrue(runtime.contains("isReadyCandidate(item)"))
+        assertTrue(runtime.contains("readyCandidateCount"))
+        assertTrue(runtime.contains("controllerReady"))
+        assertTrue(runtime.contains("if(entry.target===document) score+=260"))
+        assertTrue(runtime.contains("if(entry.target===document.body) score+=200"))
+        assertTrue(runtime.contains("entry.target.contains(target)) score+=700"))
+        assertFalse(runtime.contains("else if(entry.target===document)"))
+        assertTrue(runtime.contains("supportCounts"))
+        assertTrue(runtime.contains("supportClass"))
         assertTrue(runtime.contains("R9_DISCOVERY_PLAN"))
         assertTrue(runtime.contains("R9_CANDIDATE_ATTEMPT"))
         assertTrue(runtime.contains("R9_HANDLER_SUCCESS"))
@@ -46,16 +54,38 @@ class AiStudioWebSessionR10SourceTest {
     }
 
     @Test
-    fun r10ExecutorOwnsSessionGenerateSingleFlightTimeoutAndCancel() {
+    fun httpStatusGuardPreservesNon2xxBeforeAiStudioResetsXhr() {
+        val guard = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionHttpStatusGuard.kt")
+        assertTrue(guard.contains("2026-09-02-web-session-http-status-guard-r1"))
+        assertTrue(guard.contains("status<400||status>599"))
+        assertTrue(guard.contains("readyState"))
+        assertTrue(guard.contains("GENERATE_HTTP_ERROR"))
+        assertTrue(guard.contains("error:'HTTP_'+String(meta.bestStatus)"))
+        assertTrue(guard.contains("net.lastResult"))
+        assertFalse(guard.contains("GEMINI_API_KEY"))
+        assertFalse(guard.contains("Authorization="))
+        assertFalse(guard.contains("X-Goog-Api-Key="))
+        assertFalse(guard.contains("document.cookie"))
+    }
+
+    @Test
+    fun r101ExecutorRequiresReadyControllerAndPropagatesHttpErrorsImmediately() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-02-web-session-r10-executor"))
+        assertTrue(executor.contains("2026-09-02-web-session-r10.1-executor"))
         assertTrue(executor.contains("fun generate("))
         assertTrue(executor.contains("fun cancelCurrent()"))
         assertTrue(executor.contains("fun destroy()"))
         assertTrue(executor.contains("error = \"BUSY\""))
         assertTrue(executor.contains("error = \"TIMEOUT\""))
+        assertTrue(executor.contains("readyCandidateCount"))
+        assertTrue(executor.contains("controllerReady"))
+        assertTrue(executor.contains("AiStudioWebSessionHttpStatusGuard.DOCUMENT_START"))
         assertTrue(executor.contains("AiStudioWebSessionResponseCore.DOCUMENT_START"))
         assertTrue(executor.contains("AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START"))
+        assertTrue(executor.contains("GENERATE_HTTP_ERROR"))
+        assertTrue(executor.contains("HTTP_403"))
+        assertTrue(executor.contains("HTTP_429"))
+        assertTrue(executor.contains("HTTP_5XX"))
         assertTrue(executor.contains("NORMALIZED_GENERATE_RESULT"))
         assertTrue(executor.contains("R9_HANDLER_FINAL"))
         assertFalse(executor.contains("querySelector("))

@@ -57,6 +57,21 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
+    fun r173StartsOnDedicatedLiveRouteAndRepairsUnexpectedRedirects() {
+        val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
+        assertTrue(client.contains("2026-09-03-r17.3-direct-live-route"))
+        assertTrue(client.contains("https://aistudio.google.com/live"))
+        assertTrue(client.contains("created.start(liveUrl)"))
+        assertTrue(client.contains("liveRouteUrl()"))
+        assertTrue(client.contains("targetLiveModel()"))
+        assertTrue(client.contains("Uri.encode(targetLiveModel())"))
+        assertTrue(client.contains("repairLiveRouteIfNeeded"))
+        assertTrue(client.contains("ROUTE_REPAIR_GRACE_MS"))
+        assertTrue(client.contains("MAX_ROUTE_REPAIR_ATTEMPTS"))
+        assertFalse(client.contains("https://aistudio.google.com/prompts/new_chat"))
+    }
+
+    @Test
     fun applicationDefaultsRemainFunctionSpecific() {
         val prefs = source("src/main/java/com/oai/geminilivetranslate/core/AppPreferences.kt")
         val fileTranscriber = source("src/main/java/com/oai/geminilivetranslate/network/GeminiFileTranscribeClient.kt")
@@ -80,7 +95,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
     @Test
     fun hiddenRealtimeClientReusesProvenR14R16AndMapsProductionCallbacks() {
         val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
-        assertTrue(client.contains("2026-09-03-r17-hidden-bidirectional-web-live-client"))
+        assertTrue(client.contains("2026-09-03-r17.3-direct-live-route"))
         assertTrue(client.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
         assertTrue(client.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
         assertTrue(client.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
@@ -101,17 +116,22 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun facadePrefersAiStudioAndPreservesApiFallbackWithoutApiKeyRequirement() {
+    fun facadePrefersAiStudioAndPreservesApiFallbackWithoutLockingWebOnlyDevices() {
         val facade = source("src/main/java/com/oai/geminilivetranslate/network/GeminiLiveClient.kt")
         val api = source("src/main/java/com/oai/geminilivetranslate/network/GeminiApiLiveClient.kt")
         val policy = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioLiveBackendPolicy.kt")
         val keys = source("src/main/java/com/oai/geminilivetranslate/core/ApiKeyStore.kt")
-        assertTrue(facade.contains("2026-09-03-r17-realtime-session-facade"))
+        assertTrue(facade.contains("2026-09-03-r17.3-realtime-session-facade"))
         assertTrue(facade.contains("connectAiStudio()"))
         assertTrue(facade.contains("connectApi()"))
-        assertTrue(facade.contains("recordAiStudioFailure"))
-        assertTrue(facade.contains("AI Studio chưa setup được"))
+        assertTrue(facade.contains("!hasRealApiKey && configuredForWeb"))
+        assertTrue(facade.contains("recordAiStudioFailure(hasApiFallback = canFallback)"))
+        assertTrue(facade.contains("backend Live duy nhất; giữ quyền thử lại qua reconnect/backoff"))
         assertTrue(api.contains("2026-09-03-r17-gemini-api-live-fallback"))
+        assertTrue(policy.contains("2026-09-03-r17.3-web-only-reconnect-policy"))
+        assertTrue(policy.contains("recordAiStudioFailure(hasApiFallback: Boolean)"))
+        assertTrue(policy.contains("if (hasApiFallback)"))
+        assertTrue(policy.contains("disabledUntilElapsed.set(0L)"))
         assertTrue(policy.contains("__AI_STUDIO_WEB_SESSION__"))
         assertTrue(policy.contains("DEFAULT_ENABLED = true"))
         assertTrue(policy.contains("CIRCUIT_BREAKER_MS"))

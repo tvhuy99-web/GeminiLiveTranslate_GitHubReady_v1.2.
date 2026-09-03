@@ -24,16 +24,12 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R18.3C causal runtime-learning lab.
+ * R18.4 causal discovery lab.
  *
- * R18.3B proved that blind page-wide scanning cannot see the private Live bootstrap service before
- * the session starts. R18.3C therefore performs one controlled discovery run: the tester starts
- * capture in the native app, presses the real AI Studio Start control exactly once, and the existing
- * page-local structured XHR observer captures non-UI V8 call-frame handles at the genuine Live setup
- * request. No synthetic click, selector, coordinate, MotionEvent or handler replay is used.
- *
- * The learned function/receiver references remain page-local. Diagnostics export only structural
- * metadata, hashes, argument types, receiver types and bundle line/column information.
+ * The native activity itself never automates AI Studio UI. It arms the R17.4-derived LAB oracle,
+ * while the R18.4 document-start probe records the exact Start listener/component neighborhood and
+ * correlates it with the genuine Live setup call stack. The oracle is discovery-only and must not
+ * become the production bootstrap.
  */
 class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExecutor.Events {
     private lateinit var executor: AiStudioWebSessionExecutor
@@ -49,7 +45,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
     private var lastStatusSignature = ""
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        log("R183C_ANDROID_MIC_PERMISSION", "granted=$granted")
+        log("R184_ANDROID_MIC_PERMISSION", "granted=$granted")
         updatePhase(if (granted) "Microphone Android đã sẵn sàng" else "Chưa cấp quyền microphone Android")
     }
 
@@ -61,8 +57,9 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         installWebPermissions()
         buildUi()
         log(
-            "R183C_ACTIVITY_CREATE",
-            "version=$VERSION bootstrap=${AiStudioWebSessionR18RuntimeBootstrap.VERSION} language=${AiStudioWebSessionR18LanguageGuard.VERSION} causal=${AiStudioWebSessionR18CausalProbe.VERSION}",
+            "R184_ACTIVITY_CREATE",
+            "version=$VERSION oracle=${AiStudioWebSessionR18StartOracle.VERSION} probe=${AiStudioWebSessionR18StartOracleProbe.VERSION} " +
+                "language=${AiStudioWebSessionR18LanguageGuard.VERSION} causal=${AiStudioWebSessionR18CausalProbe.VERSION}",
         )
         executor.start(LIVE_URL)
         scheduleStatusPoll()
@@ -78,28 +75,27 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         runOnUiThread {
             if (::statusView.isInitialized) statusView.text = "Web Session: $state | ${safe(detail, 300)}"
         }
-        log("R183C_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
+        log("R184_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
     }
 
     override fun onLog(name: String, detail: String) {
-        val important = name.startsWith("JS_R183B_") ||
-            name.startsWith("JS_R183_") ||
+        val important = name.startsWith("JS_R184") ||
+            name.startsWith("JS_R183") ||
             name.startsWith("JS_R18_") ||
             name.startsWith("JS_R132_") ||
             name.startsWith("JS_R13_") ||
             name.startsWith("JS_R16_") ||
-            name.startsWith("R183C_") ||
-            name.startsWith("R183B_") ||
-            name.startsWith("R183_") ||
-            name.startsWith("R18_")
+            name.startsWith("R184_")
         if (important) log(name, safe(detail, 46_000))
     }
 
     private fun installDocumentStartProbes() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            log("R183C_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
+            log("R184_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
             return
         }
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18StartOracleProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18StartOracle.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18CausalProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18LanguageGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
@@ -107,8 +103,8 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR13DeepProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         log(
-            "R183C_DOCUMENT_START_REGISTERED",
-            "origin=$AI_STUDIO_ORIGIN bootstrap=${AiStudioWebSessionR18RuntimeBootstrap.VERSION} language=${AiStudioWebSessionR18LanguageGuard.VERSION} causal=${AiStudioWebSessionR18CausalProbe.VERSION} output=${AiStudioWebSessionR16LiveOutputEngine.VERSION}",
+            "R184_DOCUMENT_START_REGISTERED",
+            "origin=$AI_STUDIO_ORIGIN oracle=${AiStudioWebSessionR18StartOracle.VERSION} probe=${AiStudioWebSessionR18StartOracleProbe.VERSION}",
         )
     }
 
@@ -121,16 +117,16 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                 val asksVideo = resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 val androidGranted = hasMicPermission()
                 log(
-                    "R183C_WEB_PERMISSION_REQUEST",
+                    "R184_WEB_PERMISSION_REQUEST",
                     "origin=${safeUrl(req.origin?.toString())} asksAudio=$asksAudio asksVideo=$asksVideo androidMicGranted=$androidGranted resources=${resources.size}",
                 )
                 runOnUiThread {
                     if (asksAudio && androidGranted && !asksVideo) {
                         req.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                        log("R183C_WEB_PERMISSION_RESULT", "audioCapture=granted videoCapture=false")
+                        log("R184_WEB_PERMISSION_RESULT", "audioCapture=granted videoCapture=false")
                     } else {
                         req.deny()
-                        log("R183C_WEB_PERMISSION_RESULT", "denied asksAudio=$asksAudio asksVideo=$asksVideo")
+                        log("R184_WEB_PERMISSION_RESULT", "denied asksAudio=$asksAudio asksVideo=$asksVideo")
                         if (asksAudio && !androidGranted) requestMic.launch(Manifest.permission.RECORD_AUDIO)
                     }
                 }
@@ -146,20 +142,20 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         controls.addView(TextView(this).apply {
-            text = "R18.3C - HỌC RUNTIME LIVE THẬT"
+            text = "R18.4 - ORACLE R17.4 + HỌC ĐƯỜNG START"
             textSize = 20f
             gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }, fullWidth())
 
         controls.addView(TextView(this).apply {
-            text = "Bài thử này chỉ dùng một lần bấm Start thủ công để học đường gọi thật. Không chọn ngôn ngữ. Sau khi nhấn BẮT ĐẦU HỌC bên dưới, hãy bấm Start Live trên trang đúng một lần, nói vài giây, rồi nhấn KẾT THÚC."
+            text = "Không chạm vào trang AI Studio. Nút thử bên dưới sẽ dùng đường R17.4 chỉ trong LAB để kích hoạt đúng Start, đồng thời R18.4 bắt listener/component/runtime bên dưới. Target tiếng Việt được ép ở setup."
             textSize = 15f
             setPadding(0, dp(6), 0, dp(6))
         }, fullWidth())
 
         phaseView = TextView(this).apply {
-            text = "Bước hiện tại: đang mở AI Studio; chưa bắt đầu học"
+            text = "Bước hiện tại: đang mở AI Studio; chưa chạy oracle"
             textSize = 16f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -177,11 +173,11 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         }, fullWidth())
 
         controls.addView(actionButton("Mở lại trang Live Translate") {
-            if (captureActive) stopCapture("reload-before-complete")
-            executor.start(LIVE_URL)
+            if (captureActive) stopCapture("reload-before-complete") { executor.start(LIVE_URL) }
+            else executor.start(LIVE_URL)
         }, fullWidth())
 
-        captureButton = actionButton("1. BẮT ĐẦU HỌC R18.3C, TỰ ÉP TARGET VI") { startLearningCapture() }
+        captureButton = actionButton("1. CHẠY ORACLE R18.4, TỰ ÉP VI + TỰ START LAB") { startOracleCapture() }
         controls.addView(captureButton, fullWidth())
 
         finishButton = actionButton("2. KẾT THÚC + CHỤP TOÀN BỘ") { finishCapture() }.apply {
@@ -195,7 +191,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         }, fullWidth())
 
         detailView = TextView(this).apply {
-            text = "Chưa chạy R18.3C."
+            text = "Chưa chạy R18.4."
             textSize = 12f
             setTextIsSelectable(true)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -206,67 +202,79 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         root.addView(ScrollView(this).apply {
             isFillViewport = false
             addView(controls)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(410)))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
         root.addView(executor.webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
     }
 
-    private fun startLearningCapture() {
+    private fun startOracleCapture() {
         if (!hasMicPermission()) requestMic.launch(Manifest.permission.RECORD_AUDIO)
         val script = """
-            JSON.stringify({
-              r183:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure('vi'):null,
-              r18:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.startCapture('manual-learn-runtime-network-vi'):null,
-              r13:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.reset('r183c-before-manual-start'):null,
-              r132:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.reset('r183c-before-manual-start'):null,
-              r183b:window.__AIS_R183B_BOOTSTRAP__?window.__AIS_R183B_BOOTSTRAP__.reset():null
-            })
+            JSON.stringify((function(){
+              var p=window.__AIS_R184_ORACLE_PROBE__,o=window.__AIS_R184_START_ORACLE__,
+                  g=window.__AIS_R183_LANGUAGE__,c=window.__AIS_R18_CAUSAL__,
+                  r13=window.__AIS_LIVE_PROBE__,r132=window.__AIS_LIVE_DEEP_PROBE__,
+                  b=window.__AIS_R183B_BOOTSTRAP__;
+              var out={};
+              out.r184p=p&&p.reset?p.reset():null;
+              out.r184s=o&&o.reset?o.reset():null;
+              out.r183=g&&g.configure?g.configure('vi'):null;
+              out.r18=c&&c.startCapture?c.startCapture('r184-r174-oracle-network-vi'):null;
+              out.r13=r13&&r13.reset?r13.reset('r184-before-oracle-start'):null;
+              out.r132=r132&&r132.reset?r132.reset('r184-before-oracle-start'):null;
+              out.r183b=b&&b.reset?b.reset():null;
+              out.oracleStart=o&&o.start?o.start('vi'):null;
+              return out;
+            })())
         """.trimIndent()
         executor.webView.evaluateJavascript(script) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
-            val causalReady = root?.isNull("r18") == false
+            val probeReady = root?.optJSONObject("r184p")?.optBoolean("ok") == true
+            val oracleReady = root?.optJSONObject("oracleStart")?.optBoolean("ok") == true
             val languageReady = root?.optJSONObject("r183")?.optBoolean("guardInstalled") == true
-            val bootstrapReady = root?.optJSONObject("r183b")?.optBoolean("ok") == true
-            if (!causalReady || !languageReady || !bootstrapReady) {
-                updatePhase("R18.3C chưa được cài đầy đủ. Hãy mở lại trang Live rồi thử lại.")
-                log("R183C_CAPTURE_START_FAILED", safe(decoded, 20_000))
+            val causalReady = root?.isNull("r18") == false
+            if (!probeReady || !oracleReady || !languageReady || !causalReady) {
+                updatePhase("R18.4 chưa được cài đầy đủ. Hãy mở lại trang Live rồi thử lại.")
+                log("R184_CAPTURE_START_FAILED", safe(decoded, 28_000))
                 return@evaluateJavascript
             }
             captureActive = true
             captureButton.isEnabled = false
             finishButton.isEnabled = true
-            updatePhase("ĐANG HỌC. Bây giờ bấm Start Live trên trang đúng MỘT LẦN; không chọn ngôn ngữ")
-            detailView.text = "targetLanguage=vi đã bật ở tầng setup. Structured observer đang chờ request /v1/bidiGenerateContent để giữ các frame runtime không-UI."
-            log("R183C_CAPTURE_STARTED_NATIVE", safe(decoded, 32_000))
+            updatePhase("ORACLE ĐANG CHẠY. Không chạm vào trang AI Studio; chờ Start và setup tự diễn ra")
+            detailView.text = "R17.4 oracle LAB đang tìm đúng Start. Probe giữ listener/component refs page-local; R18.3A đang ép targetLanguage=vi."
+            log("R184_CAPTURE_STARTED_NATIVE", safe(decoded, 40_000))
             labLog.snapshot("r18-capture-start", decoded)
-            labLog.snapshot("r18-language-state", root?.optJSONObject("r183")?.toString().orEmpty())
-            labLog.snapshot("r18-bootstrap-state", root?.optJSONObject("r183b")?.toString().orEmpty())
         }
     }
 
     private fun finishCapture() {
-        stopCapture("manual-learn-runtime-complete-network-vi")
-        snapshotCurrent("capture-finished")
-        captureActive = false
-        captureButton.isEnabled = true
-        finishButton.isEnabled = false
-        updatePhase("Đã chụp xong R18.3C. Hãy chọn XEM / CHIA SẺ NHẬT KÝ ZIP")
+        stopCapture("r184-r174-oracle-complete-network-vi") {
+            snapshotCurrent("capture-finished")
+            captureActive = false
+            captureButton.isEnabled = true
+            finishButton.isEnabled = false
+            updatePhase("Đã chụp xong R18.4. Hãy chọn XEM / CHIA SẺ NHẬT KÝ ZIP")
+        }
     }
 
-    private fun stopCapture(label: String) {
+    private fun stopCapture(label: String, onDone: (() -> Unit)? = null) {
         executor.webView.evaluateJavascript(
             "JSON.stringify(window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.stopCapture(${JSONObject.quote(label)}):({ok:false,error:'r18-not-installed'}))",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
-            log("R183C_CAPTURE_STOPPED_NATIVE", safe(decoded, 32_000))
+            log("R184_CAPTURE_STOPPED_NATIVE", safe(decoded, 32_000))
             labLog.snapshot("r18-final-summary", decoded)
+            onDone?.invoke()
         }
     }
 
     private fun snapshotCurrent(reason: String) {
         val stateScript = """
             JSON.stringify({
+              r184p:window.__AIS_R184_ORACLE_PROBE__?window.__AIS_R184_ORACLE_PROBE__.describe():null,
+              r184s:window.__AIS_R184_START_ORACLE__?window.__AIS_R184_START_ORACLE__.describe():null,
               r183b:window.__AIS_R183B_BOOTSTRAP__?window.__AIS_R183B_BOOTSTRAP__.describe():null,
               r183:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,
               r18:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.describe():null,
@@ -277,48 +285,58 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         """.trimIndent()
         executor.webView.evaluateJavascript(stateScript) { raw ->
             val decoded = decodeEvalValue(raw)
-            log("R183C_SNAPSHOT_NATIVE", "reason=$reason ${safe(decoded, 46_000)}")
+            log("R184_SNAPSHOT_NATIVE", "reason=$reason ${safe(decoded, 46_000)}")
             labLog.snapshot("r18-state-$reason", decoded)
+            labLog.snapshot("r18-bootstrap-state", decoded)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
-            labLog.snapshot("r18-bootstrap-state", root?.optJSONObject("r183b")?.toString().orEmpty())
             labLog.snapshot("r18-language-state", root?.optJSONObject("r183")?.toString().orEmpty())
             renderSnapshot(decoded)
         }
-        executor.webView.evaluateJavascript(
-            "JSON.stringify(window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.recent(520):({ok:false,error:'r18-not-installed'}))",
-        ) { raw ->
+        val timeline = """
+            JSON.stringify({
+              causal:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.recent(420):null,
+              oracle:window.__AIS_R184_ORACLE_PROBE__?window.__AIS_R184_ORACLE_PROBE__.recent(200):null
+            })
+        """.trimIndent()
+        executor.webView.evaluateJavascript(timeline) { raw ->
             val decoded = decodeEvalValue(raw)
             labLog.snapshot("r18-causal-timeline", decoded)
-            log("R183C_CAUSAL_TIMELINE_NATIVE", safe(decoded, 46_000))
+            log("R184_CAUSAL_TIMELINE_NATIVE", safe(decoded, 46_000))
         }
         executor.webView.evaluateJavascript(
-            "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(300):({ok:false,error:'r132-not-installed'}))",
+            "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(260):({ok:false,error:'r132-not-installed'}))",
         ) { raw -> labLog.snapshot("r18-r132-deep-recent", decodeEvalValue(raw)) }
     }
 
     private fun renderSnapshot(decoded: String) {
         val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return
-        val bootstrap = root.optJSONObject("r183b")
+        val probe = root.optJSONObject("r184p")
+        val oracle = root.optJSONObject("r184s")
         val language = root.optJSONObject("r183")
         val r18 = root.optJSONObject("r18")
         val r16 = root.optJSONObject("r16")
         val counters = r18?.optJSONObject("counters")
-        val trusted = counters?.optInt("trusted", 0) ?: 0
-        val open = counters?.optInt("bidiOpen", 0) ?: 0
-        val send = counters?.optInt("bidiSend", 0) ?: 0
         val setup = r16?.optInt("setupCompleteEvents", 0) ?: 0
         val verified = language?.optBoolean("targetLanguageVerified") == true
-        val learned = bootstrap?.optInt("learnedCount", 0) ?: 0
-        val observations = bootstrap?.optInt("setupObservations", 0) ?: 0
+        val open = counters?.optInt("bidiOpen", 0) ?: 0
+        val send = counters?.optInt("bidiSend", 0) ?: 0
+        val oracleMarks = probe?.optInt("oracleMarks", 0) ?: 0
+        val related = probe?.optInt("relatedListeners", 0) ?: 0
+        val invoked = probe?.optInt("listenerInvocations", 0) ?: 0
+        val frames = probe?.optInt("setupFrameCount", 0) ?: 0
+        val listenerLinks = probe?.optInt("listenerFrameLinks", 0) ?: 0
+        val graphLinks = probe?.optInt("graphFrameLinks", 0) ?: 0
+        val attempts = oracle?.optInt("attempts", 0) ?: 0
         detailView.text = buildString {
-            append("R18.3C: learnedFrames=").append(learned)
-            append(" | setupObservations=").append(observations)
-            append(" | setupComplete=").append(setup)
-            append(" | languageVi=").append(verified)
-            append("\nBidiOpen=").append(open)
-            append(" | BidiSend=").append(send)
-            append(" | trustedWebEvents=").append(trusted)
-            append("\nKhông có replay tự động trong R18.3C; đây là lượt học runtime thật.")
+            append("R18.4: oracleAttempts=").append(attempts)
+            append(" | targetMarked=").append(oracleMarks)
+            append(" | relatedListeners=").append(related)
+            append(" | listenerInvoked=").append(invoked)
+            append("\nsetupFrames=").append(frames)
+            append(" | listenerLinks=").append(listenerLinks)
+            append(" | graphLinks=").append(graphLinks)
+            append("\nBidiOpen=").append(open).append(" | BidiSend=").append(send)
+            append(" | setupComplete=").append(setup).append(" | languageVi=").append(verified)
         }
     }
 
@@ -328,7 +346,8 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                 if (destroyed) return
                 val script = """
                     JSON.stringify({
-                      r183b:window.__AIS_R183B_BOOTSTRAP__?window.__AIS_R183B_BOOTSTRAP__.describe():null,
+                      r184p:window.__AIS_R184_ORACLE_PROBE__?window.__AIS_R184_ORACLE_PROBE__.describe():null,
+                      r184s:window.__AIS_R184_START_ORACLE__?window.__AIS_R184_START_ORACLE__.describe():null,
                       r183:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,
                       r18:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.describe():null,
                       r16:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null
@@ -338,30 +357,33 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                     if (destroyed) return@evaluateJavascript
                     val decoded = decodeEvalValue(raw)
                     val root = runCatching { JSONObject(decoded) }.getOrNull()
-                    val bootstrap = root?.optJSONObject("r183b")
+                    val probe = root?.optJSONObject("r184p")
+                    val oracle = root?.optJSONObject("r184s")
                     val language = root?.optJSONObject("r183")
                     val r18 = root?.optJSONObject("r18")
                     val r16 = root?.optJSONObject("r16")
-                    if (bootstrap?.optBoolean("ok") == true && r18?.optBoolean("ok") == true) {
-                        val counters = r18.optJSONObject("counters")
-                        val learned = bootstrap.optInt("learnedCount", 0)
-                        val observations = bootstrap.optInt("setupObservations", 0)
-                        val verified = language?.optBoolean("targetLanguageVerified") == true
+                    if (probe?.optBoolean("ok") == true && oracle?.optBoolean("ok") == true && r18?.optBoolean("ok") == true) {
                         val setup = r16?.optInt("setupCompleteEvents", 0) ?: 0
-                        val signature = listOf(
-                            r18.optBoolean("captureActive"), learned, observations,
-                            counters?.optInt("bidiSend", 0), setup, verified,
-                        ).joinToString("|")
+                        val verified = language?.optBoolean("targetLanguageVerified") == true
+                        val frames = probe.optInt("setupFrameCount", 0)
+                        val related = probe.optInt("relatedListeners", 0)
+                        val invoked = probe.optInt("listenerInvocations", 0)
+                        val attempts = oracle.optInt("attempts", 0)
+                        val stage = oracle.optString("stage")
+                        val signature = "$stage|$attempts|$related|$invoked|$frames|$setup|$verified"
                         if (signature != lastStatusSignature) {
                             lastStatusSignature = signature
                             if (captureActive) {
                                 renderSnapshot(decoded)
                                 updatePhase(
                                     when {
-                                        learned > 0 && setup > 0 && verified -> "ĐÃ HỌC ĐƯỢC $learned runtime frame, setupComplete và target=vi đều xác minh. Hãy kết thúc và gửi ZIP"
-                                        learned > 0 -> "Đã bắt được $learned runtime frame không-UI; đang chờ setupComplete"
-                                        (counters?.optInt("bidiSend", 0) ?: 0) > 0 -> "Bidi đã chạy; structured observer đang thu runtime frame"
-                                        else -> "Đang chờ bạn bấm Start Live thủ công đúng một lần"
+                                        setup > 0 && verified && frames > 0 ->
+                                            "THÀNH CÔNG: R17.4 oracle mở Live, target=vi và R18.4 đã bắt $frames setup frame. Hãy kết thúc và gửi ZIP"
+                                        frames > 0 -> "Đã bắt $frames setup frame; đang chờ setupComplete/target vi"
+                                        invoked > 0 -> "Đã thấy listener Start chạy; đang chờ Bidi setup"
+                                        related > 0 -> "Đã đánh dấu Start và tìm $related listener liên quan"
+                                        attempts > 0 -> "Oracle đã kích hoạt Start LAB; đang theo dõi đường gọi"
+                                        else -> "Oracle đang tìm Start theo dấu vết R17.4"
                                     },
                                 )
                             }
@@ -415,7 +437,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        const val VERSION = "2026-09-03-r18.3c-manual-causal-runtime-learning"
+        const val VERSION = "2026-09-03-r18.4-r174-oracle-causal-learning"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val LIVE_URL = "https://aistudio.google.com/live?model=gemini-3.5-live-translate-preview"
         private const val STATUS_POLL_MS = 700L

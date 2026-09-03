@@ -62,6 +62,8 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(guard.contains("targetLanguageVerified"))
         assertTrue(guard.contains("lastBeforeHash"))
         assertTrue(guard.contains("lastAfterHash"))
+        assertTrue(guard.contains("lastFallbackPaths"))
+        assertTrue(guard.contains("lastModelPaths"))
 
         assertFalse(guard.contains("querySelector("))
         assertFalse(guard.contains("getElementsBy"))
@@ -104,8 +106,10 @@ class AiStudioWebSessionR18SourceTest {
             .find(manifest)?.value.orEmpty()
         assertTrue(r16Block.isNotEmpty())
         assertFalse(r16Block.contains("LAUNCHER"))
+        assertTrue(log.contains("\"r18-language-state.txt\" -> -5"))
         assertTrue(log.contains("\"r18-final-summary.txt\" -> -4"))
         assertTrue(log.contains("\"r18-causal-timeline.txt\" -> -3"))
+        assertTrue(log.indexOf("\"r18-language-state.txt\" -> -5") < log.indexOf("\"r18-final-summary.txt\" -> -4"))
         assertTrue(log.indexOf("\"r18-final-summary.txt\" -> -4") < log.indexOf("\"r16-final-summary.txt\" -> 0"))
     }
 }

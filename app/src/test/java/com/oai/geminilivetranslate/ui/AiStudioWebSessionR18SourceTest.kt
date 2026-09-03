@@ -76,21 +76,58 @@ class AiStudioWebSessionR18SourceTest {
 
         assertTrue(activity.contains("AiStudioWebSessionR18LanguageGuard.DOCUMENT_START"))
         assertTrue(activity.contains("window.__AIS_R183_LANGUAGE__.configure('vi')"))
-        assertTrue(activity.contains("KHÔNG chọn ngôn ngữ trên trang"))
-        assertTrue(activity.contains("không chọn Vietnamese"))
         assertTrue(activity.contains("targetLanguageVerified"))
         assertTrue(activity.contains("r18-language-state"))
         assertFalse(activity.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
     }
 
     @Test
-    fun r183GuidedLabExportsDetailedCaptureArtifacts() {
+    fun r183bDiscoversAndInvokesOnlyNonUiRuntimeCandidates() {
+        val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
+        val activity = source("ui/AiStudioWebSessionR18Activity.kt")
+
+        assertTrue(bootstrap.contains("r18.3b-runtime-bootstrap"))
+        assertTrue(bootstrap.contains("Function.prototype.toString.call"))
+        assertTrue(bootstrap.contains("Object.getOwnPropertyDescriptors"))
+        assertTrue(bootstrap.contains("Reflect.apply(best.fn,best.receiver,[])"))
+        assertTrue(bootstrap.contains("bidiGenerateContent"))
+        assertTrue(bootstrap.contains("getUserMedia"))
+        assertTrue(bootstrap.contains("gemini-3.5-live-translate-preview"))
+        assertTrue(bootstrap.contains("transport-shape"))
+        assertTrue(bootstrap.contains("ambiguous-candidates"))
+        assertTrue(bootstrap.contains("no-runtime-candidate"))
+        assertTrue(bootstrap.contains("sourceHash"))
+        assertTrue(bootstrap.contains("setup-complete"))
+
+        assertFalse(bootstrap.contains("document.querySelector("))
+        assertFalse(bootstrap.contains("document.querySelectorAll("))
+        assertFalse(bootstrap.contains("getElementsBy"))
+        assertFalse(bootstrap.contains("dispatchEvent(new"))
+        assertFalse(bootstrap.contains("new MouseEvent"))
+        assertFalse(bootstrap.contains("MotionEvent"))
+        assertFalse(bootstrap.contains("getBoundingClientRect()"))
+        assertFalse(bootstrap.contains("innerText"))
+        assertFalse(bootstrap.contains("textContent"))
+
+        assertTrue(activity.contains("AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START"))
+        assertTrue(activity.contains("window.__AIS_R183B_BOOTSTRAP__.start('vi')"))
+        assertTrue(activity.contains("TỰ KHỞI ĐỘNG LIVE R18.3B"))
+        assertTrue(activity.contains("không cần thao tác trên trang AI Studio"))
+        assertTrue(activity.contains("r18-bootstrap-state"))
+        assertFalse(activity.contains("tự bấm Start Live"))
+        assertFalse(activity.contains("clickElement("))
+        assertFalse(activity.contains("dispatchEvent("))
+    }
+
+    @Test
+    fun r183bGuidedLabExportsDetailedCaptureArtifacts() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
-        assertTrue(activity.contains("BẮT ĐẦU GHI R18.3A"))
+        assertTrue(activity.contains("TỰ KHỞI ĐỘNG LIVE R18.3B"))
         assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀN BỘ"))
+        assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))
         assertTrue(activity.contains("r18-r132-deep-recent"))
@@ -106,9 +143,11 @@ class AiStudioWebSessionR18SourceTest {
             .find(manifest)?.value.orEmpty()
         assertTrue(r16Block.isNotEmpty())
         assertFalse(r16Block.contains("LAUNCHER"))
+        assertTrue(log.contains("\"r18-bootstrap-state.txt\" -> -6"))
         assertTrue(log.contains("\"r18-language-state.txt\" -> -5"))
         assertTrue(log.contains("\"r18-final-summary.txt\" -> -4"))
         assertTrue(log.contains("\"r18-causal-timeline.txt\" -> -3"))
+        assertTrue(log.indexOf("\"r18-bootstrap-state.txt\" -> -6") < log.indexOf("\"r18-language-state.txt\" -> -5"))
         assertTrue(log.indexOf("\"r18-language-state.txt\" -> -5") < log.indexOf("\"r18-final-summary.txt\" -> -4"))
         assertTrue(log.indexOf("\"r18-final-summary.txt\" -> -4") < log.indexOf("\"r16-final-summary.txt\" -> 0"))
     }

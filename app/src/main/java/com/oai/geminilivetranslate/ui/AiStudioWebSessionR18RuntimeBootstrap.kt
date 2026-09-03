@@ -54,7 +54,7 @@ object AiStudioWebSessionR18RuntimeBootstrap {
     if(/\.xn\s*\(/.test(s)){signals.push('xn-call');score+=8;}
     if(/\.km\s*\(/.test(s)){signals.push('km-call');score+=6;}
     if(/AudioContext|createMediaStreamSource/.test(s)){signals.push('webAudio');score+=6;}
-    if(/audio\\/pcm/i.test(s)){signals.push('audioPcm');score+=6;}
+    if(/audio\/pcm/i.test(s)){signals.push('audioPcm');score+=6;}
     const uiCoupled=/\.click\s*\(|dispatchEvent\s*\(|querySelector|closest\s*\(|getBoundingClientRect|aria-label|data-testid/.test(s);
     if(uiCoupled)score-=40;
     return {score:score,signals:signals,uiCoupled:uiCoupled};

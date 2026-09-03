@@ -124,7 +124,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(facade.contains("2026-09-03-r17.3-realtime-session-facade"))
         assertTrue(facade.contains("connectAiStudio()"))
         assertTrue(facade.contains("connectApi()"))
-        assertTrue(facade.contains("!hasRealApiKey && configuredForWeb"))
+        assertTrue(facade.contains("(!hasRealApiKey && configuredForWeb)"))
         assertTrue(facade.contains("recordAiStudioFailure(hasApiFallback = canFallback)"))
         assertTrue(facade.contains("backend Live duy nhất; giữ quyền thử lại qua reconnect/backoff"))
         assertTrue(api.contains("2026-09-03-r17-gemini-api-live-fallback"))

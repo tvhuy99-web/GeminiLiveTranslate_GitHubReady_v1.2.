@@ -12,8 +12,12 @@ class AiStudioWebSessionR17ProductionSourceTest {
     @Test
     fun hiddenBootstrapAutomatesStreamWithoutOwningSecretsOrPhysicalMic() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
-        assertTrue(js.contains("2026-09-03-web-session-r17.0-hidden-production-bootstrap"))
-        assertTrue(js.contains("gemini-3.1-flash-live-preview"))
+        assertTrue(js.contains("2026-09-03-web-session-r17.1-function-specific-models"))
+        assertTrue(js.contains("gemini-3.5-live-translate-preview"))
+        assertTrue(js.contains("gemini-3.5-transcribe-live"))
+        assertFalse(js.contains("const val TARGET_MODEL = \"gemini-3.1-flash-live-preview\""))
+        assertTrue(js.contains("state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL"))
+        assertTrue(js.contains("FUNCTION_MODEL"))
         assertTrue(js.contains("createMediaStreamDestination"))
         assertTrue(js.contains("getUserMedia-synthetic"))
         assertTrue(js.contains("setCarrierActive"))
@@ -28,6 +32,27 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertFalse(js.contains("sessionStorage"))
         assertFalse(js.contains("Authorization="))
         assertFalse(js.contains("X-Goog-Api-Key="))
+    }
+
+    @Test
+    fun applicationDefaultsRemainFunctionSpecific() {
+        val prefs = source("src/main/java/com/oai/geminilivetranslate/core/AppPreferences.kt")
+        val fileTranscriber = source("src/main/java/com/oai/geminilivetranslate/network/GeminiFileTranscribeClient.kt")
+        val subtitleTranslator = source("src/main/java/com/oai/geminilivetranslate/network/SubtitleTranslationClient.kt")
+        val videoClient = source("src/main/java/com/oai/geminilivetranslate/network/GeminiVideoDescriptionClient.kt")
+        val service = source("src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt")
+
+        assertTrue(prefs.contains("DEFAULT_MODEL = \"gemini-3.5-live-translate-preview\""))
+        assertTrue(prefs.contains("TRANSCRIBE_LIVE_MODEL = \"gemini-3.5-transcribe-live\""))
+        assertTrue(prefs.contains("TRANSCRIBE_FILE_MODEL = \"gemini-3.5-transcribe\""))
+        assertTrue(prefs.contains("SUBTITLE_TRANSLATE_MODEL = \"gemini-3.5-flash-lite\""))
+        assertTrue(prefs.contains("VIDEO_DESCRIPTION_MODEL = \"gemini-3.7-flash\""))
+        assertTrue(fileTranscriber.contains("private const val MODEL = \"gemini-3.5-transcribe\""))
+        assertTrue(subtitleTranslator.contains("AppPreferences.SUBTITLE_TRANSLATE_MODEL"))
+        assertTrue(videoClient.contains("model: String = AppPreferences.VIDEO_DESCRIPTION_MODEL"))
+        assertTrue(service.contains("isTranscribeMode() && currentMode == SourceMode.FILE -> AppPreferences.TRANSCRIBE_FILE_MODEL"))
+        assertTrue(service.contains("isTranscribeMode() -> AppPreferences.TRANSCRIBE_LIVE_MODEL"))
+        assertTrue(service.contains("else -> settings.model"))
     }
 
     @Test

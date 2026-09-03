@@ -44,7 +44,7 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R18.1/R18.2: observational causal capture. No automated UI interaction. -->
+        <!-- R18.1/R18.2: current observational causal-capture launcher. No automated UI interaction. -->
         <activity
             android:name=".ui.AiStudioWebSessionR18Activity"
             android:exported="true"
@@ -56,17 +56,12 @@
             </intent-filter>
         </activity>
 
-        <!-- R16: bidirectional BrowserChannel output decoding + proven R15 input bridge. -->
+        <!-- R16 proven bidirectional bridge remains internal for regression comparison. -->
         <activity
             android:name=".ui.AiStudioWebSessionR16Activity"
-            android:exported="true"
+            android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R16 - Bidirectional Live">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:label="AI Studio Web Session R16 - Bidirectional Live" />
 
         <!-- R15 continuous real-source bridge remains internal for regression comparison. -->
         <activity

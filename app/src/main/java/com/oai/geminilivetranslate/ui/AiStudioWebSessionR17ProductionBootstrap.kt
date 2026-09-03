@@ -149,7 +149,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function modelSearchField(snapshot){
     for(let i=0;i<snapshot.interactive.length;i++){
-      const el=snapshot.interactive[i],t=tag(el),l=label(el);if((t==='INPUT'||r ole(el)==='combobox')&&(l.indexOf('model')>=0||l.indexOf('search')>=0||l.indexOf('gemini')>=0))return el;
+      const el=snapshot.interactive[i],t=tag(el),l=label(el);if((t==='INPUT'||role(el)==='combobox')&&(l.indexOf('model')>=0||l.indexOf('search')>=0||l.indexOf('gemini')>=0))return el;
     }
     return null;
   }

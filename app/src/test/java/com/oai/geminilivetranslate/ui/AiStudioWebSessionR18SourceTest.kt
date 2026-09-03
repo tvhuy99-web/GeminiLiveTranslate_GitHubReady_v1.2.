@@ -98,6 +98,10 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("no-runtime-candidate"))
         assertTrue(bootstrap.contains("sourceHash"))
         assertTrue(bootstrap.contains("setup-complete"))
+        assertTrue(bootstrap.contains("value instanceof EventTarget"))
+        assertTrue(bootstrap.contains("value instanceof Node"))
+        assertTrue(bootstrap.contains("fn.length!==0"))
+        assertTrue(bootstrap.contains("c.arity===0"))
 
         assertFalse(bootstrap.contains("document.querySelector("))
         assertFalse(bootstrap.contains("document.querySelectorAll("))
@@ -126,7 +130,7 @@ class AiStudioWebSessionR18SourceTest {
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
         assertTrue(activity.contains("TỰ KHỞI ĐỘNG LIVE R18.3B"))
-        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀN BỘ"))
+        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀ BỘ"))
         assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))

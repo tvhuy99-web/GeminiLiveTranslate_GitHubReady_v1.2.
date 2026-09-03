@@ -53,9 +53,9 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r186DirectRuntimeReplayLearnsBelowExactStartListenerAndContainsNoUiAutomation() {
+    fun r187LineageCaptureLearnsOnlyFromConfirmedSetupLineageAndContainsNoUiAutomation() {
         val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-        assertTrue(bootstrap.contains("r18.6-direct-runtime-replay"))
+        assertTrue(bootstrap.contains("r18.7-lineage-guided-runtime-capture"))
         assertTrue(bootstrap.contains("Function.prototype.toString.call"))
         assertTrue(bootstrap.contains("Object.getOwnPropertyDescriptors"))
         assertTrue(bootstrap.contains("structuredFrames"))
@@ -63,11 +63,16 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("exact-click-root"))
         assertTrue(bootstrap.contains("argumentSnapshot"))
         assertTrue(bootstrap.contains("propertyIdentity"))
-        assertTrue(bootstrap.contains("RUNTIME_HANDLES_LEARNED"))
-        assertTrue(bootstrap.contains("direct-setup-confirmed"))
-        assertTrue(bootstrap.contains("direct-bidi-activity"))
-        assertTrue(bootstrap.contains("ambiguous-candidates"))
-        assertTrue(bootstrap.contains("fn.apply(c.receiver,args)"))
+        assertTrue(bootstrap.contains("chainFor"))
+        assertTrue(bootstrap.contains("analyzeLineage"))
+        assertTrue(bootstrap.contains("distanceFromSetup"))
+        assertTrue(bootstrap.contains("setupLinked"))
+        assertTrue(bootstrap.contains("lineage-captured"))
+        assertTrue(bootstrap.contains("disabled-r18.7-learning-only"))
+        assertTrue(bootstrap.contains("Promise.prototype.then"))
+        assertTrue(bootstrap.contains("queueMicrotask"))
+        assertTrue(bootstrap.contains("scheduler.postTask"))
+        assertTrue(bootstrap.contains("MessageChannel"))
         assertTrue(bootstrap.contains("ev.isTrusted===false"))
         assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
         assertTrue(bootstrap.contains("audio\\/pcm"))
@@ -80,6 +85,8 @@ class AiStudioWebSessionR18SourceTest {
         assertFalse(bootstrap.contains("getBoundingClientRect()"))
         assertFalse(bootstrap.contains("aria-label"))
         assertFalse(bootstrap.contains("data-testid"))
+        assertFalse(bootstrap.contains("direct-setup-confirmed"))
+        assertFalse(bootstrap.contains("direct-bidi-activity"))
     }
 
     @Test
@@ -135,7 +142,7 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r184ActivityArmsOracleLanguageAndR186WithoutContainingUiAutomationItself() {
+    fun r184ActivityArmsOracleLanguageAndR187WithoutContainingUiAutomationItself() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
@@ -152,7 +159,6 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-language-state"))
         assertTrue(activity.contains("r18-causal-timeline"))
-        assertTrue(activity.contains("listenerFrameLinks"))
         assertFalse(activity.contains(".click()"))
         assertFalse(activity.contains("dispatchEvent("))
         assertFalse(activity.contains("import android.view.MotionEvent"))

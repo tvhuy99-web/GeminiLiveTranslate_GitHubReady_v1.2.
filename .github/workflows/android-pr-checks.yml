@@ -41,11 +41,13 @@ jobs:
             export PATH="$JAVA_HOME/bin:$PATH"
           fi
           java -version
+          node --version
 
           test -s .github/signing/stable-debug.keystore.b64
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
+          python3 tools/check_embedded_js_syntax.py
           chmod +x gradlew
           ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 

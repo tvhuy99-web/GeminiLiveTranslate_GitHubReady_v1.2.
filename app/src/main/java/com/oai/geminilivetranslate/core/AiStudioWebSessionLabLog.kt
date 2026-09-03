@@ -107,17 +107,17 @@ class AiStudioWebSessionLabLog(private val context: Context) {
         }
 
         private fun reportPriority(name: String): Int = when (name) {
-            "r18-final-summary.txt" -> 0
-            "r18-causal-timeline.txt" -> 1
-            "r18-state-capture-finished.txt" -> 2
-            "r18-r132-deep-recent.txt" -> 3
-            "r16-final-summary.txt" -> 4
-            "r15-final-summary.txt" -> 5
-            "r14-final-summary.txt" -> 6
-            "last-generate-call-stack.txt" -> 7
-            "android-summary.txt" -> 8
-            "events.log" -> 9
-            else -> 20
+            "r18-final-summary.txt" -> -4
+            "r18-causal-timeline.txt" -> -3
+            "r18-state-capture-finished.txt" -> -2
+            "r18-r132-deep-recent.txt" -> -1
+            "r16-final-summary.txt" -> 0
+            "r15-final-summary.txt" -> 1
+            "r14-final-summary.txt" -> 2
+            "last-generate-call-stack.txt" -> 3
+            "android-summary.txt" -> 4
+            "events.log" -> 5
+            else -> 10
         }
 
         private fun readTailAtSnapshot(file: File, snapshotBytes: Long, maxChars: Int): String {

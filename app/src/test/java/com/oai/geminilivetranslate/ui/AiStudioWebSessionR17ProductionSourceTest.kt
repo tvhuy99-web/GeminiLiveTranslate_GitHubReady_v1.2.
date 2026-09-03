@@ -12,7 +12,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
     @Test
     fun bootstrapKeepsFunctionModelsAndOwnsNoSecretsOrPhysicalMic() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
-        assertTrue(js.contains("2026-09-03-web-session-r17.4-progress-model-bootstrap"))
+        assertTrue(js.contains("2026-09-03-web-session-r17.5-translation-config-guard"))
         assertTrue(js.contains("gemini-3.5-live-translate-preview"))
         assertTrue(js.contains("gemini-3.5-transcribe-live"))
         assertFalse(js.contains("const val TARGET_MODEL = \"gemini-3.1-flash-live-preview\""))
@@ -34,7 +34,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun r174UnderstandsRouteModelWaitsForMenuAndVerifiesSetupModelPageLocally() {
+    fun r175UnderstandsRouteModelWaitsForMenuAndVerifiesSetupModelPageLocally() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
         assertTrue(js.contains("el.shadowRoot"))
         assertTrue(js.contains("el.contentDocument"))
@@ -46,7 +46,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(js.contains("waiting-model-menu-render"))
         assertTrue(js.contains("modelSearchAttempts"))
         assertTrue(js.contains("clickableAncestor"))
-        assertTrue(js.contains("bidi-model-guard"))
+        assertTrue(js.contains("bidi-model-translation-guard"))
         assertTrue(js.contains("/v1/bidiGenerateContent"))
         assertTrue(js.contains("MODEL_REQUEST_GUARD"))
         assertTrue(js.contains("modelGuardRequests"))
@@ -56,6 +56,34 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertFalse(js.contains("responseText"))
         assertFalse(js.contains("requestBody"))
         assertFalse(js.contains("audioPayload"))
+    }
+
+    @Test
+    fun r175EnforcesLiveTranslateTargetLanguageInUiAndActualSetupRequest() {
+        val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
+        val facade = source("src/main/java/com/oai/geminilivetranslate/network/GeminiLiveClient.kt")
+
+        assertTrue(js.contains("select-target-language"))
+        assertTrue(js.contains("open-target-language-selector"))
+        assertTrue(js.contains("Intl.DisplayNames"))
+        assertTrue(js.contains("translationConfig"))
+        assertTrue(js.contains("translation_config"))
+        assertTrue(js.contains("targetLanguageCode"))
+        assertTrue(js.contains("target_language_code"))
+        assertTrue(js.contains("echoTargetLanguage"))
+        assertTrue(js.contains("TRANSLATION_CONFIG_GUARD"))
+        assertTrue(js.contains("translationGuardRequests"))
+        assertTrue(js.contains("translationConfigSeen"))
+        assertTrue(js.contains("targetLanguageVerified"))
+        assertTrue(js.contains("targetLanguageRewriteRequests"))
+        assertTrue(js.contains("targetLanguageRewriteCount"))
+        assertTrue(js.contains("default-en-token"))
+        assertTrue(js.contains("if(String(value).indexOf('audio/pcm')>=0)return"))
+        assertTrue(js.contains("!state.transcribeOnly"))
+        assertTrue(facade.contains("targetLanguageCode"))
+        assertTrue(facade.contains("translationConfig"))
+        assertFalse(js.contains("console.log(body"))
+        assertFalse(js.contains("JSON.stringify(body)"))
     }
 
     @Test

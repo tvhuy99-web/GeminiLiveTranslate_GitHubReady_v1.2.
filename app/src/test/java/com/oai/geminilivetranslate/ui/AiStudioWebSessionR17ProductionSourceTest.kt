@@ -48,7 +48,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(client.contains("templateObserved"))
         assertTrue(client.contains("carrierRequests"))
         assertTrue(client.contains("INPUT_IDLE_TO_SILENCE_MS"))
-        assertFalse(client.contains("RESOURCE_VIDEO_CAPTURE))\n                    req.grant"))
+        assertFalse(client.contains("req.grant(arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))"))
         assertFalse(client.contains("document.cookie"))
         assertFalse(client.contains("Authorization="))
     }
@@ -88,7 +88,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(service.contains("scheduleReconnect"))
         assertTrue(service.contains("onGoAway"))
         assertTrue(service.contains("onSessionResumptionUpdate"))
-        assertTrue(player.contains("sampleRate = sampleRate"))
+        assertTrue(player.contains("setSampleRate(sampleRate)"))
     }
 
     @Test

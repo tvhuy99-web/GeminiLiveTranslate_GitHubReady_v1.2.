@@ -12,7 +12,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
     @Test
     fun hiddenBootstrapAutomatesStreamWithoutOwningSecretsOrPhysicalMic() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
-        assertTrue(js.contains("2026-09-03-web-session-r17.1-function-specific-models"))
+        assertTrue(js.contains("2026-09-03-web-session-r17.2-deep-bootstrap"))
         assertTrue(js.contains("gemini-3.5-live-translate-preview"))
         assertTrue(js.contains("gemini-3.5-transcribe-live"))
         assertFalse(js.contains("const val TARGET_MODEL = \"gemini-3.1-flash-live-preview\""))
@@ -32,6 +32,28 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertFalse(js.contains("sessionStorage"))
         assertFalse(js.contains("Authorization="))
         assertFalse(js.contains("X-Goog-Api-Key="))
+    }
+
+    @Test
+    fun r172DiscoversShadowDomFramesAndEnforcesFunctionModelPageLocally() {
+        val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
+        assertTrue(js.contains("el.shadowRoot"))
+        assertTrue(js.contains("el.contentDocument"))
+        assertTrue(js.contains("interactiveControls"))
+        assertTrue(js.contains("shadowRoots"))
+        assertTrue(js.contains("frameDocuments"))
+        assertTrue(js.contains("aria-haspopup"))
+        assertTrue(js.contains("combobox"))
+        assertTrue(js.contains("hrefPath"))
+        assertTrue(js.contains("bidi-model-guard"))
+        assertTrue(js.contains("/v1/bidiGenerateContent"))
+        assertTrue(js.contains("MODEL_REQUEST_GUARD"))
+        assertTrue(js.contains("modelRewriteRequests"))
+        assertTrue(js.contains("lastBlocker"))
+        assertTrue(js.contains("DISCOVERY"))
+        assertFalse(js.contains("responseText"))
+        assertFalse(js.contains("requestBody"))
+        assertFalse(js.contains("audioPayload"))
     }
 
     @Test

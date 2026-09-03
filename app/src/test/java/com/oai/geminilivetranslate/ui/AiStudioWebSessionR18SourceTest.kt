@@ -129,8 +129,8 @@ class AiStudioWebSessionR18SourceTest {
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
-        assertTrue(activity.contains("TỰ KHỞI ĐỘNG LIVE R18.3B"))
-        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀ BỘ"))
+        assertTrue(activity.contains("r18.3b-guided-runtime-bootstrap"))
+        assertTrue(activity.contains("private fun finishCapture()"))
         assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))

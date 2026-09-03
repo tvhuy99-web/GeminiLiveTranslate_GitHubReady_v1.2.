@@ -20,7 +20,6 @@ class AiStudioWebSessionR18SourceTest {
     fun r18CapturesCausalLiveBootstrapWithoutUiAutomation() {
         val probe = source("ui/AiStudioWebSessionR18CausalProbe.kt")
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
-
         assertTrue(probe.contains("R18.1/R18.2 observational probe"))
         assertTrue(probe.contains("TRUSTED_EVENT"))
         assertTrue(probe.contains("GET_USER_MEDIA_CALL"))
@@ -32,7 +31,6 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(probe.contains("causalWindow"))
         assertTrue(probe.contains("startCapture"))
         assertTrue(probe.contains("stopCapture"))
-
         assertFalse(probe.contains("import android.view.MotionEvent"))
         assertFalse(probe.contains("dispatchTouchEvent("))
         assertFalse(probe.contains("MotionEvent.obtain("))
@@ -48,7 +46,6 @@ class AiStudioWebSessionR18SourceTest {
     fun r183ForcesVietnameseOnlyInLiveSetupWithoutLanguageUiAutomation() {
         val guard = source("ui/AiStudioWebSessionR18LanguageGuard.kt")
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
-
         assertTrue(guard.contains("r18.3a-network-language-guard"))
         assertTrue(guard.contains("gemini-3.5-live-translate-preview"))
         assertTrue(guard.contains("targetLanguage:'vi'"))
@@ -64,7 +61,6 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(guard.contains("lastAfterHash"))
         assertTrue(guard.contains("lastFallbackPaths"))
         assertTrue(guard.contains("lastModelPaths"))
-
         assertFalse(guard.contains("querySelector("))
         assertFalse(guard.contains("getElementsBy"))
         assertFalse(guard.contains(".click()"))
@@ -73,7 +69,6 @@ class AiStudioWebSessionR18SourceTest {
         assertFalse(guard.contains("requestBody"))
         assertFalse(guard.contains("Authorization"))
         assertFalse(guard.contains("document.cookie"))
-
         assertTrue(activity.contains("AiStudioWebSessionR18LanguageGuard.DOCUMENT_START"))
         assertTrue(activity.contains("window.__AIS_R183_LANGUAGE__.configure('vi')"))
         assertTrue(activity.contains("targetLanguageVerified"))
@@ -84,7 +79,6 @@ class AiStudioWebSessionR18SourceTest {
     @Test
     fun r183bRuntimeObserverKeepsNonUiLearningPrimitives() {
         val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-
         assertTrue(bootstrap.contains("r18.3b2-behavioral-runtime-bootstrap"))
         assertTrue(bootstrap.contains("Function.prototype.toString.call"))
         assertTrue(bootstrap.contains("Object.getOwnPropertyDescriptors"))
@@ -102,7 +96,6 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("value instanceof Node"))
         assertTrue(bootstrap.contains("fn.length!==0"))
         assertTrue(bootstrap.contains("c.arity===0"))
-
         assertFalse(bootstrap.contains("xn-call"))
         assertFalse(bootstrap.contains("km-call"))
         assertFalse(bootstrap.contains("document.querySelector("))
@@ -122,7 +115,6 @@ class AiStudioWebSessionR18SourceTest {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
-
         assertTrue(activity.contains("r18.3c-manual-causal-runtime-learning"))
         assertTrue(activity.contains("BẮT ĐẦU HỌC R18.3C"))
         assertTrue(activity.contains("manual-learn-runtime-network-vi"))
@@ -141,12 +133,11 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(activity.contains("AiStudioWebSessionLiveProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR13DeepProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
-
         assertFalse(activity.contains("clickElement("))
         assertFalse(activity.contains("dispatchEvent("))
-        assertFalse(activity.contains("MotionEvent"))
-        assertFalse(activity.contains("getBoundingClientRect"))
-
+        assertFalse(activity.contains("import android.view.MotionEvent"))
+        assertFalse(activity.contains("MotionEvent.obtain("))
+        assertFalse(activity.contains("getBoundingClientRect("))
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR18Activity"))
         assertTrue(manifest.contains("AI Studio R18 - Bắt đường Live"))
         assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)

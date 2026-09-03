@@ -40,6 +40,12 @@ object AiStudioWebSessionR18RuntimeBootstrap {
   function hashText(v){let h=2166136261,s=String(v||'');for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16);}
   function fnSource(fn){try{return Function.prototype.toString.call(fn);}catch(_){return '';}}
   function isNative(src){return !src||src.indexOf('[native code]')>=0;}
+  function isUiObject(value){
+    try{if(value===window||value===document)return true;}catch(_){}
+    try{if(typeof EventTarget==='function'&&value instanceof EventTarget)return true;}catch(_){}
+    try{if(typeof Node==='function'&&value instanceof Node)return true;}catch(_){}
+    return false;
+  }
   function liveCounters(){
     let bidi=0,setup=0;
     try{const r=window.__AIS_R18_CAUSAL__&&window.__AIS_R18_CAUSAL__.describe();bidi=Number(r&&r.counters&&r.counters.bidiSend||0);}catch(_){}
@@ -72,13 +78,14 @@ object AiStudioWebSessionR18RuntimeBootstrap {
       const d=Object.getOwnPropertyDescriptors(obj);const names=Object.keys(d).slice(0,MAX_PROPS);
       for(let i=0;i<names.length;i++){
         const name=names[i],desc=d[name];if(!desc||!Object.prototype.hasOwnProperty.call(desc,'value'))continue;
-        const value=desc.value;if(value&&(typeof value==='object'||typeof value==='function'))out.push({name:name,value:value});
+        const value=desc.value;
+        if(value&&(typeof value==='object'||typeof value==='function')&&!isUiObject(value))out.push({name:name,value:value});
       }
     }catch(_){}
     return out;
   }
   function methodEntries(obj,path,depth){
-    const out=[];
+    const out=[];if(isUiObject(obj))return out;
     try{
       const sources=[{owner:obj,prefix:path}];
       const p=Object.getPrototypeOf(obj);if(p&&p!==Object.prototype&&p!==Function.prototype)sources.push({owner:p,prefix:path+'.<proto>'});
@@ -87,23 +94,28 @@ object AiStudioWebSessionR18RuntimeBootstrap {
         for(let i=0;i<names.length;i++){
           const name=names[i],desc=d[name];if(!desc||typeof desc.value!=='function'||name==='constructor')continue;
           const fn=desc.value,src=fnSource(fn);state.functionsVisited++;
-          if(isNative(src))continue;
+          if(isNative(src)||fn.length!==0)continue;
           const sig=sourceSignals(src);if(sig.uiCoupled||sig.signals.length===0)continue;
-          let score=sig.score;
-          if(fn.length===0)score+=5;else if(fn.length===1)score+=2;else if(fn.length>3)score-=8;
+          let score=sig.score+5;
           if(transportShape(obj)){score+=4;sig.signals.push('transport-shape');}
           if(score<8)continue;
-          out.push({receiver:obj,fn:fn,path:(item.prefix+'.'+safeSeg(name)).slice(0,260),name:safeSeg(name),arity:Number(fn.length||0),score:score,signals:sig.signals.slice(0,8),sourceHash:hashText(src)});
+          out.push({receiver:obj,fn:fn,path:(item.prefix+'.'+safeSeg(name)).slice(0,260),name:safeSeg(name),arity:0,score:score,signals:sig.signals.slice(0,8),sourceHash:hashText(src)});
         }
       }
     }catch(_){}
     return out;
   }
   function roots(){
-    const out=[{name:'window',value:window},{name:'document',value:document}];
-    try{if(document.documentElement)out.push({name:'documentElement',value:document.documentElement});}catch(_){}
-    try{if(document.body)out.push({name:'body',value:document.body});}catch(_){}
-    try{if(window._)out.push({name:'closureNamespace',value:window._});}catch(_){}
+    const out=[];
+    try{if(window._&&!isUiObject(window._))out.push({name:'closureNamespace',value:window._});}catch(_){}
+    try{
+      const d=Object.getOwnPropertyDescriptors(window),names=Object.keys(d).slice(0,MAX_PROPS);
+      for(let i=0;i<names.length&&out.length<120;i++){
+        const name=names[i],desc=d[name];if(!desc||!Object.prototype.hasOwnProperty.call(desc,'value'))continue;
+        const value=desc.value;
+        if(value&&(typeof value==='object'||typeof value==='function')&&!isUiObject(value))out.push({name:'window.'+safeSeg(name),value:value});
+      }
+    }catch(_){}
     return out;
   }
   function discover(){
@@ -111,7 +123,7 @@ object AiStudioWebSessionR18RuntimeBootstrap {
     const seen=new WeakSet(),queue=roots().map(function(r){return {value:r.value,path:r.name,depth:0};}),candidates=[];
     while(queue.length&&state.objectsVisited<MAX_OBJECTS){
       const item=queue.shift(),obj=item.value;
-      if(!obj||(typeof obj!=='object'&&typeof obj!=='function'))continue;
+      if(!obj||(typeof obj!=='object'&&typeof obj!=='function')||isUiObject(obj))continue;
       try{if(seen.has(obj))continue;seen.add(obj);}catch(_){continue;}
       state.objectsVisited++;
       const methods=methodEntries(obj,item.path,item.depth);for(let i=0;i<methods.length&&candidates.length<MAX_CANDIDATES;i++)candidates.push(methods[i]);
@@ -121,14 +133,14 @@ object AiStudioWebSessionR18RuntimeBootstrap {
         const child=kids[i];queue.push({value:child.value,path:(item.path+'.'+safeSeg(child.name)).slice(0,220),depth:item.depth+1});
       }
     }
-    candidates.sort(function(a,b){return b.score-a.score||a.arity-b.arity;});
-    state.candidateCount=candidates.length;state.strongCandidateCount=candidates.filter(function(c){return c.score>=18&&c.signals.length>=2&&c.arity<=2;}).length;
+    candidates.sort(function(a,b){return b.score-a.score;});
+    state.candidateCount=candidates.length;state.strongCandidateCount=candidates.filter(function(c){return c.score>=18&&c.signals.length>=2&&c.arity===0;}).length;
     state.top=candidates.slice(0,10).map(function(c){return {path:c.path,arity:c.arity,score:c.score,signals:c.signals,sourceHash:c.sourceHash};});
     bridge('DISCOVERY',{scans:state.scans,objectsVisited:state.objectsVisited,functionsVisited:state.functionsVisited,candidateCount:state.candidateCount,strongCandidateCount:state.strongCandidateCount,top:state.top});
     return candidates;
   }
   function invokeUnique(candidates){
-    const strong=candidates.filter(function(c){return c.score>=18&&c.signals.length>=2&&c.arity<=2;});
+    const strong=candidates.filter(function(c){return c.score>=18&&c.signals.length>=2&&c.arity===0;});
     if(!strong.length){state.stage='no-strong-candidate';return false;}
     const best=strong[0],next=strong.length>1?strong[1]:null;
     if(next&&next.score===best.score&&next.sourceHash!==best.sourceHash){state.stage='ambiguous-candidates';return false;}

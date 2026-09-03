@@ -45,16 +45,54 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r18GuidedLabExportsDetailedCaptureArtifacts() {
+    fun r183ForcesVietnameseOnlyInLiveSetupWithoutLanguageUiAutomation() {
+        val guard = source("ui/AiStudioWebSessionR18LanguageGuard.kt")
+        val activity = source("ui/AiStudioWebSessionR18Activity.kt")
+
+        assertTrue(guard.contains("r18.3a-network-language-guard"))
+        assertTrue(guard.contains("gemini-3.5-live-translate-preview"))
+        assertTrue(guard.contains("targetLanguage:'vi'"))
+        assertTrue(guard.contains("target_language_code"))
+        assertTrue(guard.contains("targetLanguageCode"))
+        assertTrue(guard.contains("/v1/bidiGenerateContent"))
+        assertTrue(guard.contains("/^req\\d+___data__$/"))
+        assertTrue(guard.contains("audio\\/pcm"))
+        assertTrue(guard.contains("bounded-en-token"))
+        assertTrue(guard.contains("ambiguous-en-token-not-rewritten"))
+        assertTrue(guard.contains("targetLanguageVerified"))
+        assertTrue(guard.contains("lastBeforeHash"))
+        assertTrue(guard.contains("lastAfterHash"))
+
+        assertFalse(guard.contains("querySelector("))
+        assertFalse(guard.contains("getElementsBy"))
+        assertFalse(guard.contains(".click()"))
+        assertFalse(guard.contains("dispatchEvent("))
+        assertFalse(guard.contains("MotionEvent"))
+        assertFalse(guard.contains("requestBody"))
+        assertFalse(guard.contains("Authorization"))
+        assertFalse(guard.contains("document.cookie"))
+
+        assertTrue(activity.contains("AiStudioWebSessionR18LanguageGuard.DOCUMENT_START"))
+        assertTrue(activity.contains("window.__AIS_R183_LANGUAGE__.configure('vi')"))
+        assertTrue(activity.contains("KHÔNG chọn ngôn ngữ trên trang"))
+        assertTrue(activity.contains("không chọn Vietnamese"))
+        assertTrue(activity.contains("targetLanguageVerified"))
+        assertTrue(activity.contains("r18-language-state"))
+        assertFalse(activity.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
+    }
+
+    @Test
+    fun r183GuidedLabExportsDetailedCaptureArtifacts() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
-        assertTrue(activity.contains("BẮT ĐẦU GHI R18.1 + R18.2"))
+        assertTrue(activity.contains("BẮT ĐẦU GHI R18.3A"))
         assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀN BỘ"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))
         assertTrue(activity.contains("r18-r132-deep-recent"))
+        assertTrue(activity.contains("r18-language-state"))
         assertTrue(activity.contains("AiStudioWebSessionLiveProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR13DeepProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))

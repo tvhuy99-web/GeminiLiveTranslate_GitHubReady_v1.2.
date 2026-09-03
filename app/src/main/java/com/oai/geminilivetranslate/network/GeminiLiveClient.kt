@@ -80,12 +80,14 @@ class GeminiLiveClient(
 
     fun connect() {
         if (closed.get()) return
-        val preferWeb = AiStudioLiveBackendPolicy.preferAiStudio(appContext)
         val hasRealApiKey = hasRealApiKey()
+        val configuredForWeb = AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext)
+        val preferWeb = AiStudioLiveBackendPolicy.preferAiStudio(appContext) ||
+            (!hasRealApiKey && configuredForWeb)
         when {
             preferWeb -> connectAiStudio()
             hasRealApiKey -> connectApi()
-            else -> listener.onError(IllegalStateException("AI_STUDIO_BACKEND_COOLDOWN_AND_NO_API_KEY"))
+            else -> listener.onError(IllegalStateException("AI_STUDIO_BACKEND_UNAVAILABLE_AND_NO_API_KEY"))
         }
     }
 
@@ -127,10 +129,11 @@ class GeminiLiveClient(
         if (closed.get()) return
         backendName = "aistudio"
         aiStudioSetupComplete = false
+        val apiFallback = hasRealApiKey() && AiStudioLiveBackendPolicy.allowApiFallback(appContext)
         logger.log(
             2,
             "LiveBackend",
-            "Chọn AI Studio Web Session version=${AiStudioWebRealtimeClient.VERSION} target=$targetLanguage mode=$operationMode apiFallback=${hasRealApiKey() && AiStudioLiveBackendPolicy.allowApiFallback(appContext)}",
+            "Chọn AI Studio Web Session version=${AiStudioWebRealtimeClient.VERSION} target=$targetLanguage mode=$operationMode apiFallback=$apiFallback webOnly=${!hasRealApiKey()}",
         )
         val backend = AiStudioWebRealtimeClient(
             targetLanguage = targetLanguage,
@@ -175,13 +178,16 @@ class GeminiLiveClient(
         val detail = error?.message ?: closedReason ?: "AI Studio closed"
         val canFallback = !aiStudioSetupComplete && hasRealApiKey() &&
             AiStudioLiveBackendPolicy.allowApiFallback(appContext)
-        AiStudioLiveBackendPolicy.recordAiStudioFailure()
+        AiStudioLiveBackendPolicy.recordAiStudioFailure(hasApiFallback = canFallback)
         if (canFallback) {
             logger.log(1, "LiveBackend", "AI Studio chưa setup được ($detail); chuyển sang Gemini API fallback")
             webBackend?.close(false)
             webBackend = null
             connectApi()
             return
+        }
+        if (!hasRealApiKey()) {
+            logger.log(1, "LiveBackend", "AI Studio là backend Live duy nhất; giữ quyền thử lại qua reconnect/backoff reason=$detail")
         }
         if (error != null) listener.onError(error) else listener.onClosed(detail)
     }
@@ -215,7 +221,7 @@ class GeminiLiveClient(
     class GeminiApiException(val code: Int, message: String) : Exception("Gemini API $code: $message")
 
     companion object {
-        const val VERSION = "2026-09-03-r17-realtime-session-facade"
+        const val VERSION = "2026-09-03-r17.3-realtime-session-facade"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
 
         internal fun createSetupMessage(

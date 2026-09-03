@@ -24,12 +24,16 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R18.3B guided non-UI Live bootstrap experiment.
+ * R18.3C causal runtime-learning lab.
  *
- * The tester presses only the native app control. The AI Studio page must remain untouched.
- * Target language is repaired in the Live setup request and the runtime bootstrap discovers a
- * page-local Live service by behavioral function signals. No DOM control selection or page event
- * automation is used.
+ * R18.3B proved that blind page-wide scanning cannot see the private Live bootstrap service before
+ * the session starts. R18.3C therefore performs one controlled discovery run: the tester starts
+ * capture in the native app, presses the real AI Studio Start control exactly once, and the existing
+ * page-local structured XHR observer captures non-UI V8 call-frame handles at the genuine Live setup
+ * request. No synthetic click, selector, coordinate, MotionEvent or handler replay is used.
+ *
+ * The learned function/receiver references remain page-local. Diagnostics export only structural
+ * metadata, hashes, argument types, receiver types and bundle line/column information.
  */
 class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExecutor.Events {
     private lateinit var executor: AiStudioWebSessionExecutor
@@ -45,7 +49,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
     private var lastStatusSignature = ""
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        log("R183B_ANDROID_MIC_PERMISSION", "granted=$granted")
+        log("R183C_ANDROID_MIC_PERMISSION", "granted=$granted")
         updatePhase(if (granted) "Microphone Android đã sẵn sàng" else "Chưa cấp quyền microphone Android")
     }
 
@@ -57,7 +61,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         installWebPermissions()
         buildUi()
         log(
-            "R183B_ACTIVITY_CREATE",
+            "R183C_ACTIVITY_CREATE",
             "version=$VERSION bootstrap=${AiStudioWebSessionR18RuntimeBootstrap.VERSION} language=${AiStudioWebSessionR18LanguageGuard.VERSION} causal=${AiStudioWebSessionR18CausalProbe.VERSION}",
         )
         executor.start(LIVE_URL)
@@ -74,7 +78,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         runOnUiThread {
             if (::statusView.isInitialized) statusView.text = "Web Session: $state | ${safe(detail, 300)}"
         }
-        log("R183B_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
+        log("R183C_EXECUTOR_STATE", "state=$state detail=${safe(detail, 1200)} url=${safeUrl(executor.webView.url)}")
     }
 
     override fun onLog(name: String, detail: String) {
@@ -84,6 +88,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
             name.startsWith("JS_R132_") ||
             name.startsWith("JS_R13_") ||
             name.startsWith("JS_R16_") ||
+            name.startsWith("R183C_") ||
             name.startsWith("R183B_") ||
             name.startsWith("R183_") ||
             name.startsWith("R18_")
@@ -92,42 +97,17 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
 
     private fun installDocumentStartProbes() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            log("R183B_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
+            log("R183C_DOCUMENT_START_UNSUPPORTED", "DOCUMENT_START_SCRIPT=false")
             return
         }
-
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionR18CausalProbe.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionR18LanguageGuard.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionLiveProbe.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionR13DeepProbe.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
-        WebViewCompat.addDocumentStartJavaScript(
-            executor.webView,
-            AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
-        )
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18CausalProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18LanguageGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionLiveProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR13DeepProbe.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+        WebViewCompat.addDocumentStartJavaScript(executor.webView, AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         log(
-            "R183B_DOCUMENT_START_REGISTERED",
+            "R183C_DOCUMENT_START_REGISTERED",
             "origin=$AI_STUDIO_ORIGIN bootstrap=${AiStudioWebSessionR18RuntimeBootstrap.VERSION} language=${AiStudioWebSessionR18LanguageGuard.VERSION} causal=${AiStudioWebSessionR18CausalProbe.VERSION} output=${AiStudioWebSessionR16LiveOutputEngine.VERSION}",
         )
     }
@@ -141,16 +121,16 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                 val asksVideo = resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 val androidGranted = hasMicPermission()
                 log(
-                    "R183B_WEB_PERMISSION_REQUEST",
+                    "R183C_WEB_PERMISSION_REQUEST",
                     "origin=${safeUrl(req.origin?.toString())} asksAudio=$asksAudio asksVideo=$asksVideo androidMicGranted=$androidGranted resources=${resources.size}",
                 )
                 runOnUiThread {
                     if (asksAudio && androidGranted && !asksVideo) {
                         req.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                        log("R183B_WEB_PERMISSION_RESULT", "audioCapture=granted videoCapture=false")
+                        log("R183C_WEB_PERMISSION_RESULT", "audioCapture=granted videoCapture=false")
                     } else {
                         req.deny()
-                        log("R183B_WEB_PERMISSION_RESULT", "denied asksAudio=$asksAudio asksVideo=$asksVideo")
+                        log("R183C_WEB_PERMISSION_RESULT", "denied asksAudio=$asksAudio asksVideo=$asksVideo")
                         if (asksAudio && !androidGranted) requestMic.launch(Manifest.permission.RECORD_AUDIO)
                     }
                 }
@@ -166,20 +146,20 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         controls.addView(TextView(this).apply {
-            text = "R18.3B - LIVE NGẦM, TARGET TIẾNG VIỆT"
+            text = "R18.3C - HỌC RUNTIME LIVE THẬT"
             textSize = 20f
             gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }, fullWidth())
 
         controls.addView(TextView(this).apply {
-            text = "Bài thử này không cần thao tác trên trang AI Studio. Sau khi trang tải xong, chỉ nhấn nút TỰ KHỞI ĐỘNG LIVE bên dưới. Không chạm nút Start, không chọn ngôn ngữ và không điều khiển giao diện web."
+            text = "Bài thử này chỉ dùng một lần bấm Start thủ công để học đường gọi thật. Không chọn ngôn ngữ. Sau khi nhấn BẮT ĐẦU HỌC bên dưới, hãy bấm Start Live trên trang đúng một lần, nói vài giây, rồi nhấn KẾT THÚC."
             textSize = 15f
             setPadding(0, dp(6), 0, dp(6))
         }, fullWidth())
 
         phaseView = TextView(this).apply {
-            text = "Bước hiện tại: đang mở runtime AI Studio; không thao tác trang web"
+            text = "Bước hiện tại: đang mở AI Studio; chưa bắt đầu học"
             textSize = 16f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -201,7 +181,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
             executor.start(LIVE_URL)
         }, fullWidth())
 
-        captureButton = actionButton("1. TỰ KHỞI ĐỘNG LIVE R18.3B, TARGET VI") { startCapture() }
+        captureButton = actionButton("1. BẮT ĐẦU HỌC R18.3C, TỰ ÉP TARGET VI") { startLearningCapture() }
         controls.addView(captureButton, fullWidth())
 
         finishButton = actionButton("2. KẾT THÚC + CHỤP TOÀN BỘ") { finishCapture() }.apply {
@@ -215,7 +195,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         }, fullWidth())
 
         detailView = TextView(this).apply {
-            text = "Chưa chạy R18.3B."
+            text = "Chưa chạy R18.3C."
             textSize = 12f
             setTextIsSelectable(true)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -226,25 +206,20 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         root.addView(ScrollView(this).apply {
             isFillViewport = false
             addView(controls)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(390)))
-
-        root.addView(
-            executor.webView,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
-        )
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(410)))
+        root.addView(executor.webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
     }
 
-    private fun startCapture() {
+    private fun startLearningCapture() {
         if (!hasMicPermission()) requestMic.launch(Manifest.permission.RECORD_AUDIO)
-
         val script = """
             JSON.stringify({
               r183:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure('vi'):null,
-              r18:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.startCapture('auto-runtime-start-network-vi'):null,
-              r13:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.reset('r183b-before-live'):null,
-              r132:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.reset('r183b-before-live'):null,
-              r183b:window.__AIS_R183B_BOOTSTRAP__?window.__AIS_R183B_BOOTSTRAP__.start('vi'):null
+              r18:window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.startCapture('manual-learn-runtime-network-vi'):null,
+              r13:window.__AIS_LIVE_PROBE__?window.__AIS_LIVE_PROBE__.reset('r183c-before-manual-start'):null,
+              r132:window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.reset('r183c-before-manual-start'):null,
+              r183b:window.__AIS_R183B_BOOTSTRAP__?window.__AIS_R183B_BOOTSTRAP__.reset():null
             })
         """.trimIndent()
         executor.webView.evaluateJavascript(script) { raw ->
@@ -254,16 +229,16 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
             val languageReady = root?.optJSONObject("r183")?.optBoolean("guardInstalled") == true
             val bootstrapReady = root?.optJSONObject("r183b")?.optBoolean("ok") == true
             if (!causalReady || !languageReady || !bootstrapReady) {
-                updatePhase("R18.3B chưa được cài đầy đủ. Hãy mở lại trang Live rồi thử lại.")
-                log("R183B_CAPTURE_START_FAILED", safe(decoded, 20_000))
+                updatePhase("R18.3C chưa được cài đầy đủ. Hãy mở lại trang Live rồi thử lại.")
+                log("R183C_CAPTURE_START_FAILED", safe(decoded, 20_000))
                 return@evaluateJavascript
             }
             captureActive = true
             captureButton.isEnabled = false
             finishButton.isEnabled = true
-            updatePhase("ĐANG TỰ TÌM PAGE-RUNTIME LIVE SERVICE; không thao tác trang AI Studio")
-            detailView.text = "targetLanguage=vi đã bật. Runtime scanner đang tìm đường Live không phụ thuộc UI và sẽ dừng an toàn nếu candidate mơ hồ."
-            log("R183B_CAPTURE_STARTED_NATIVE", safe(decoded, 32_000))
+            updatePhase("ĐANG HỌC. Bây giờ bấm Start Live trên trang đúng MỘT LẦN; không chọn ngôn ngữ")
+            detailView.text = "targetLanguage=vi đã bật ở tầng setup. Structured observer đang chờ request /v1/bidiGenerateContent để giữ các frame runtime không-UI."
+            log("R183C_CAPTURE_STARTED_NATIVE", safe(decoded, 32_000))
             labLog.snapshot("r18-capture-start", decoded)
             labLog.snapshot("r18-language-state", root?.optJSONObject("r183")?.toString().orEmpty())
             labLog.snapshot("r18-bootstrap-state", root?.optJSONObject("r183b")?.toString().orEmpty())
@@ -271,12 +246,12 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
     }
 
     private fun finishCapture() {
-        stopCapture("auto-runtime-live-complete-network-vi")
+        stopCapture("manual-learn-runtime-complete-network-vi")
         snapshotCurrent("capture-finished")
         captureActive = false
         captureButton.isEnabled = true
         finishButton.isEnabled = false
-        updatePhase("Đã chụp xong. Hãy chọn XEM / CHIA SẺ NHẬT KÝ ZIP")
+        updatePhase("Đã chụp xong R18.3C. Hãy chọn XEM / CHIA SẺ NHẬT KÝ ZIP")
     }
 
     private fun stopCapture(label: String) {
@@ -284,7 +259,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
             "JSON.stringify(window.__AIS_R18_CAUSAL__?window.__AIS_R18_CAUSAL__.stopCapture(${JSONObject.quote(label)}):({ok:false,error:'r18-not-installed'}))",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
-            log("R183B_CAPTURE_STOPPED_NATIVE", safe(decoded, 32_000))
+            log("R183C_CAPTURE_STOPPED_NATIVE", safe(decoded, 32_000))
             labLog.snapshot("r18-final-summary", decoded)
         }
     }
@@ -302,7 +277,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         """.trimIndent()
         executor.webView.evaluateJavascript(stateScript) { raw ->
             val decoded = decodeEvalValue(raw)
-            log("R183B_SNAPSHOT_NATIVE", "reason=$reason ${safe(decoded, 46_000)}")
+            log("R183C_SNAPSHOT_NATIVE", "reason=$reason ${safe(decoded, 46_000)}")
             labLog.snapshot("r18-state-$reason", decoded)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
             labLog.snapshot("r18-bootstrap-state", root?.optJSONObject("r183b")?.toString().orEmpty())
@@ -314,7 +289,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         ) { raw ->
             val decoded = decodeEvalValue(raw)
             labLog.snapshot("r18-causal-timeline", decoded)
-            log("R183B_CAUSAL_TIMELINE_NATIVE", safe(decoded, 46_000))
+            log("R183C_CAUSAL_TIMELINE_NATIVE", safe(decoded, 46_000))
         }
         executor.webView.evaluateJavascript(
             "JSON.stringify(window.__AIS_LIVE_DEEP_PROBE__?window.__AIS_LIVE_DEEP_PROBE__.recent(300):({ok:false,error:'r132-not-installed'}))",
@@ -331,23 +306,19 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
         val trusted = counters?.optInt("trusted", 0) ?: 0
         val open = counters?.optInt("bidiOpen", 0) ?: 0
         val send = counters?.optInt("bidiSend", 0) ?: 0
-        val setup = r16?.optInt("setupCompleteEvents", 0) ?: bootstrap?.optInt("setupAfter", 0) ?: 0
+        val setup = r16?.optInt("setupCompleteEvents", 0) ?: 0
         val verified = language?.optBoolean("targetLanguageVerified") == true
+        val learned = bootstrap?.optInt("learnedCount", 0) ?: 0
+        val observations = bootstrap?.optInt("setupObservations", 0) ?: 0
         detailView.text = buildString {
-            append("R18.3B: stage=").append(bootstrap?.optString("stage", "?") ?: "?")
+            append("R18.3C: learnedFrames=").append(learned)
+            append(" | setupObservations=").append(observations)
             append(" | setupComplete=").append(setup)
             append(" | languageVi=").append(verified)
-            append("\nscan=").append(bootstrap?.optInt("scans", 0) ?: 0)
-            append(" | objects=").append(bootstrap?.optInt("objectsVisited", 0) ?: 0)
-            append(" | functions=").append(bootstrap?.optInt("functionsVisited", 0) ?: 0)
-            append(" | candidates=").append(bootstrap?.optInt("candidateCount", 0) ?: 0)
-            append(" | strong=").append(bootstrap?.optInt("strongCandidateCount", 0) ?: 0)
-            append("\ninvokeAttempts=").append(bootstrap?.optInt("invokeAttempts", 0) ?: 0)
-            append(" | BidiOpen=").append(open)
+            append("\nBidiOpen=").append(open)
             append(" | BidiSend=").append(send)
             append(" | trustedWebEvents=").append(trusted)
-            append("\nselected=").append(bootstrap?.optJSONObject("selected")?.optString("path", "none") ?: "none")
-            append(" | error=").append(bootstrap?.optString("lastError", "") ?: "")
+            append("\nKhông có replay tự động trong R18.3C; đây là lượt học runtime thật.")
         }
     }
 
@@ -373,18 +344,13 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                     val r16 = root?.optJSONObject("r16")
                     if (bootstrap?.optBoolean("ok") == true && r18?.optBoolean("ok") == true) {
                         val counters = r18.optJSONObject("counters")
-                        val stage = bootstrap.optString("stage", "idle")
+                        val learned = bootstrap.optInt("learnedCount", 0)
+                        val observations = bootstrap.optInt("setupObservations", 0)
                         val verified = language?.optBoolean("targetLanguageVerified") == true
-                        val setup = r16?.optInt("setupCompleteEvents", 0) ?: bootstrap.optInt("setupAfter", 0)
+                        val setup = r16?.optInt("setupCompleteEvents", 0) ?: 0
                         val signature = listOf(
-                            r18.optBoolean("captureActive"),
-                            stage,
-                            bootstrap.optInt("scans", 0),
-                            bootstrap.optInt("strongCandidateCount", 0),
-                            bootstrap.optInt("invokeAttempts", 0),
-                            counters?.optInt("bidiSend", 0),
-                            setup,
-                            verified,
+                            r18.optBoolean("captureActive"), learned, observations,
+                            counters?.optInt("bidiSend", 0), setup, verified,
                         ).joinToString("|")
                         if (signature != lastStatusSignature) {
                             lastStatusSignature = signature
@@ -392,15 +358,10 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
                                 renderSnapshot(decoded)
                                 updatePhase(
                                     when {
-                                        setup > 0 && verified -> "THÀNH CÔNG: Live tự khởi động và setup target=vi đã được xác minh; không cần chạm AI Studio"
-                                        setup > 0 -> "Live đã tự setup; đang kiểm tra target tiếng Việt"
-                                        stage == "bidi-active-waiting-setup" -> "Runtime đã mở Bidi; đang chờ setupComplete"
-                                        stage == "invoking-runtime" -> "Đã tìm được runtime candidate; đang gọi trực tiếp"
-                                        stage == "waiting-runtime" || stage == "discovering-runtime" -> "Đang dò page-runtime Live service; không thao tác trang web"
-                                        stage == "ambiguous-candidates" -> "Có nhiều runtime candidate ngang nhau; R18.3B đã dừng an toàn. Hãy chụp nhật ký"
-                                        stage == "no-runtime-candidate" || stage == "no-strong-candidate" -> "Chưa tìm được runtime candidate đủ an toàn. Hãy chụp nhật ký, không bấm Start trên web"
-                                        stage == "invoke-error" -> "Runtime candidate lỗi khi gọi; hãy chụp nhật ký"
-                                        else -> "R18.3B đang phân tích runtime; không thao tác trang AI Studio"
+                                        learned > 0 && setup > 0 && verified -> "ĐÃ HỌC ĐƯỢC $learned runtime frame, setupComplete và target=vi đều xác minh. Hãy kết thúc và gửi ZIP"
+                                        learned > 0 -> "Đã bắt được $learned runtime frame không-UI; đang chờ setupComplete"
+                                        (counters?.optInt("bidiSend", 0) ?: 0) > 0 -> "Bidi đã chạy; structured observer đang thu runtime frame"
+                                        else -> "Đang chờ bạn bấm Start Live thủ công đúng một lần"
                                     },
                                 )
                             }
@@ -454,7 +415,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        const val VERSION = "2026-09-03-r18.3b-guided-runtime-bootstrap"
+        const val VERSION = "2026-09-03-r18.3c-manual-causal-runtime-learning"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val LIVE_URL = "https://aistudio.google.com/live?model=gemini-3.5-live-translate-preview"
         private const val STATUS_POLL_MS = 700L

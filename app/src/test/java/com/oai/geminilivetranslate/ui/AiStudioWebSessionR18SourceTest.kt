@@ -1,12 +1,20 @@
 package com.oai.geminilivetranslate.ui
 
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.io.File
-import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class AiStudioWebSessionR18SourceTest {
-    private fun source(path: String): String = File("src/main/java/com/oai/geminilivetranslate/$path").readText()
+    private fun source(path: String): String = sequenceOf(
+        File("src/main/java/com/oai/geminilivetranslate/$path"),
+        File("app/src/main/java/com/oai/geminilivetranslate/$path"),
+    ).firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy source R18: $path")
+
+    private fun manifest(): String = sequenceOf(
+        File("src/main/AndroidManifest.xml"),
+        File("app/src/main/AndroidManifest.xml"),
+    ).firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy AndroidManifest.xml")
 
     @Test
     fun r18CapturesCausalLiveBootstrapWithoutUiAutomation() {
@@ -39,11 +47,11 @@ class AiStudioWebSessionR18SourceTest {
     @Test
     fun r18GuidedLabExportsDetailedCaptureArtifacts() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
-        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
         assertTrue(activity.contains("BẮT ĐẦU GHI R18.1 + R18.2"))
-        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀN BỘ"))
+        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀ BỘ"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))
         assertTrue(activity.contains("r18-r132-deep-recent"))

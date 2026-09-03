@@ -10,9 +10,9 @@ class AiStudioWebSessionR17ProductionSourceTest {
         .firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy source: $path")
 
     @Test
-    fun hiddenBootstrapAutomatesStreamWithoutOwningSecretsOrPhysicalMic() {
+    fun bootstrapKeepsFunctionModelsAndOwnsNoSecretsOrPhysicalMic() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
-        assertTrue(js.contains("2026-09-03-web-session-r17.2-deep-bootstrap"))
+        assertTrue(js.contains("2026-09-03-web-session-r17.4-progress-model-bootstrap"))
         assertTrue(js.contains("gemini-3.5-live-translate-preview"))
         assertTrue(js.contains("gemini-3.5-transcribe-live"))
         assertFalse(js.contains("const val TARGET_MODEL = \"gemini-3.1-flash-live-preview\""))
@@ -23,7 +23,6 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(js.contains("setCarrierActive"))
         assertTrue(js.contains("AudioDestinationNode"))
         assertTrue(js.contains("webaudio-output-mute"))
-        assertTrue(js.contains("select-stream"))
         assertTrue(js.contains("start-live"))
         assertTrue(js.contains("system instructions"))
         assertTrue(js.contains("simultaneous interpreter"))
@@ -35,19 +34,22 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun r172DiscoversShadowDomFramesAndEnforcesFunctionModelPageLocally() {
+    fun r174UnderstandsRouteModelWaitsForMenuAndVerifiesSetupModelPageLocally() {
         val js = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt")
         assertTrue(js.contains("el.shadowRoot"))
         assertTrue(js.contains("el.contentDocument"))
         assertTrue(js.contains("interactiveControls"))
         assertTrue(js.contains("shadowRoots"))
         assertTrue(js.contains("frameDocuments"))
-        assertTrue(js.contains("aria-haspopup"))
-        assertTrue(js.contains("combobox"))
-        assertTrue(js.contains("hrefPath"))
+        assertTrue(js.contains("routeHasTargetModel"))
+        assertTrue(js.contains("MODEL_ROUTE_REQUESTED"))
+        assertTrue(js.contains("waiting-model-menu-render"))
+        assertTrue(js.contains("modelSearchAttempts"))
+        assertTrue(js.contains("clickableAncestor"))
         assertTrue(js.contains("bidi-model-guard"))
         assertTrue(js.contains("/v1/bidiGenerateContent"))
         assertTrue(js.contains("MODEL_REQUEST_GUARD"))
+        assertTrue(js.contains("modelGuardRequests"))
         assertTrue(js.contains("modelRewriteRequests"))
         assertTrue(js.contains("lastBlocker"))
         assertTrue(js.contains("DISCOVERY"))
@@ -57,9 +59,9 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun r173StartsOnDedicatedLiveRouteAndRepairsUnexpectedRedirects() {
+    fun r174StartsOnDedicatedLiveRouteAndUsesProgressAwareTimeout() {
         val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
-        assertTrue(client.contains("2026-09-03-r17.3-direct-live-route"))
+        assertTrue(client.contains("2026-09-03-r17.4-visible-progress-bootstrap"))
         assertTrue(client.contains("https://aistudio.google.com/live"))
         assertTrue(client.contains("created.start(liveUrl)"))
         assertTrue(client.contains("liveRouteUrl()"))
@@ -68,7 +70,33 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(client.contains("repairLiveRouteIfNeeded"))
         assertTrue(client.contains("ROUTE_REPAIR_GRACE_MS"))
         assertTrue(client.contains("MAX_ROUTE_REPAIR_ATTEMPTS"))
+        assertTrue(client.contains("lastBootstrapProgressAt"))
+        assertTrue(client.contains("updateBootstrapProgress"))
+        assertTrue(client.contains("SETUP_STALL_TIMEOUT_MS"))
+        assertTrue(client.contains("SETUP_HARD_TIMEOUT_MS"))
+        assertTrue(client.contains("AI_STUDIO_LIVE_SETUP_STALLED"))
         assertFalse(client.contains("https://aistudio.google.com/prompts/new_chat"))
+    }
+
+    @Test
+    fun r174ShowsTheExactProductionWebViewWithoutAddingAnotherLauncher() {
+        val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
+        val surface = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioLiveDebugSurface.kt")
+        val app = source("src/main/java/com/oai/geminilivetranslate/GeminiTranslateApp.kt")
+        val manifest = source("src/main/AndroidManifest.xml")
+
+        assertTrue(client.contains("AiStudioLiveDebugSurface.show("))
+        assertTrue(client.contains("created.webView"))
+        assertTrue(client.contains("AiStudioLiveDebugSurface.detach(it)"))
+        assertTrue(surface.contains("2026-09-03-r17.4-visible-production-webview"))
+        assertTrue(surface.contains("const val ENABLED = true"))
+        assertTrue(surface.contains("currentWebView = WeakReference(webView)"))
+        assertTrue(surface.contains("Ẩn Web"))
+        assertTrue(surface.contains("Hiện Web"))
+        assertTrue(surface.contains("MAIN_ACTIVITY"))
+        assertTrue(app.contains("AiStudioLiveDebugSurface.install(this)"))
+        assertFalse(manifest.contains("AiStudioWebSessionR17Activity"))
+        assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
     }
 
     @Test
@@ -93,9 +121,8 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun hiddenRealtimeClientReusesProvenR14R16AndMapsProductionCallbacks() {
+    fun realtimeClientStillReusesProvenR14R16AndMapsProductionCallbacks() {
         val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
-        assertTrue(client.contains("2026-09-03-r17.3-direct-live-route"))
         assertTrue(client.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
         assertTrue(client.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
         assertTrue(client.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
@@ -156,14 +183,5 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(service.contains("onGoAway"))
         assertTrue(service.contains("onSessionResumptionUpdate"))
         assertTrue(player.contains("setSampleRate(sampleRate)"))
-    }
-
-    @Test
-    fun noNewR17UserInterfaceOrLauncherWasAdded() {
-        val manifest = source("src/main/AndroidManifest.xml")
-        assertFalse(manifest.contains("AiStudioWebSessionR17Activity"))
-        assertFalse(manifest.contains("R17 - Production"))
-        assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
-        assertTrue(manifest.contains("AiStudioWebSessionR16Activity"))
     }
 }

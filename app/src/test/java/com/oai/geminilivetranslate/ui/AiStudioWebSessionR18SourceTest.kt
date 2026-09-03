@@ -94,15 +94,32 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r184R174OracleIsExplicitlyLabOnlyAndReproducesKnownSuccessfulStartPrimitive() {
+    fun r185R174OracleIsLabOnlyAndPropagatesStartCausalityAcrossAsyncBoundaries() {
         val oracle = source("ui/AiStudioWebSessionR18StartOracle.kt")
         assertTrue(oracle.contains("LAB_ONLY_UI_ORACLE"))
-        assertTrue(oracle.contains("r18.4-r174-start-oracle-lab"))
+        assertTrue(oracle.contains("r18.5-r174-start-oracle-async-causal-lab"))
         assertTrue(oracle.contains("start|begin|connect|talk|speak|join"))
         assertTrue(oracle.contains("go live"))
         assertTrue(oracle.contains("start session"))
         assertTrue(oracle.contains("microphone"))
         assertTrue(oracle.contains("markOracleTarget"))
+        assertTrue(oracle.contains("exactOracleListenerHashes"))
+        assertTrue(oracle.contains("oracle-start-action"))
+        assertTrue(oracle.contains("Promise.prototype.then"))
+        assertTrue(oracle.contains("Promise.prototype.catch"))
+        assertTrue(oracle.contains("Promise.prototype.finally"))
+        assertTrue(oracle.contains("queueMicrotask"))
+        assertTrue(oracle.contains("setTimeout"))
+        assertTrue(oracle.contains("setInterval"))
+        assertTrue(oracle.contains("requestAnimationFrame"))
+        assertTrue(oracle.contains("scheduler.postTask"))
+        assertTrue(oracle.contains("MessageChannel"))
+        assertTrue(oracle.contains("MessagePort.postMessage"))
+        assertTrue(oracle.contains("R185_SETUP_CAUSAL_LINK"))
+        assertTrue(oracle.contains("contextChain"))
+        assertTrue(oracle.contains("setupLinked"))
+        assertTrue(oracle.contains("setupUnlinked"))
+        assertTrue(oracle.contains("MAX_STACK=32"))
         assertTrue(oracle.contains("typeof el.click==='function'"))
         assertTrue(oracle.contains("new w.MouseEvent('click'"))
         assertTrue(oracle.contains("createMediaStreamDestination"))
@@ -113,6 +130,8 @@ class AiStudioWebSessionR18SourceTest {
         assertFalse(oracle.contains("MotionEvent"))
         assertFalse(oracle.contains("screenX"))
         assertFalse(oracle.contains("clientX"))
+        assertFalse(oracle.contains("Authorization"))
+        assertFalse(oracle.contains("document.cookie"))
     }
 
     @Test

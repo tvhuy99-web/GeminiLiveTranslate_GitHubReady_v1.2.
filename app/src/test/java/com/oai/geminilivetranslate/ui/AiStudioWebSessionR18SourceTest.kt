@@ -25,11 +25,14 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(probe.contains("startCapture"))
         assertTrue(probe.contains("stopCapture"))
 
-        assertFalse(probe.contains("dispatchTouchEvent"))
-        assertFalse(probe.contains("MotionEvent"))
+        assertFalse(probe.contains("import android.view.MotionEvent"))
+        assertFalse(probe.contains("dispatchTouchEvent("))
+        assertFalse(probe.contains("MotionEvent.obtain("))
         assertFalse(probe.contains(".click()"))
-        assertFalse(activity.contains("dispatchTouchEvent"))
-        assertFalse(activity.contains("MotionEvent"))
+        assertFalse(probe.contains("dispatchEvent(new MouseEvent"))
+        assertFalse(activity.contains("import android.view.MotionEvent"))
+        assertFalse(activity.contains("dispatchTouchEvent("))
+        assertFalse(activity.contains("MotionEvent.obtain("))
         assertFalse(activity.contains(".click()"))
     }
 

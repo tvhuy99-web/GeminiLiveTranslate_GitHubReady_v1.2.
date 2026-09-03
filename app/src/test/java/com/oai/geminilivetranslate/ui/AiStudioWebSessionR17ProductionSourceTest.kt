@@ -107,7 +107,7 @@ class AiStudioWebSessionR17ProductionSourceTest {
     }
 
     @Test
-    fun r174ShowsTheExactProductionWebViewWithoutAddingAnotherLauncher() {
+    fun r1751ShowsExactProductionWebViewRecoversBootstrapAndKeepsTouchEnabled() {
         val client = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
         val surface = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioLiveDebugSurface.kt")
         val app = source("src/main/java/com/oai/geminilivetranslate/GeminiTranslateApp.kt")
@@ -116,9 +116,16 @@ class AiStudioWebSessionR17ProductionSourceTest {
         assertTrue(client.contains("AiStudioLiveDebugSurface.show("))
         assertTrue(client.contains("created.webView"))
         assertTrue(client.contains("AiStudioLiveDebugSurface.detach(it)"))
-        assertTrue(surface.contains("2026-09-03-r17.4-visible-production-webview"))
+        assertTrue(surface.contains("2026-09-03-r17.5.1-visible-production-webview-recovery"))
         assertTrue(surface.contains("const val ENABLED = true"))
         assertTrue(surface.contains("currentWebView = WeakReference(webView)"))
+        assertTrue(surface.contains("scheduleBootstrapRecovery"))
+        assertTrue(surface.contains("ensureBootstrapInstalled"))
+        assertTrue(surface.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
+        assertTrue(surface.contains("TRANSLATION_GUARD_READY"))
+        assertTrue(surface.contains("webView.isClickable = true"))
+        assertTrue(surface.contains("webView.isFocusableInTouchMode = true"))
+        assertTrue(surface.contains("webView.requestFocusFromTouch()"))
         assertTrue(surface.contains("Ẩn Web"))
         assertTrue(surface.contains("Hiện Web"))
         assertTrue(surface.contains("MAIN_ACTIVITY"))

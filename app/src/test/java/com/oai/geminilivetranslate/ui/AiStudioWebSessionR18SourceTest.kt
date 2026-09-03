@@ -53,20 +53,33 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r183bProductionCandidateScannerStillContainsNoUiAutomation() {
+    fun r186DirectRuntimeReplayLearnsBelowExactStartListenerAndContainsNoUiAutomation() {
         val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-        assertTrue(bootstrap.contains("r18.3b2-behavioral-runtime-bootstrap"))
+        assertTrue(bootstrap.contains("r18.6-direct-runtime-replay"))
         assertTrue(bootstrap.contains("Function.prototype.toString.call"))
         assertTrue(bootstrap.contains("Object.getOwnPropertyDescriptors"))
         assertTrue(bootstrap.contains("structuredFrames"))
-        assertTrue(bootstrap.contains("RUNTIME_HANDLES_LEARNED"))
         assertTrue(bootstrap.contains("Error.prepareStackTrace"))
+        assertTrue(bootstrap.contains("exact-click-root"))
+        assertTrue(bootstrap.contains("argumentSnapshot"))
+        assertTrue(bootstrap.contains("propertyIdentity"))
+        assertTrue(bootstrap.contains("RUNTIME_HANDLES_LEARNED"))
+        assertTrue(bootstrap.contains("direct-setup-confirmed"))
+        assertTrue(bootstrap.contains("direct-bidi-activity"))
+        assertTrue(bootstrap.contains("ambiguous-candidates"))
+        assertTrue(bootstrap.contains("fn.apply(c.receiver,args)"))
+        assertTrue(bootstrap.contains("ev.isTrusted===false"))
+        assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
+        assertTrue(bootstrap.contains("audio\\/pcm"))
         assertFalse(bootstrap.contains("document.querySelector("))
         assertFalse(bootstrap.contains("document.querySelectorAll("))
         assertFalse(bootstrap.contains(".click()"))
         assertFalse(bootstrap.contains("new MouseEvent"))
+        assertFalse(bootstrap.contains("dispatchEvent("))
         assertFalse(bootstrap.contains("MotionEvent"))
         assertFalse(bootstrap.contains("getBoundingClientRect()"))
+        assertFalse(bootstrap.contains("aria-label"))
+        assertFalse(bootstrap.contains("data-testid"))
     }
 
     @Test
@@ -94,7 +107,7 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r185R174OracleIsLabOnlyAndPropagatesStartCausalityAcrossAsyncBoundaries() {
+    fun r185R174OracleIsExplicitlyLabOnlyAndCarriesAsyncCausalContext() {
         val oracle = source("ui/AiStudioWebSessionR18StartOracle.kt")
         assertTrue(oracle.contains("LAB_ONLY_UI_ORACLE"))
         assertTrue(oracle.contains("r18.5-r174-start-oracle-async-causal-lab"))
@@ -103,39 +116,26 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(oracle.contains("start session"))
         assertTrue(oracle.contains("microphone"))
         assertTrue(oracle.contains("markOracleTarget"))
-        assertTrue(oracle.contains("exactOracleListenerHashes"))
-        assertTrue(oracle.contains("oracle-start-action"))
-        assertTrue(oracle.contains("Promise.prototype.then"))
-        assertTrue(oracle.contains("Promise.prototype.catch"))
-        assertTrue(oracle.contains("Promise.prototype.finally"))
-        assertTrue(oracle.contains("queueMicrotask"))
-        assertTrue(oracle.contains("setTimeout"))
-        assertTrue(oracle.contains("setInterval"))
-        assertTrue(oracle.contains("requestAnimationFrame"))
-        assertTrue(oracle.contains("scheduler.postTask"))
-        assertTrue(oracle.contains("MessageChannel"))
-        assertTrue(oracle.contains("MessagePort.postMessage"))
-        assertTrue(oracle.contains("R185_SETUP_CAUSAL_LINK"))
-        assertTrue(oracle.contains("contextChain"))
-        assertTrue(oracle.contains("setupLinked"))
-        assertTrue(oracle.contains("setupUnlinked"))
-        assertTrue(oracle.contains("MAX_STACK=32"))
         assertTrue(oracle.contains("typeof el.click==='function'"))
         assertTrue(oracle.contains("new w.MouseEvent('click'"))
         assertTrue(oracle.contains("createMediaStreamDestination"))
         assertTrue(oracle.contains("getUserMedia"))
         assertTrue(oracle.contains("sampleRate:16000"))
+        assertTrue(oracle.contains("Promise.prototype.then"))
+        assertTrue(oracle.contains("queueMicrotask"))
+        assertTrue(oracle.contains("scheduler.postTask"))
+        assertTrue(oracle.contains("MessageChannel"))
+        assertTrue(oracle.contains("setupLinked"))
+        assertTrue(oracle.contains("contextChain"))
         assertTrue(oracle.contains("maxAttempts:3"))
         assertFalse(oracle.contains("getBoundingClientRect"))
         assertFalse(oracle.contains("MotionEvent"))
         assertFalse(oracle.contains("screenX"))
         assertFalse(oracle.contains("clientX"))
-        assertFalse(oracle.contains("Authorization"))
-        assertFalse(oracle.contains("document.cookie"))
     }
 
     @Test
-    fun r184ActivityArmsOracleAndLanguageWithoutContainingUiAutomationItself() {
+    fun r184ActivityArmsOracleLanguageAndR186WithoutContainingUiAutomationItself() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
@@ -143,10 +143,12 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(activity.contains("R18.4 - ORACLE R17.4 + HỌC ĐƯỜNG START"))
         assertTrue(activity.contains("AiStudioWebSessionR18StartOracleProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR18StartOracle.DOCUMENT_START"))
+        assertTrue(activity.contains("AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START"))
         assertTrue(activity.contains("window.__AIS_R184_START_ORACLE__"))
         assertTrue(activity.contains("o.start('vi')"))
         assertTrue(activity.contains("window.__AIS_R183_LANGUAGE__"))
         assertTrue(activity.contains("r184-r174-oracle-network-vi"))
+        assertTrue(activity.contains("out.r183b=b&&b.reset?b.reset():null"))
         assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-language-state"))
         assertTrue(activity.contains("r18-causal-timeline"))

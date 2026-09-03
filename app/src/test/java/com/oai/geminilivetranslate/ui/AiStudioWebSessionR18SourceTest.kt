@@ -53,22 +53,26 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r187LineageCaptureLearnsOnlyFromConfirmedSetupLineageAndContainsNoUiAutomation() {
+    fun r188WarmCallbackReplayUsesConfirmedLineageAndContainsNoUiAutomation() {
         val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-        assertTrue(bootstrap.contains("r18.7-lineage-guided-runtime-capture"))
+        assertTrue(bootstrap.contains("r18.8-lineage-callback-warm-replay"))
         assertTrue(bootstrap.contains("Function.prototype.toString.call"))
-        assertTrue(bootstrap.contains("Object.getOwnPropertyDescriptors"))
-        assertTrue(bootstrap.contains("structuredFrames"))
-        assertTrue(bootstrap.contains("Error.prepareStackTrace"))
         assertTrue(bootstrap.contains("exact-click-root"))
-        assertTrue(bootstrap.contains("argumentSnapshot"))
-        assertTrue(bootstrap.contains("propertyIdentity"))
         assertTrue(bootstrap.contains("chainFor"))
         assertTrue(bootstrap.contains("analyzeLineage"))
+        assertTrue(bootstrap.contains("isSafeCallback"))
+        assertTrue(bootstrap.contains("callbackCandidateCount"))
+        assertTrue(bootstrap.contains("safeCallbackCandidateCount"))
         assertTrue(bootstrap.contains("distanceFromSetup"))
-        assertTrue(bootstrap.contains("setupLinked"))
-        assertTrue(bootstrap.contains("lineage-captured"))
-        assertTrue(bootstrap.contains("disabled-r18.7-learning-only"))
+        assertTrue(bootstrap.contains("callbackArity===0?[]"))
+        assertTrue(bootstrap.contains("runContext(replayCtx,c.fn,undefined,args)"))
+        assertTrue(bootstrap.contains("callbackReplayAttempts"))
+        assertTrue(bootstrap.contains("callbackReplaySetupSendDelta"))
+        assertTrue(bootstrap.contains("callbackReplayBidiDelta"))
+        assertTrue(bootstrap.contains("warm-setup-replayed"))
+        assertTrue(bootstrap.contains("warm-bidi-activity"))
+        assertTrue(bootstrap.contains("warmOnly:true"))
+        assertTrue(bootstrap.contains("coldBootstrapProven:false"))
         assertTrue(bootstrap.contains("Promise.prototype.then"))
         assertTrue(bootstrap.contains("queueMicrotask"))
         assertTrue(bootstrap.contains("scheduler.postTask"))
@@ -76,6 +80,8 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("ev.isTrusted===false"))
         assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
         assertTrue(bootstrap.contains("audio\\/pcm"))
+        assertFalse(bootstrap.contains("e062283a"))
+        assertFalse(bootstrap.contains("573200da"))
         assertFalse(bootstrap.contains("document.querySelector("))
         assertFalse(bootstrap.contains("document.querySelectorAll("))
         assertFalse(bootstrap.contains(".click()"))
@@ -85,8 +91,6 @@ class AiStudioWebSessionR18SourceTest {
         assertFalse(bootstrap.contains("getBoundingClientRect()"))
         assertFalse(bootstrap.contains("aria-label"))
         assertFalse(bootstrap.contains("data-testid"))
-        assertFalse(bootstrap.contains("direct-setup-confirmed"))
-        assertFalse(bootstrap.contains("direct-bidi-activity"))
     }
 
     @Test
@@ -142,7 +146,7 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r184ActivityArmsOracleLanguageAndR187WithoutContainingUiAutomationItself() {
+    fun r184ActivityArmsOracleLanguageAndR188WithoutContainingUiAutomationItself() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")

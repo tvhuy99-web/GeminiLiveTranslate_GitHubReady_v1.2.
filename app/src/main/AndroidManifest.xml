@@ -44,6 +44,18 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
+        <!-- R18.1/R18.2: observational causal capture. No automated UI interaction. -->
+        <activity
+            android:name=".ui.AiStudioWebSessionR18Activity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="AI Studio R18 - Bắt đường Live">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- R16: bidirectional BrowserChannel output decoding + proven R15 input bridge. -->
         <activity
             android:name=".ui.AiStudioWebSessionR16Activity"

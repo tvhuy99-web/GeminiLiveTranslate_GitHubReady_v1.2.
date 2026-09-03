@@ -257,22 +257,14 @@ internal class AiStudioWebRealtimeClient(
                             setCarrierActive(false)
                             listener.onInterrupted()
                         }
-                        "sessionResumption" -> {
-                            // The page deliberately keeps the actual handle private. AI Studio owns
-                            // BrowserChannel resumption; Android receives only resumable metadata.
-                            listener.onSessionResumptionUpdate(value.equals("true", ignoreCase = true), null)
-                        }
-                        "goAway" -> {
-                            // Surface the notice only after preserving page-local handling. The
-                            // service reconnect path remains a safety net if the page does not recover.
-                            listener.onGoAway(value.takeIf(String::isNotBlank))
-                        }
+                        "sessionResumption" -> listener.onSessionResumptionUpdate(value.equals("true", ignoreCase = true), null)
+                        "goAway" -> listener.onGoAway(value.takeIf(String::isNotBlank))
                     }
                 }
             },
         ) { name, detail -> logger.log(3, "AiStudioOutput", "$name ${safe(detail, 1000)}") }
 
-        created.webChromeClient = object : WebChromeClient() {
+        created.webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 val req = request ?: return
                 val resources = req.resources.orEmpty()
@@ -386,8 +378,7 @@ internal class AiStudioWebRealtimeClient(
     }
 
     private fun setCarrierActive(enabled: Boolean) {
-        if (closed.get()) return
-        if (carrierEnabled == enabled) return
+        if (closed.get() || carrierEnabled == enabled) return
         carrierEnabled = enabled
         val current = executor ?: return
         current.webView.post {
@@ -405,9 +396,7 @@ internal class AiStudioWebRealtimeClient(
         val stats = inputClient?.stats()
         val noLocalQueue = (stats?.localQueueFrames ?: 0) == 0
         val directQueue = runCatching { JSONObject(lastDirectState).optInt("queueDepth", 0) }.getOrDefault(0)
-        if ((force || idle >= INPUT_IDLE_TO_SILENCE_MS) && noLocalQueue && directQueue == 0) {
-            setCarrierActive(false)
-        }
+        if ((force || idle >= INPUT_IDLE_TO_SILENCE_MS) && noLocalQueue && directQueue == 0) setCarrierActive(false)
     }
 
     private fun estimatedQueuedWireBytes(): Long {
@@ -421,9 +410,7 @@ internal class AiStudioWebRealtimeClient(
 
     private fun updateHighWater(value: Long) {
         var previous = maxObservedQueuedBytes.get()
-        while (value > previous && !maxObservedQueuedBytes.compareAndSet(previous, value)) {
-            previous = maxObservedQueuedBytes.get()
-        }
+        while (value > previous && !maxObservedQueuedBytes.compareAndSet(previous, value)) previous = maxObservedQueuedBytes.get()
     }
 
     private fun fail(error: Throwable) {
@@ -447,10 +434,7 @@ internal class AiStudioWebRealtimeClient(
         }.getOrElse { raw }
     }
 
-    private fun safe(value: String, max: Int): String = value
-        .replace('\u0000', ' ')
-        .replace('\n', ' ')
-        .take(max)
+    private fun safe(value: String, max: Int): String = value.replace('\u0000', ' ').replace('\n', ' ').take(max)
 
     companion object {
         const val VERSION = "2026-09-03-r17-hidden-bidirectional-web-live-client"

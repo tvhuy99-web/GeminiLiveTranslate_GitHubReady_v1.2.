@@ -1,14 +1,15 @@
 package com.oai.geminilivetranslate.ui
 
 /**
- * R17.4 production bootstrap for AI Studio Live.
+ * R17.5 production bootstrap for AI Studio Live.
  *
- * R17.4 keeps function-specific models, treats the /live?model= route as the requested model state,
- * verifies the actual Live setup model page-locally, waits for model menus to render before retrying,
- * and exposes metadata-only progress for the Android progress-aware watchdog.
+ * R17.5 keeps the proven R17.4 route/model/start automation and adds a dedicated Live Translate
+ * language guard. The app target language is applied to the visible target-language control when
+ * available and is verified/repaired again in the actual bidiGenerateContent setup request.
+ * Diagnostics expose only language codes/counters/state, never request bodies, media or auth data.
  */
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-03-web-session-r17.4-progress-model-bootstrap"
+    const val VERSION = "2026-09-03-web-session-r17.5-translation-config-guard"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val TARGET_MODEL = "function-specific"
@@ -17,13 +18,17 @@ object AiStudioWebSessionR17ProductionBootstrap {
 (function(){
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version){return;}
-  const VERSION='2026-09-03-web-session-r17.4-progress-model-bootstrap';
+  const VERSION='2026-09-03-web-session-r17.5-translation-config-guard';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const state={
     configured:false,transcribeOnly:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,
+    echoTargetLanguage:false,
     instructionApplied:false,streamSelected:false,modelSeen:false,modelVerified:false,
     modelRouteRequested:false,modelMenuOpenedAt:0,modelSearchAttempts:0,
+    languageUiSelected:false,languageMenuOpenedAt:0,languageAttempts:0,
+    translationGuardRequests:0,translationConfigSeen:false,targetLanguageVerified:false,
+    targetLanguageRewriteRequests:0,targetLanguageRewriteCount:0,lastLanguageStrategy:'none',
     setupObserved:false,carrierActive:false,syntheticCarrier:false,syntheticErrors:0,
     pageOutputMuted:false,authRequired:false,stage:'boot',lastBlocker:'not-configured',
     lastAction:'',lastActionAt:0,lastTickAt:0,
@@ -174,6 +179,54 @@ object AiStudioWebSessionR17ProductionBootstrap {
     }
     state.lastBlocker='model-control-not-found';
   }
+  function languageNames(){
+    const code=String(state.targetLanguage||'').trim();const out=[code.toLowerCase()];
+    try{const d=new Intl.DisplayNames(['en'],{type:'language'}).of(code);if(d)out.push(String(d).toLowerCase());}catch(_){}
+    try{const d=new Intl.DisplayNames([code],{type:'language'}).of(code);if(d)out.push(String(d).toLowerCase());}catch(_){}
+    if(code.toLowerCase()==='vi'){out.push('vietnamese');out.push('tiếng việt');out.push('tieng viet');}
+    return out.filter(function(v,i,a){return !!v&&a.indexOf(v)===i;});
+  }
+  function languageOption(snapshot){
+    const names=languageNames();let best=null,bestScore=0;
+    for(let i=0;i<snapshot.all.length;i++){
+      const el=snapshot.all[i],l=label(el);if(!l)continue;let s=0;
+      for(let n=0;n<names.length;n++){
+        const name=names[n];if(name.length>2&&l===name)s+=12;else if(name.length>2&&l.indexOf(name)>=0)s+=7;
+      }
+      const r=role(el),t=tag(el);if(r==='option'||r==='menuitem'||t==='OPTION')s+=3;
+      if(s>bestScore){const click=clickableAncestor(el)||el;best=click;bestScore=s;}
+    }
+    return bestScore>=8?best:null;
+  }
+  function languageOpener(snapshot){
+    let best=null,bestScore=0;
+    for(let i=0;i<snapshot.interactive.length;i++){
+      const el=snapshot.interactive[i],l=label(el),r=role(el),popup=attr(el,'aria-haspopup').toLowerCase();let s=0;
+      if(l.indexOf('target language')>=0||l.indexOf('translate to')>=0||l.indexOf('translation language')>=0)s+=12;
+      if(l.indexOf('language')>=0)s+=5;
+      if(l.indexOf('english')>=0)s+=4;
+      if(r==='combobox'||popup==='listbox'||popup==='menu')s+=2;
+      if(s>bestScore){best=el;bestScore=s;}
+    }
+    return bestScore>=8?best:null;
+  }
+  function tryTargetLanguage(snapshot){
+    if(state.transcribeOnly||state.targetLanguageVerified||state.languageUiSelected)return false;
+    const now=Date.now();
+    if(state.languageMenuOpenedAt>0&&now-state.languageMenuOpenedAt<850){state.stage='language-menu-opened';state.lastBlocker='waiting-language-menu-render';return true;}
+    const option=languageOption(snapshot);
+    if(option&&clickElement(option,'select-target-language')){
+      state.languageUiSelected=true;state.lastLanguageStrategy='ui-option';state.stage='start';state.lastBlocker='waiting-start';
+      diag('TARGET_LANGUAGE_UI_SELECTED',{targetLanguageCode:state.targetLanguage,attempt:state.languageAttempts});return false;
+    }
+    if(state.languageAttempts<5){
+      const opener=languageOpener(snapshot);
+      if(opener&&clickElement(opener,'open-target-language-selector')){
+        state.languageAttempts++;state.languageMenuOpenedAt=now;state.stage='language-menu-opened';state.lastBlocker='waiting-language-menu-render';return true;
+      }
+    }
+    return false;
+  }
   function setupSeen(){try{const e=window.__AIS_LIVE_OUTPUT_ENGINE__;return !!(e&&typeof e.describe==='function'&&Number(e.describe().setupCompleteEvents||0)>0);}catch(_){return false;}}
   function startScore(el){
     const l=label(el),r=role(el),t=tag(el);if(attr(el,'disabled')||attr(el,'aria-disabled')==='true'||l.indexOf('stop')>=0)return 0;
@@ -191,30 +244,104 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(scored.length){state.startAttempts++;if(clickElement(scored[0].el,'start-live')){state.stage='start-clicked';state.lastBlocker='waiting-live-setup';buildSyntheticCarrier();return;}}
     state.lastBlocker='start-control-not-found';
   }
+  function containsTranslateModel(node,depth){
+    const d=depth||0;if(d>12||node==null)return false;
+    if(typeof node==='string')return node.toLowerCase().indexOf(TRANSLATE_MODEL)>=0;
+    if(Array.isArray(node)){for(let i=0;i<node.length;i++)if(containsTranslateModel(node[i],d+1))return true;return false;}
+    if(typeof node==='object'){const ks=Object.keys(node);for(let i=0;i<ks.length;i++)if(containsTranslateModel(node[ks[i]],d+1))return true;}
+    return false;
+  }
+  function applyNamedTranslationConfig(node,depth){
+    const d=depth||0;if(d>12||node==null||typeof node!=='object')return {changed:0,seen:0};
+    let changed=0,seen=0;
+    if(!Array.isArray(node)){
+      const model=typeof node.model==='string'?String(node.model).toLowerCase():'';
+      const isSetup=model.indexOf(TRANSLATE_MODEL)>=0;
+      if(isSetup){
+        const gk=Object.prototype.hasOwnProperty.call(node,'generation_config')?'generation_config':'generationConfig';
+        let gc=node[gk];if(!gc||typeof gc!=='object'||Array.isArray(gc)){gc={};node[gk]=gc;changed++;}
+        const tk=Object.prototype.hasOwnProperty.call(gc,'translation_config')?'translation_config':'translationConfig';
+        let tc=gc[tk];if(!tc||typeof tc!=='object'||Array.isArray(tc)){tc={};gc[tk]=tc;changed++;}
+        seen++;
+        const lk=Object.prototype.hasOwnProperty.call(tc,'target_language_code')?'target_language_code':'targetLanguageCode';
+        const ek=Object.prototype.hasOwnProperty.call(tc,'echo_target_language')?'echo_target_language':'echoTargetLanguage';
+        if(String(tc[lk]||'')!==state.targetLanguage){tc[lk]=state.targetLanguage;changed++;}
+        if(Boolean(tc[ek])!==Boolean(state.echoTargetLanguage)){tc[ek]=Boolean(state.echoTargetLanguage);changed++;}
+      }
+      if(node.translationConfig&&typeof node.translationConfig==='object'&&!Array.isArray(node.translationConfig)){
+        const tc=node.translationConfig;seen++;
+        if(String(tc.targetLanguageCode||'')!==state.targetLanguage){tc.targetLanguageCode=state.targetLanguage;changed++;}
+        if(Boolean(tc.echoTargetLanguage)!==Boolean(state.echoTargetLanguage)){tc.echoTargetLanguage=Boolean(state.echoTargetLanguage);changed++;}
+      }
+      if(node.translation_config&&typeof node.translation_config==='object'&&!Array.isArray(node.translation_config)){
+        const tc=node.translation_config;seen++;
+        if(String(tc.target_language_code||'')!==state.targetLanguage){tc.target_language_code=state.targetLanguage;changed++;}
+        if(Boolean(tc.echo_target_language)!==Boolean(state.echoTargetLanguage)){tc.echo_target_language=Boolean(state.echoTargetLanguage);changed++;}
+      }
+      const ks=Object.keys(node);for(let i=0;i<ks.length;i++){const r=applyNamedTranslationConfig(node[ks[i]],d+1);changed+=r.changed;seen+=r.seen;}
+    }else{
+      for(let i=0;i<node.length;i++){const r=applyNamedTranslationConfig(node[i],d+1);changed+=r.changed;seen+=r.seen;}
+    }
+    return {changed:changed,seen:seen};
+  }
+  function replaceDefaultEnglishTokens(node,depth){
+    const d=depth||0;if(d>12||node==null)return 0;let changed=0;
+    if(Array.isArray(node)){
+      for(let i=0;i<node.length;i++){
+        if(typeof node[i]==='string'&&String(node[i]).toLowerCase()==='en'){node[i]=state.targetLanguage;changed++;}
+        else changed+=replaceDefaultEnglishTokens(node[i],d+1);
+      }
+    }else if(typeof node==='object'){
+      const ks=Object.keys(node);for(let i=0;i<ks.length;i++)changed+=replaceDefaultEnglishTokens(node[ks[i]],d+1);
+    }
+    return changed;
+  }
   function rewriteSetupBody(body){
     try{
       let params=null,asString=false;if(typeof body==='string'){params=new URLSearchParams(body);asString=true;}else if(body instanceof URLSearchParams){params=new URLSearchParams(body.toString());}else return body;
       let changed=false,replacements=0,touched=false,correct=false;const updates=[];
       params.forEach(function(value,key){
-        if(!/^req\d+___data__$/.test(String(key)))return;if(String(value).indexOf('audio/pcm')>=0)return;touched=true;
-        if(hasTargetModel(value)){correct=true;return;}
-        const next=String(value).replace(/(models\/)?gemini-[a-z0-9._-]*(?:live|translate|transcribe)[a-z0-9._-]*/ig,function(match,prefix){replacements++;return (prefix?'models/':'')+state.targetModel;});
-        if(next!==value){updates.push([key,next]);changed=true;}
+        if(!/^req\d+___data__$/.test(String(key)))return;if(String(value).indexOf('audio/pcm')>=0)return;
+        let nextValue=String(value),requestChanged=false;
+        if(hasTargetModel(nextValue)){correct=true;}
+        else{
+          const next=nextValue.replace(/(models\/)?gemini-[a-z0-9._-]*(?:live|translate|transcribe)[a-z0-9._-]*/ig,function(match,prefix){replacements++;return (prefix?'models/':'')+state.targetModel;});
+          if(next!==nextValue){nextValue=next;requestChanged=true;}
+        }
+        const translateSetup=!state.transcribeOnly&&nextValue.toLowerCase().indexOf(TRANSLATE_MODEL)>=0;
+        if(translateSetup){
+          touched=true;state.translationGuardRequests++;
+          try{
+            const parsed=JSON.parse(nextValue);
+            if(containsTranslateModel(parsed,0)){
+              const named=applyNamedTranslationConfig(parsed,0);let languageChanges=named.changed;let strategy=named.seen>0?'named-config':'none';
+              if(named.seen>0){state.translationConfigSeen=true;state.targetLanguageVerified=true;}
+              if(named.seen===0){
+                const tokenChanges=replaceDefaultEnglishTokens(parsed,0);languageChanges+=tokenChanges;
+                if(tokenChanges>0){strategy='default-en-token';state.translationConfigSeen=true;state.targetLanguageVerified=true;}
+              }
+              if(languageChanges>0){nextValue=JSON.stringify(parsed);requestChanged=true;state.targetLanguageRewriteCount+=languageChanges;state.lastLanguageStrategy=strategy;}
+              else if(named.seen>0){state.lastLanguageStrategy='named-config-already-correct';}
+            }
+          }catch(_){}
+          diag('TRANSLATION_CONFIG_GUARD',{targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,verified:state.targetLanguageVerified,configSeen:state.translationConfigSeen,guardRequests:state.translationGuardRequests,rewriteRequests:state.targetLanguageRewriteRequests+(requestChanged?1:0),rewriteCount:state.targetLanguageRewriteCount,strategy:state.lastLanguageStrategy});
+        }
+        if(requestChanged){updates.push([key,nextValue]);changed=true;if(translateSetup)state.targetLanguageRewriteRequests++;}
       });
       if(touched){state.modelGuardRequests++;state.modelSeen=true;if(correct||changed)state.modelVerified=true;}
       for(let i=0;i<updates.length;i++)params.set(updates[i][0],updates[i][1]);
-      if(touched)diag('MODEL_REQUEST_GUARD',{targetModel:state.targetModel,verified:state.modelVerified,guardRequests:state.modelGuardRequests,rewriteRequests:state.modelRewriteRequests+(changed?1:0),rewriteCount:state.modelRewriteCount+replacements});
-      if(changed){state.modelRewriteRequests++;state.modelRewriteCount+=replacements;}
+      if(touched)diag('MODEL_REQUEST_GUARD',{targetModel:state.targetModel,verified:state.modelVerified,guardRequests:state.modelGuardRequests,rewriteRequests:state.modelRewriteRequests+(replacements>0?1:0),rewriteCount:state.modelRewriteCount+replacements});
+      if(replacements>0){state.modelRewriteRequests++;state.modelRewriteCount+=replacements;}
       return changed?(asString?params.toString():params):body;
     }catch(_){return body;}
   }
   function installModelGuard(){
     try{
-      const X=window.XMLHttpRequest;if(!X||!X.prototype)return;const p=X.prototype;if(p.send&&p.send.__aisR174ModelGuard){state.modelGuardInstalled=true;return;}
-      const currentOpen=p.open,currentSend=p.send;p.open=function(method,url){try{this.__aisR174Url=String(url||'');}catch(_){}return currentOpen.apply(this,arguments);};
-      const wrappedSend=function(body){let next=body;try{if(String(this.__aisR174Url||'').indexOf('/v1/bidiGenerateContent')>=0)next=rewriteSetupBody(body);}catch(_){}return currentSend.call(this,next);};
-      wrappedSend.__aisR174ModelGuard=true;p.send=wrappedSend;state.modelGuardInstalled=true;diag('HOOK',{target:'bidi-model-guard'});
-    }catch(e){diag('HOOK_ERROR',{target:'bidi-model-guard',name:String(e&&e.name||'Error')});}
+      const X=window.XMLHttpRequest;if(!X||!X.prototype)return;const p=X.prototype;if(p.send&&p.send.__aisR175SetupGuard){state.modelGuardInstalled=true;return;}
+      const currentOpen=p.open,currentSend=p.send;p.open=function(method,url){try{this.__aisR175Url=String(url||'');}catch(_){}return currentOpen.apply(this,arguments);};
+      const wrappedSend=function(body){let next=body;try{if(String(this.__aisR175Url||'').indexOf('/v1/bidiGenerateContent')>=0)next=rewriteSetupBody(body);}catch(_){}return currentSend.call(this,next);};
+      wrappedSend.__aisR175SetupGuard=true;p.send=wrappedSend;state.modelGuardInstalled=true;diag('HOOK',{target:'bidi-model-translation-guard'});
+    }catch(e){diag('HOOK_ERROR',{target:'bidi-model-translation-guard',name:String(e&&e.name||'Error')});}
   }
   function buildSyntheticCarrier(){
     if(synthetic)return synthetic;
@@ -234,25 +361,24 @@ object AiStudioWebSessionR17ProductionBootstrap {
     try{const A=window.AudioNode&&window.AudioNode.prototype;if(!A||typeof A.connect!=='function'||A.connect.__aisR17Muted)return;const native=A.connect,muteByContext=new WeakMap();const wrapped=function(destination){try{const name=destination&&destination.constructor&&destination.constructor.name||'';if(name==='AudioDestinationNode'&&this.context&&typeof this.context.createGain==='function'){let g=muteByContext.get(this.context);if(!g){g=this.context.createGain();g.gain.value=0;native.call(g,destination);muteByContext.set(this.context,g);}state.pageOutputMuted=true;return native.call(this,g);}}catch(_){}return native.apply(this,arguments);};wrapped.__aisR17Muted=true;A.connect=wrapped;diag('HOOK',{target:'webaudio-output-mute'});}catch(e){diag('HOOK_ERROR',{target:'webaudio-output-mute',name:String(e&&e.name||'Error')});}
   }
   function detectAuth(){try{const h=String(location.hostname||'').toLowerCase();state.authRequired=h.indexOf('accounts.google.')>=0||h==='accounts.google.com';}catch(_){}
-  }
   function reportDiscovery(){
-    const signature=[state.stage,state.lastBlocker,state.streamSelected,state.modelSeen,state.modelVerified,state.modelRouteRequested,state.streamCandidates,state.modelCandidates,state.startCandidates,state.streamAttempts,state.modelAttempts,state.modelSearchAttempts,state.startAttempts,state.modelGuardRequests,state.modelRewriteRequests,state.routeKind].join('|');
-    if(signature===lastDiscoverySignature)return;lastDiscoverySignature=signature;diag('DISCOVERY',{stage:state.stage,blocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,streamCandidates:state.streamCandidates,modelCandidates:state.modelCandidates,startCandidates:state.startCandidates,streamAttempts:state.streamAttempts,modelAttempts:state.modelAttempts,modelSearchAttempts:state.modelSearchAttempts,startAttempts:state.startAttempts,modelSeen:state.modelSeen,modelVerified:state.modelVerified,modelRouteRequested:state.modelRouteRequested,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,routeKind:state.routeKind});
+    const signature=[state.stage,state.lastBlocker,state.streamSelected,state.modelSeen,state.modelVerified,state.modelRouteRequested,state.languageUiSelected,state.targetLanguageVerified,state.translationGuardRequests,state.targetLanguageRewriteRequests,state.streamCandidates,state.modelCandidates,state.startCandidates,state.streamAttempts,state.modelAttempts,state.modelSearchAttempts,state.startAttempts,state.modelGuardRequests,state.modelRewriteRequests,state.routeKind].join('|');
+    if(signature===lastDiscoverySignature)return;lastDiscoverySignature=signature;diag('DISCOVERY',{stage:state.stage,blocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,streamCandidates:state.streamCandidates,modelCandidates:state.modelCandidates,startCandidates:state.startCandidates,streamAttempts:state.streamAttempts,modelAttempts:state.modelAttempts,modelSearchAttempts:state.modelSearchAttempts,startAttempts:state.startAttempts,modelSeen:state.modelSeen,modelVerified:state.modelVerified,modelRouteRequested:state.modelRouteRequested,languageUiSelected:state.languageUiSelected,targetLanguageVerified:state.targetLanguageVerified,translationGuardRequests:state.translationGuardRequests,targetLanguageRewriteRequests:state.targetLanguageRewriteRequests,lastLanguageStrategy:state.lastLanguageStrategy,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,routeKind:state.routeKind});
   }
   function tick(){
     state.lastTickAt=Date.now();detectAuth();if(state.authRequired){state.stage='auth';state.lastBlocker='auth-required';return;}if(window.top!==window)return;if(!state.configured){state.stage='boot';state.lastBlocker='not-configured';return;}
-    const snapshot=collectDeep();tryStreamMode(snapshot);tryModel(snapshot);tryInstruction(snapshot);tryStart(snapshot);reportDiscovery();
+    const snapshot=collectDeep();tryStreamMode(snapshot);tryModel(snapshot);const languageBusy=tryTargetLanguage(snapshot);tryInstruction(snapshot);if(!languageBusy)tryStart(snapshot);reportDiscovery();
   }
-  function configure(targetLanguage,transcribeOnly){
-    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL;
-    state.configured=true;state.instructionApplied=false;state.streamSelected=false;state.modelSeen=false;state.modelVerified=false;state.modelRouteRequested=false;state.modelMenuOpenedAt=0;state.modelSearchAttempts=0;state.setupObserved=false;state.stage='discover';state.lastBlocker='waiting-route';
-    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,targetModel:state.targetModel});tick();return describe();
+  function configure(targetLanguage,transcribeOnly,echoTargetLanguage){
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.echoTargetLanguage=echoTargetLanguage===true;state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL;
+    state.configured=true;state.instructionApplied=false;state.streamSelected=false;state.modelSeen=false;state.modelVerified=false;state.modelRouteRequested=false;state.modelMenuOpenedAt=0;state.modelSearchAttempts=0;state.languageUiSelected=false;state.languageMenuOpenedAt=0;state.languageAttempts=0;state.translationGuardRequests=0;state.translationConfigSeen=false;state.targetLanguageVerified=false;state.targetLanguageRewriteRequests=0;state.targetLanguageRewriteCount=0;state.lastLanguageStrategy='none';state.setupObserved=false;state.stage='discover';state.lastBlocker='waiting-route';
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage});tick();return describe();
   }
   function describe(){
-    return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,instructionApplied:state.instructionApplied,streamSelected:state.streamSelected,modelSeen:state.modelSeen,modelVerified:state.modelVerified,modelRouteRequested:state.modelRouteRequested,modelSearchAttempts:state.modelSearchAttempts,setupObserved:state.setupObserved||setupSeen(),carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
+    return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,instructionApplied:state.instructionApplied,streamSelected:state.streamSelected,modelSeen:state.modelSeen,modelVerified:state.modelVerified,modelRouteRequested:state.modelRouteRequested,modelSearchAttempts:state.modelSearchAttempts,languageUiSelected:state.languageUiSelected,languageAttempts:state.languageAttempts,translationGuardRequests:state.translationGuardRequests,translationConfigSeen:state.translationConfigSeen,targetLanguageVerified:state.targetLanguageVerified,targetLanguageRewriteRequests:state.targetLanguageRewriteRequests,targetLanguageRewriteCount:state.targetLanguageRewriteCount,lastLanguageStrategy:state.lastLanguageStrategy,setupObserved:state.setupObserved||setupSeen(),carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
   function resetAutomation(){
-    state.streamSelected=false;state.modelSeen=false;state.modelVerified=false;state.modelRouteRequested=false;state.setupObserved=false;state.instructionApplied=false;state.modelMenuOpenedAt=0;state.modelSearchAttempts=0;state.startAttempts=0;state.streamAttempts=0;state.modelAttempts=0;state.streamCandidates=0;state.modelCandidates=0;state.startCandidates=0;state.lastAction='';state.stage='discover';state.lastBlocker='waiting-route';tick();return describe();
+    state.streamSelected=false;state.modelSeen=false;state.modelVerified=false;state.modelRouteRequested=false;state.setupObserved=false;state.instructionApplied=false;state.modelMenuOpenedAt=0;state.modelSearchAttempts=0;state.languageUiSelected=false;state.languageMenuOpenedAt=0;state.languageAttempts=0;state.translationGuardRequests=0;state.translationConfigSeen=false;state.targetLanguageVerified=false;state.targetLanguageRewriteRequests=0;state.targetLanguageRewriteCount=0;state.lastLanguageStrategy='none';state.startAttempts=0;state.streamAttempts=0;state.modelAttempts=0;state.streamCandidates=0;state.modelCandidates=0;state.startCandidates=0;state.lastAction='';state.stage='discover';state.lastBlocker='waiting-route';tick();return describe();
   }
 
   installModelGuard();installSyntheticGum();installOutputMute();

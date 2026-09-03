@@ -6,7 +6,8 @@ package com.oai.geminilivetranslate.ui
  * Goal: prove that the target language can be applied in the Live setup request itself, without
  * opening or selecting AI Studio's target-language UI. This script only inspects setup-shaped
  * bidiGenerateContent request parameters that contain the Live Translate model. Audio/PCM carrier
- * frames are skipped. Diagnostics expose only counters, strategy names, hashes and language codes.
+ * frames are skipped. Diagnostics expose only counters, strategy names, hashes, language codes and
+ * bounded JSON structural paths, never request values, media, auth data or full request bodies.
  */
 object AiStudioWebSessionR18LanguageGuard {
     const val VERSION = "2026-09-03-r18.3a-network-language-guard"
@@ -25,7 +26,8 @@ object AiStudioWebSessionR18LanguageGuard {
     parseErrors:0,namedConfigSeen:0,namedConfigChanged:0,
     fallbackCandidateRequests:0,fallbackAppliedRequests:0,ambiguousFallbackRequests:0,
     rewriteRequests:0,rewriteCount:0,targetLanguageVerified:false,
-    lastStrategy:'none',lastBeforeHash:'',lastAfterHash:'',lastBodyChars:0,lastFallbackCandidates:0
+    lastStrategy:'none',lastBeforeHash:'',lastAfterHash:'',lastBodyChars:0,lastFallbackCandidates:0,
+    lastFallbackPaths:[],lastModelPaths:[]
   };
 
   function bridge(kind,payload){
@@ -44,6 +46,27 @@ object AiStudioWebSessionR18LanguageGuard {
     let h=2166136261;const s=String(value||'');
     for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}
     return (h>>>0).toString(16);
+  }
+  function safePathKey(key){
+    const s=String(key||'').replace(/[^A-Za-z0-9_-]/g,'_').slice(0,48);
+    return s||'_';
+  }
+  function collectPaths(node,path,depth,out,predicate){
+    const d=depth||0;if(d>14||node==null||out.length>=8)return;
+    if(typeof node==='string'){
+      if(predicate(node))out.push(String(path||'$').slice(0,260));
+      return;
+    }
+    if(Array.isArray(node)){
+      for(let i=0;i<node.length&&out.length<8;i++)collectPaths(node[i],String(path||'$')+'['+i+']',d+1,out,predicate);
+      return;
+    }
+    if(typeof node==='object'){
+      const keys=Object.keys(node);
+      for(let i=0;i<keys.length&&out.length<8;i++){
+        const key=keys[i];collectPaths(node[key],String(path||'$')+'.'+safePathKey(key),d+1,out,predicate);
+      }
+    }
   }
   function containsTargetModel(node,depth){
     const d=depth||0;if(d>14||node==null)return false;
@@ -134,10 +157,12 @@ object AiStudioWebSessionR18LanguageGuard {
     const original=String(value||'');
     if(original.toLowerCase().indexOf(TARGET_MODEL)<0)return {value:original,changed:0,touched:false};
     state.translateSetupRequests++;
-    state.lastBeforeHash=hashText(original);state.lastBodyChars=original.length;state.lastFallbackCandidates=0;
+    state.lastBeforeHash=hashText(original);state.lastBodyChars=original.length;
+    state.lastFallbackCandidates=0;state.lastFallbackPaths=[];state.lastModelPaths=[];
     try{
       const parsed=JSON.parse(original);
       if(!containsTargetModel(parsed,0))return {value:original,changed:0,touched:true};
+      collectPaths(parsed,'$',0,state.lastModelPaths,function(v){return String(v).toLowerCase().indexOf(TARGET_MODEL)>=0;});
       const named=applyNamedConfig(parsed,0);
       state.namedConfigSeen+=named.seen;state.namedConfigChanged+=named.changed;
       let changed=named.changed;
@@ -145,6 +170,7 @@ object AiStudioWebSessionR18LanguageGuard {
 
       if(named.seen===0){
         const candidates=countExactEnglish(parsed,0);state.lastFallbackCandidates=candidates;
+        collectPaths(parsed,'$',0,state.lastFallbackPaths,function(v){return String(v).toLowerCase()==='en';});
         if(candidates>0)state.fallbackCandidateRequests++;
         if(candidates>=1&&candidates<=4){
           const fallbackChanges=replaceExactEnglish(parsed,0);
@@ -170,6 +196,8 @@ object AiStudioWebSessionR18LanguageGuard {
         namedSeen:named.seen,
         changed:changed,
         fallbackCandidates:state.lastFallbackCandidates,
+        fallbackPaths:state.lastFallbackPaths.slice(0,8),
+        modelPaths:state.lastModelPaths.slice(0,8),
         verified:state.targetLanguageVerified,
         beforeHash:state.lastBeforeHash,
         afterHash:state.lastAfterHash,
@@ -210,7 +238,9 @@ object AiStudioWebSessionR18LanguageGuard {
         rewriteRequests:state.rewriteRequests,
         rewriteCount:state.rewriteCount,
         verified:state.targetLanguageVerified,
-        strategy:state.lastStrategy
+        strategy:state.lastStrategy,
+        fallbackPaths:state.lastFallbackPaths.slice(0,8),
+        modelPaths:state.lastModelPaths.slice(0,8)
       });
       return changed?(asString?params.toString():params):body;
     }catch(_){return body;}
@@ -240,6 +270,7 @@ object AiStudioWebSessionR18LanguageGuard {
     state.fallbackAppliedRequests=0;state.ambiguousFallbackRequests=0;state.rewriteRequests=0;
     state.rewriteCount=0;state.targetLanguageVerified=false;state.lastStrategy='none';
     state.lastBeforeHash='';state.lastAfterHash='';state.lastBodyChars=0;state.lastFallbackCandidates=0;
+    state.lastFallbackPaths=[];state.lastModelPaths=[];
   }
   function configure(code){
     state.targetLanguage=safeCode(code);state.enabled=true;resetCounters();
@@ -257,7 +288,8 @@ object AiStudioWebSessionR18LanguageGuard {
       rewriteRequests:state.rewriteRequests,rewriteCount:state.rewriteCount,
       targetLanguageVerified:state.targetLanguageVerified,lastStrategy:state.lastStrategy,
       lastBeforeHash:state.lastBeforeHash,lastAfterHash:state.lastAfterHash,
-      lastBodyChars:state.lastBodyChars,lastFallbackCandidates:state.lastFallbackCandidates
+      lastBodyChars:state.lastBodyChars,lastFallbackCandidates:state.lastFallbackCandidates,
+      lastFallbackPaths:state.lastFallbackPaths.slice(0,8),lastModelPaths:state.lastModelPaths.slice(0,8)
     };
   }
 

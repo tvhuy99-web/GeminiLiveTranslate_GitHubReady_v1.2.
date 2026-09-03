@@ -17,7 +17,7 @@ package com.oai.geminilivetranslate.ui
 object AiStudioWebSessionR18CausalProbe {
     const val VERSION = "2026-09-03-r18.2-causal-live-bootstrap-probe"
 
-    val DOCUMENT_START = """
+    val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R18_CAUSAL__&&window.__AIS_R18_CAUSAL__.version){return;}
@@ -41,7 +41,7 @@ object AiStudioWebSessionR18CausalProbe {
   let lastBidiAt=0;
   const counters={
     trusted:0,getUserMedia:0,getUserMediaResolved:0,getUserMediaRejected:0,
-    audioContextConstructed:0,audioResume:0,mediaStreamSource:0,
+    audioResume:0,mediaStreamSource:0,
     bidiOpen:0,bidiSend:0,bidiProgress:0,bidiFinal:0,bidiAbort:0
   };
 
@@ -63,12 +63,13 @@ object AiStudioWebSessionR18CausalProbe {
       let s=String(line||'').replace(/\s+/g,' ').trim();
       s=s.replace(/https?:\/\/[^\s)]+/g,function(raw){
         try{
-          const match=String(raw).match(/^(https?:\/\/[^?#:()\s]+(?::\d+)?(?:\/[^?#()\s:]*)?)(?::(\d+))?(?::(\d+))?/);
-          if(!match)return safeText(raw,320);
+          const withoutQuery=String(raw).split('?')[0].split('#')[0];
+          const match=withoutQuery.match(/^(https?:\/\/.*?)(?::(\d+))?(?::(\d+))?$/);
+          if(!match)return safeText(withoutQuery,320);
           const u=safeUrl(match[1]);
           const base=(u.scheme?u.scheme+'://':'')+u.host+u.path;
           return base+(match[2]?':'+match[2]:'')+(match[3]?':'+match[3]:'');
-        }catch(_){return safeText(raw.split('?')[0].split('#')[0],320);}
+        }catch(_){return safeText(String(raw).split('?')[0].split('#')[0],320);}
       });
       return s.slice(0,420);
     }catch(_){return '';}
@@ -256,17 +257,19 @@ object AiStudioWebSessionR18CausalProbe {
     return Object.keys(counts).map(function(k){return counts[k];}).sort(function(a,b){return b.count-a.count;}).slice(0,50);
   }
   function causalWindow(){
-    const send=events.filter(function(e){return e.kind==='BIDI_SEND';}).slice(-1)[0]||null;
+    const sends=events.filter(function(e){return e.kind==='BIDI_SEND';});
+    const send=sends.length?sends[sends.length-1]:null;
     if(!send)return {present:false};
     const before=events.filter(function(e){return e.at<=send.at&&send.at-e.at<=10000;}).slice(-80);
     return {present:true,bidiSendId:send.id,bidiSendAt:send.at,windowMs:10000,events:before.map(function(e){return {id:e.id,tMs:e.tMs,kind:e.kind,at:e.at,afterTrustedMs:e.payload&&typeof e.payload.afterTrustedMs==='number'?e.payload.afterTrustedMs:undefined,fingerprint:e.payload&&e.payload.stack?e.payload.stack.fingerprint:undefined,firstBundle:e.payload&&e.payload.stack?e.payload.stack.firstBundle:undefined};})};
   }
   function summary(){
+    const trustedEvents=events.filter(function(e){return e.kind==='TRUSTED_EVENT';});
+    const firstTrustedAt=trustedEvents.length?trustedEvents[0].at:0;
     return {
       ok:true,version:VERSION,captureActive:captureActive,captureId:captureId,label:captureLabel,
       captureAgeMs:captureStartedAt?Date.now()-captureStartedAt:-1,eventCount:events.length,counters:Object.assign({},counters),
-      firstTrustedMs:elapsed(events.filter(function(e){return e.kind==='TRUSTED_EVENT';})[0]?.at||0),
-      firstGumMs:elapsed(firstGumAt),firstAudioResumeMs:elapsed(firstAudioResumeAt),firstBidiOpenMs:elapsed(firstBidiOpenAt),firstBidiSendMs:elapsed(firstBidiSendAt),
+      firstTrustedMs:elapsed(firstTrustedAt),firstGumMs:elapsed(firstGumAt),firstAudioResumeMs:elapsed(firstAudioResumeAt),firstBidiOpenMs:elapsed(firstBidiOpenAt),firstBidiSendMs:elapsed(firstBidiSendAt),
       lastBidiAgeMs:lastBidiAt?Date.now()-lastBidiAt:-1,lastTrustedKind:lastTrustedKind,lastTrustedTarget:lastTrustedTarget,
       stackCandidates:stackCandidates(),recurringFrames:recurringFrames(),causalWindow:causalWindow()
     };

@@ -82,9 +82,8 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun r183bDiscoversAndInvokesOnlyNonUiRuntimeCandidates() {
+    fun r183bRuntimeObserverKeepsNonUiLearningPrimitives() {
         val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-        val activity = source("ui/AiStudioWebSessionR18Activity.kt")
 
         assertTrue(bootstrap.contains("r18.3b2-behavioral-runtime-bootstrap"))
         assertTrue(bootstrap.contains("Function.prototype.toString.call"))
@@ -98,16 +97,12 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("RUNTIME_HANDLES_LEARNED"))
         assertTrue(bootstrap.contains("Error.prepareStackTrace"))
         assertTrue(bootstrap.contains("queryProfile"))
-        assertTrue(bootstrap.contains("ambiguous-candidates"))
-        assertTrue(bootstrap.contains("no-runtime-candidate"))
         assertTrue(bootstrap.contains("sourceHash"))
-        assertTrue(bootstrap.contains("setup-complete"))
         assertTrue(bootstrap.contains("value instanceof EventTarget"))
         assertTrue(bootstrap.contains("value instanceof Node"))
         assertTrue(bootstrap.contains("fn.length!==0"))
         assertTrue(bootstrap.contains("c.arity===0"))
 
-        assertFalse(bootstrap.contains("transport-shape"))
         assertFalse(bootstrap.contains("xn-call"))
         assertFalse(bootstrap.contains("km-call"))
         assertFalse(bootstrap.contains("document.querySelector("))
@@ -120,24 +115,23 @@ class AiStudioWebSessionR18SourceTest {
         assertFalse(bootstrap.contains("getBoundingClientRect()"))
         assertFalse(bootstrap.contains(".innerText"))
         assertFalse(bootstrap.contains(".textContent"))
-
-        assertTrue(activity.contains("AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START"))
-        assertTrue(activity.contains("window.__AIS_R183B_BOOTSTRAP__.start('vi')"))
-        assertTrue(activity.contains("TỰ KHỞI ĐỘNG LIVE R18.3B"))
-        assertTrue(activity.contains("không cần thao tác trên trang AI Studio"))
-        assertTrue(activity.contains("r18-bootstrap-state"))
-        assertFalse(activity.contains("tự bấm Start Live"))
-        assertFalse(activity.contains("clickElement("))
-        assertFalse(activity.contains("dispatchEvent("))
     }
 
     @Test
-    fun r183bGuidedLabExportsDetailedCaptureArtifacts() {
+    fun r183cLearnsFromOneRealStartWithoutSyntheticUiReplay() {
         val activity = source("ui/AiStudioWebSessionR18Activity.kt")
         val manifest = manifest()
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
-        assertTrue(activity.contains("r18.3b-guided-runtime-bootstrap"))
+        assertTrue(activity.contains("r18.3c-manual-causal-runtime-learning"))
+        assertTrue(activity.contains("BẮT ĐẦU HỌC R18.3C"))
+        assertTrue(activity.contains("manual-learn-runtime-network-vi"))
+        assertTrue(activity.contains("r183c-before-manual-start"))
+        assertTrue(activity.contains("window.__AIS_R183B_BOOTSTRAP__.reset()"))
+        assertFalse(activity.contains("window.__AIS_R183B_BOOTSTRAP__.start('vi')"))
+        assertTrue(activity.contains("learnedCount"))
+        assertTrue(activity.contains("setupObservations"))
+        assertTrue(activity.contains("Không có replay tự động trong R18.3C"))
         assertTrue(activity.contains("private fun finishCapture()"))
         assertTrue(activity.contains("r18-bootstrap-state"))
         assertTrue(activity.contains("r18-final-summary"))
@@ -147,6 +141,11 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(activity.contains("AiStudioWebSessionLiveProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR13DeepProbe.DOCUMENT_START"))
         assertTrue(activity.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
+
+        assertFalse(activity.contains("clickElement("))
+        assertFalse(activity.contains("dispatchEvent("))
+        assertFalse(activity.contains("MotionEvent"))
+        assertFalse(activity.contains("getBoundingClientRect"))
 
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR18Activity"))
         assertTrue(manifest.contains("AI Studio R18 - Bắt đường Live"))
@@ -159,8 +158,5 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(log.contains("\"r18-language-state.txt\" -> -5"))
         assertTrue(log.contains("\"r18-final-summary.txt\" -> -4"))
         assertTrue(log.contains("\"r18-causal-timeline.txt\" -> -3"))
-        assertTrue(log.indexOf("\"r18-bootstrap-state.txt\" -> -6") < log.indexOf("\"r18-language-state.txt\" -> -5"))
-        assertTrue(log.indexOf("\"r18-language-state.txt\" -> -5") < log.indexOf("\"r18-final-summary.txt\" -> -4"))
-        assertTrue(log.indexOf("\"r18-final-summary.txt\" -> -4") < log.indexOf("\"r16-final-summary.txt\" -> 0"))
     }
 }

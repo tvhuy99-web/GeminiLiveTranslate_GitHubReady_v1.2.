@@ -262,7 +262,7 @@ class AiStudioWebSessionR18Activity : AppCompatActivity(), AiStudioWebSessionExe
             detailView.text = "Guard targetLanguage=vi đã bật ở tầng request. Đang chờ request setup của gemini-3.5-live-translate-preview."
             log("R183_CAPTURE_STARTED_NATIVE", safe(decoded, 30_000))
             labLog.snapshot("r18-capture-start", decoded)
-            labLog.snapshot("r18-language-state", root.optJSONObject("r183")?.toString().orEmpty())
+            labLog.snapshot("r18-language-state", root?.optJSONObject("r183")?.toString().orEmpty())
         }
     }
 

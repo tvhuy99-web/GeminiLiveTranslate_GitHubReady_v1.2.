@@ -52,7 +52,12 @@ class ApiKeyStore(context: Context) {
     @Synchronized
     fun currentGeminiKey(): String? {
         val current = load()
-        return current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
+        val real = current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
+        return if (AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext)) {
+            AiStudioLiveBackendPolicy.liveCredential(real)
+        } else {
+            real
+        }
     }
 
     @Synchronized

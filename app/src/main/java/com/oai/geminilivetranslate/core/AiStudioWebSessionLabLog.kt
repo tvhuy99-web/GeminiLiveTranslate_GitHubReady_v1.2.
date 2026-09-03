@@ -107,6 +107,7 @@ class AiStudioWebSessionLabLog(private val context: Context) {
         }
 
         private fun reportPriority(name: String): Int = when (name) {
+            "r18-language-state.txt" -> -5
             "r18-final-summary.txt" -> -4
             "r18-causal-timeline.txt" -> -3
             "r18-state-capture-finished.txt" -> -2

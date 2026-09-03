@@ -16,15 +16,18 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Temporary R17.4 device-test surface.
+ * Temporary R17.5.1 device-test surface.
  *
  * This does NOT create a second browser/session. It reparents the exact production WebView owned by
  * AiStudioWebRealtimeClient into the foreground MainActivity so device testing can see and touch the
- * same AI Studio session that TranslationService is using. When the experiment stabilizes, set
- * ENABLED=false or remove this helper and the backend returns to fully hidden operation.
+ * same AI Studio session that TranslationService is using. R17.5.1 also provides a defensive runtime
+ * bootstrap recovery: if DOCUMENT_START misses R17 while R14/R16 are present, the same production
+ * bootstrap is injected into the current page before the session is allowed to remain stuck.
+ * When the experiment stabilizes, set ENABLED=false or remove this helper and the backend returns to
+ * fully hidden operation.
  */
 object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
-    const val VERSION = "2026-09-03-r17.4-visible-production-webview"
+    const val VERSION = "2026-09-03-r17.5.1-visible-production-webview-recovery"
     const val ENABLED = true
 
     private const val MAIN_ACTIVITY = "com.oai.geminilivetranslate.MainActivity"
@@ -33,7 +36,8 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
 
     @Volatile private var foregroundActivity: WeakReference<Activity>? = null
     @Volatile private var currentWebView: WeakReference<WebView>? = null
-    @Volatile private var latestStatus: String = "R17.4 • đang chuẩn bị AI Studio Live"
+    @Volatile private var latestStatus: String = "R17.5.1 • đang chuẩn bị AI Studio Live"
+    @Volatile private var recoveryGeneration: Long = 0L
 
     private var overlay: FrameLayout? = null
     private var webContainer: FrameLayout? = null
@@ -49,7 +53,10 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
         if (!ENABLED) return
         latestStatus = status
         currentWebView = WeakReference(webView)
+        recoveryGeneration += 1L
+        val generation = recoveryGeneration
         main.post { attachIfPossible() }
+        scheduleBootstrapRecovery(webView, generation)
     }
 
     fun updateStatus(status: String) {
@@ -62,6 +69,7 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
         if (!ENABLED) return
         main.post {
             if (currentWebView?.get() !== webView) return@post
+            recoveryGeneration += 1L
             (webView.parent as? ViewGroup)?.removeView(webView)
             currentWebView = null
             removeOverlay()
@@ -94,8 +102,45 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
         statusView?.text = latestStatus
         overlay?.visibility = android.view.View.VISIBLE
         showButton?.visibility = android.view.View.GONE
-        runCatching { webView.onResume() }
-        runCatching { webView.requestFocus() }
+        runCatching {
+            webView.isClickable = true
+            webView.isFocusable = true
+            webView.isFocusableInTouchMode = true
+            webView.onResume()
+            webView.requestFocus()
+            webView.requestFocusFromTouch()
+        }
+    }
+
+    private fun scheduleBootstrapRecovery(webView: WebView, generation: Long) {
+        val delays = longArrayOf(550L, 1_200L, 2_200L, 4_000L, 7_000L)
+        delays.forEachIndexed { index, delay ->
+            main.postDelayed({ ensureBootstrapInstalled(webView, generation, index + 1) }, delay)
+        }
+    }
+
+    private fun ensureBootstrapInstalled(webView: WebView, generation: Long, attempt: Int) {
+        if (!ENABLED || generation != recoveryGeneration || currentWebView?.get() !== webView) return
+        if (webView.url.isNullOrBlank() || !webView.url.orEmpty().startsWith("https://aistudio.google.com")) return
+        webView.evaluateJavascript(
+            "Boolean(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)",
+        ) { raw ->
+            if (generation != recoveryGeneration || currentWebView?.get() !== webView) return@evaluateJavascript
+            if (raw == "true") return@evaluateJavascript
+            latestStatus = "R17.5.1 • khôi phục bootstrap • lần $attempt"
+            statusView?.text = latestStatus
+            webView.evaluateJavascript(AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START) {
+                if (generation != recoveryGeneration || currentWebView?.get() !== webView) return@evaluateJavascript
+                webView.evaluateJavascript(
+                    "Boolean(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)",
+                ) { verified ->
+                    if (verified == "true") {
+                        latestStatus = "R17.5.1 • TRANSLATION_GUARD_READY • chờ cấu hình phiên"
+                        statusView?.text = latestStatus
+                    }
+                }
+            }
+        }
     }
 
     private fun buildOverlay(activity: Activity, decor: ViewGroup) {
@@ -105,7 +150,7 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
 
         val frame = FrameLayout(activity).apply {
             setBackgroundColor(0xFFFFFFFF.toInt())
-            contentDescription = "AI Studio Web đang hiển thị để kiểm tra R17.4"
+            contentDescription = "AI Studio Web đang hiển thị để kiểm tra R17.5.1"
         }
         val toolbar = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -153,7 +198,13 @@ object AiStudioLiveDebugSurface : Application.ActivityLifecycleCallbacks {
             setOnClickListener {
                 visibility = android.view.View.GONE
                 frame.visibility = android.view.View.VISIBLE
-                currentWebView?.get()?.requestFocus()
+                currentWebView?.get()?.let { web ->
+                    web.isClickable = true
+                    web.isFocusable = true
+                    web.isFocusableInTouchMode = true
+                    web.requestFocus()
+                    web.requestFocusFromTouch()
+                }
             }
         }
         decor.addView(

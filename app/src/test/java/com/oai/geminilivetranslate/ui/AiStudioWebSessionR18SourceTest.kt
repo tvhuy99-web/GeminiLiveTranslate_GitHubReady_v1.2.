@@ -51,7 +51,7 @@ class AiStudioWebSessionR18SourceTest {
         val log = source("core/AiStudioWebSessionLabLog.kt")
 
         assertTrue(activity.contains("BẮT ĐẦU GHI R18.1 + R18.2"))
-        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀ BỘ"))
+        assertTrue(activity.contains("KẾT THÚC + CHỤP TOÀN BỘ"))
         assertTrue(activity.contains("r18-final-summary"))
         assertTrue(activity.contains("r18-causal-timeline"))
         assertTrue(activity.contains("r18-r132-deep-recent"))
@@ -61,7 +61,13 @@ class AiStudioWebSessionR18SourceTest {
 
         assertTrue(manifest.contains(".ui.AiStudioWebSessionR18Activity"))
         assertTrue(manifest.contains("AI Studio R18 - Bắt đường Live"))
-        assertTrue(log.contains("\"r18-final-summary.txt\" -> 0"))
-        assertTrue(log.contains("\"r18-causal-timeline.txt\" -> 1"))
+        assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
+        val r16Block = Regex("<activity[^>]*android:name=\\\"\\.ui\\.AiStudioWebSessionR16Activity\\\"[\\s\\S]*?/>")
+            .find(manifest)?.value.orEmpty()
+        assertTrue(r16Block.isNotEmpty())
+        assertFalse(r16Block.contains("LAUNCHER"))
+        assertTrue(log.contains("\"r18-final-summary.txt\" -> -4"))
+        assertTrue(log.contains("\"r18-causal-timeline.txt\" -> -3"))
+        assertTrue(log.indexOf("\"r18-final-summary.txt\" -> -4") < log.indexOf("\"r16-final-summary.txt\" -> 0"))
     }
 }

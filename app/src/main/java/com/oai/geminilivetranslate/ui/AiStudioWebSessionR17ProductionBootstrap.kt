@@ -1,11 +1,12 @@
 package com.oai.geminilivetranslate.ui
 
 /**
- * R17 hidden production bootstrap for AI Studio Stream.
+ * R17.1 hidden production bootstrap for AI Studio Stream.
  *
  * Responsibilities:
  *  - choose/enter Stream mode and start the Live session without Android touch synthesis,
- *  - keep the target Live model selected when the current page exposes a model selector,
+ *  - preserve the application's function-specific default models instead of forcing one shared
+ *    WebSession model for translation and transcription,
  *  - write the translation/transcription instruction only into a clearly labelled system-
  *    instruction control when one exists,
  *  - provide a page-local synthetic audio MediaStream so AI Studio has a carrier clock without
@@ -16,17 +17,21 @@ package com.oai.geminilivetranslate.ui
  * media payloads or session handles. All diagnostics are metadata-only.
  */
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-03-web-session-r17.0-hidden-production-bootstrap"
-    const val TARGET_MODEL = "gemini-3.1-flash-live-preview"
+    const val VERSION = "2026-09-03-web-session-r17.1-function-specific-models"
+    const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
+    const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
+    /** Compatibility-only diagnostic label. Actual selection is always function-specific. */
+    const val TARGET_MODEL = "function-specific"
 
     val DOCUMENT_START = """
 (function(){
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version){return;}
-  const VERSION='2026-09-03-web-session-r17.0-hidden-production-bootstrap';
-  const TARGET_MODEL='gemini-3.1-flash-live-preview';
+  const VERSION='2026-09-03-web-session-r17.1-function-specific-models';
+  const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
+  const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const state={
-    configured:false,transcribeOnly:false,targetLanguage:'vi',instructionApplied:false,
+    configured:false,transcribeOnly:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,instructionApplied:false,
     streamSelected:false,modelSeen:false,startAttempts:0,streamAttempts:0,modelAttempts:0,
     setupObserved:false,carrierActive:false,syntheticCarrier:false,syntheticErrors:0,
     pageOutputMuted:false,lastAction:'',lastActionAt:0,lastTickAt:0,authRequired:false
@@ -82,7 +87,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       if(!(el instanceof HTMLTextAreaElement||el instanceof HTMLInputElement))continue;
       const l=label(el);
       if(!/(system instructions?|instructions?|system prompt)/i.test(l))continue;
-      if(nativeSetValue(el,instruction())){state.instructionApplied=true;state.lastAction='instruction';state.lastActionAt=Date.now();diag('INSTRUCTION_APPLIED',{targetLanguage:state.targetLanguage,transcribeOnly:state.transcribeOnly,chars:instruction().length});return;}
+      if(nativeSetValue(el,instruction())){state.instructionApplied=true;state.lastAction='instruction';state.lastActionAt=Date.now();diag('INSTRUCTION_APPLIED',{targetLanguage:state.targetLanguage,transcribeOnly:state.transcribeOnly,targetModel:state.targetModel,chars:instruction().length});return;}
     }
   }
   function tryStreamMode(){
@@ -97,15 +102,27 @@ object AiStudioWebSessionR17ProductionBootstrap {
     const body=safeText(document.body&&document.body.innerText,5000).toLowerCase();
     if(body.indexOf('stream')>=0&&body.indexOf('gemini')>=0)state.streamSelected=true;
   }
+  function modelAliases(){
+    const raw=String(state.targetModel||'').toLowerCase().replace(/^models\//,'');
+    const human=raw.replace(/-/g,' ');
+    const compact=human.replace(/\bpreview\b/g,'').replace(/\s+/g,' ').trim();
+    return [raw,human,compact].filter(function(v,i,a){return !!v&&a.indexOf(v)===i;});
+  }
+  function hasTargetModel(text){
+    const value=String(text||'').toLowerCase();
+    const aliases=modelAliases();
+    for(let i=0;i<aliases.length;i++)if(value.indexOf(aliases[i])>=0)return true;
+    return false;
+  }
   function tryModel(){
-    const body=safeText(document.body&&document.body.innerText,12000).toLowerCase();
-    if(body.indexOf(TARGET_MODEL)>=0||body.indexOf('gemini 3.1 flash live')>=0){state.modelSeen=true;return;}
+    const body=safeText(document.body&&document.body.innerText,16000).toLowerCase();
+    if(hasTargetModel(body)){state.modelSeen=true;return;}
     const list=candidates();
     for(let i=0;i<list.length;i++){
       const l=label(list[i]);
-      if(l.indexOf(TARGET_MODEL)>=0||l.indexOf('gemini 3.1 flash live')>=0){state.modelAttempts++;if(clickElement(list[i],'select-target-model')){state.modelSeen=true;return;}}
+      if(hasTargetModel(l)){state.modelAttempts++;if(clickElement(list[i],'select-target-model')){state.modelSeen=true;diag('MODEL_SELECTED',{targetModel:state.targetModel,attempt:state.modelAttempts});return;}}
     }
-    if(state.streamSelected&&state.modelAttempts<3){
+    if(state.streamSelected&&state.modelAttempts<6){
       for(let i=0;i<list.length;i++){
         const l=label(list[i]);
         if((l.indexOf('model')>=0||l.indexOf('gemini')>=0)&&l.length<180){state.modelAttempts++;clickElement(list[i],'open-model-selector');return;}
@@ -121,7 +138,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function tryStart(){
     if(setupSeen()){state.setupObserved=true;return;}
-    if(!state.streamSelected)return;
+    if(!state.streamSelected||!state.modelSeen)return;
     const list=candidates();
     for(let i=0;i<list.length;i++){
       const el=list[i];const l=label(el);
@@ -197,12 +214,17 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(window.top===window){tryStreamMode();tryModel();tryInstruction();tryStart();}
   }
   function configure(targetLanguage,transcribeOnly){
-    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.configured=true;state.instructionApplied=false;tick();return describe();
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';
+    state.transcribeOnly=!!transcribeOnly;
+    state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL;
+    state.configured=true;state.instructionApplied=false;state.modelSeen=false;
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,targetModel:state.targetModel});
+    tick();return describe();
   }
   function describe(){
-    return {ok:true,version:VERSION,targetModel:TARGET_MODEL,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,instructionApplied:state.instructionApplied,streamSelected:state.streamSelected,modelSeen:state.modelSeen,startAttempts:state.startAttempts,streamAttempts:state.streamAttempts,modelAttempts:state.modelAttempts,setupObserved:state.setupObserved||setupSeen(),carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
+    return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,instructionApplied:state.instructionApplied,streamSelected:state.streamSelected,modelSeen:state.modelSeen,startAttempts:state.startAttempts,streamAttempts:state.streamAttempts,modelAttempts:state.modelAttempts,setupObserved:state.setupObserved||setupSeen(),carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
-  function resetAutomation(){clicked.clear&&clicked.clear();state.streamSelected=false;state.modelSeen=false;state.startAttempts=0;state.streamAttempts=0;state.modelAttempts=0;state.setupObserved=false;state.instructionApplied=false;state.lastAction='';tick();return describe();}
+  function resetAutomation(){state.streamSelected=false;state.modelSeen=false;state.startAttempts=0;state.streamAttempts=0;state.modelAttempts=0;state.setupObserved=false;state.instructionApplied=false;state.lastAction='';tick();return describe();}
 
   installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};

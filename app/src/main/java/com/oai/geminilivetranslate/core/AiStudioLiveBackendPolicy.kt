@@ -9,11 +9,12 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * The experiment branch prefers the authenticated AI Studio Web Session for Live translation and
  * falls back to the regular Gemini API when a real API key exists and the Web Session cannot be
- * bootstrapped. A short circuit-breaker prevents reconnect storms from repeatedly reopening a
- * broken/unauthenticated WebView.
+ * bootstrapped. The circuit breaker is used only when an API fallback actually exists. A device
+ * whose only usable Live backend is AI Studio must remain eligible for TranslationService's normal
+ * reconnect/backoff path instead of being locked out for five minutes.
  */
 object AiStudioLiveBackendPolicy {
-    const val VERSION = "2026-09-03-r17-internal-live-backend-policy"
+    const val VERSION = "2026-09-03-r17.3-web-only-reconnect-policy"
     const val AI_STUDIO_SENTINEL = "__AI_STUDIO_WEB_SESSION__"
 
     private const val PREFS = "r17_live_backend_internal"
@@ -26,9 +27,7 @@ object AiStudioLiveBackendPolicy {
     private val disabledUntilElapsed = AtomicLong(0L)
 
     fun preferAiStudio(context: Context): Boolean {
-        val enabled = context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_ENABLED, DEFAULT_ENABLED)
+        val enabled = configuredToPreferAiStudio(context)
         return enabled && SystemClock.elapsedRealtime() >= disabledUntilElapsed.get()
     }
 
@@ -50,8 +49,17 @@ object AiStudioLiveBackendPolicy {
 
     fun isSentinel(value: String?): Boolean = value == AI_STUDIO_SENTINEL
 
-    fun recordAiStudioFailure() {
-        disabledUntilElapsed.set(SystemClock.elapsedRealtime() + CIRCUIT_BREAKER_MS)
+    /**
+     * Circuit-break only when there is another backend to use. If AI Studio is the sole backend,
+     * TranslationService already supplies reconnect delays, so disabling AI Studio would convert a
+     * recoverable bootstrap failure into AI_STUDIO_BACKEND_COOLDOWN_AND_NO_API_KEY.
+     */
+    fun recordAiStudioFailure(hasApiFallback: Boolean) {
+        if (hasApiFallback) {
+            disabledUntilElapsed.set(SystemClock.elapsedRealtime() + CIRCUIT_BREAKER_MS)
+        } else {
+            disabledUntilElapsed.set(0L)
+        }
     }
 
     fun clearCircuitBreaker() {

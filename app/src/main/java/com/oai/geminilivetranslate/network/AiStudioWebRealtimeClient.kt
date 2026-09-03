@@ -16,6 +16,7 @@ import com.oai.geminilivetranslate.core.AiStudioWebLiveClient
 import com.oai.geminilivetranslate.core.AiStudioWebLiveOutputBridge
 import com.oai.geminilivetranslate.core.AiStudioWebSessionExecutor
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.ui.AiStudioLiveDebugSurface
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR14DirectLiveEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR17ProductionBootstrap
@@ -25,12 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * R17 production-shaped AI Studio Live backend.
+ * R17.4 production-shaped AI Studio Live backend.
  *
- * Authentication and BrowserChannel credentials remain owned by the WebView page. This client owns
- * only the hidden WebView lifecycle, automatic Live bootstrap, R14 PCM carrier replacement and
- * R16.1 reverse-direction decoding. R17.3 enters the dedicated /live route directly instead of
- * opening Chat and trying to discover a Stream control that may not exist in that DOM.
+ * The backend enters /live directly, keeps the proven R14/R16.1 transport, exposes its exact
+ * production WebView temporarily during device testing, and uses a progress-aware bootstrap
+ * watchdog so a just-opened model menu is not killed by an unrelated absolute timeout.
  */
 internal class AiStudioWebRealtimeClient(
     private val targetLanguage: String,
@@ -61,6 +61,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var configured = false
     @Volatile private var serverSetupSeen = false
     @Volatile private var connectingStartedAt = 0L
+    @Volatile private var lastBootstrapProgressAt = 0L
+    @Volatile private var lastBootstrapSignature = ""
     @Volatile private var lastInputAt = 0L
     @Volatile private var carrierEnabled = false
     @Volatile private var lastBootstrapState = ""
@@ -74,7 +76,10 @@ internal class AiStudioWebRealtimeClient(
 
     fun connect() {
         if (closed.get()) return
-        connectingStartedAt = SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
+        connectingStartedAt = now
+        lastBootstrapProgressAt = now
+        lastBootstrapSignature = ""
         main.post { startOnMain() }
     }
 
@@ -143,6 +148,7 @@ internal class AiStudioWebRealtimeClient(
             inputClient = null
             runCatching { outputBridge?.close() }
             outputBridge = null
+            executor?.webView?.let { AiStudioLiveDebugSurface.detach(it) }
             runCatching { executor?.webView?.stopLoading() }
             runCatching { executor?.webView?.onPause() }
             runCatching { executor?.destroy() }
@@ -246,6 +252,8 @@ internal class AiStudioWebRealtimeClient(
                     when (kind) {
                         "setupComplete" -> {
                             serverSetupSeen = true
+                            markBootstrapProgress("server-setup-complete")
+                            AiStudioLiveDebugSurface.updateStatus("R17.4 • setupComplete • đang chờ carrier R14")
                             logger.log(2, "AiStudioLive", "Nhận setupComplete; chờ carrier R14 sẵn sàng")
                             maybeDeliverSetup()
                         }
@@ -288,12 +296,16 @@ internal class AiStudioWebRealtimeClient(
         listener.onOpen()
         val liveUrl = liveRouteUrl()
         created.start(liveUrl)
+        AiStudioLiveDebugSurface.show(
+            created.webView,
+            "R17.4 • mở AI Studio Live • model=${targetLiveModel()}",
+        )
         main.removeCallbacks(healthTick)
         main.postDelayed(healthTick, HEALTH_TICK_MS)
         logger.log(
             2,
             "AiStudioLive",
-            "Khởi động hidden WebSession route=live model=${targetLiveModel()} mode=$operationMode target=$targetLanguage",
+            "Khởi động visible-debug WebSession route=live model=${targetLiveModel()} mode=$operationMode target=$targetLanguage",
         )
     }
 
@@ -305,6 +317,7 @@ internal class AiStudioWebRealtimeClient(
             val currentUri = runCatching { Uri.parse(current.webView.url.orEmpty()) }.getOrNull()
             val host = currentUri?.host.orEmpty()
             if (host.contains("accounts.google.") || host == "accounts.google.com") {
+                AiStudioLiveDebugSurface.updateStatus("R17.4 • cần đăng nhập Google")
                 fail(IllegalStateException("AI_STUDIO_AUTH_REQUIRED"))
                 return
             }
@@ -315,9 +328,19 @@ internal class AiStudioWebRealtimeClient(
             configureBootstrapIfNeeded()
             requestStates()
             maybeSilenceCarrier(force = false)
-            if (!setupDelivered.get() && now - connectingStartedAt > SETUP_TIMEOUT_MS) {
-                fail(IllegalStateException("AI_STUDIO_LIVE_SETUP_TIMEOUT"))
-                return
+            if (!setupDelivered.get()) {
+                val stalledFor = now - lastBootstrapProgressAt.coerceAtLeast(connectingStartedAt)
+                val totalFor = now - connectingStartedAt
+                if (totalFor > SETUP_HARD_TIMEOUT_MS || stalledFor > SETUP_STALL_TIMEOUT_MS) {
+                    val reason = if (totalFor > SETUP_HARD_TIMEOUT_MS) {
+                        "AI_STUDIO_LIVE_SETUP_HARD_TIMEOUT"
+                    } else {
+                        "AI_STUDIO_LIVE_SETUP_STALLED"
+                    }
+                    AiStudioLiveDebugSurface.updateStatus("R17.4 • bootstrap bị kẹt • xem màn Web hiện tại")
+                    fail(IllegalStateException(reason))
+                    return
+                }
             }
             if (setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
                 fail(IllegalStateException("AI_STUDIO_LIVE_CARRIER_STALE"))
@@ -344,10 +367,13 @@ internal class AiStudioWebRealtimeClient(
         lastRouteRepairAt = now
         configured = false
         lastBootstrapState = ""
+        lastBootstrapSignature = ""
+        markBootstrapProgress("route-repair-$routeRepairAttempts")
+        AiStudioLiveDebugSurface.updateStatus("R17.4 • sửa route về /live • lần $routeRepairAttempts")
         logger.log(
             1,
             "AiStudioLive",
-            "Sửa route hidden WebSession attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}",
+            "Sửa route WebSession attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}",
         )
         current.start(liveRouteUrl())
         return true
@@ -366,7 +392,8 @@ internal class AiStudioWebRealtimeClient(
             if (obj?.optBoolean("ok") == true) {
                 configured = true
                 lastBootstrapState = decoded
-                logger.log(2, "AiStudioLive", "R17 bootstrap configured target=$targetLanguage transcribe=$transcribe")
+                updateBootstrapProgress(obj)
+                logger.log(2, "AiStudioLive", "R17.4 bootstrap configured target=$targetLanguage transcribe=$transcribe")
             }
         }
     }
@@ -377,7 +404,15 @@ internal class AiStudioWebRealtimeClient(
         current.webView.evaluateJavascript(js) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return@evaluateJavascript
-            root.optJSONObject("bootstrap")?.let { lastBootstrapState = it.toString() }
+            root.optJSONObject("bootstrap")?.let { bootstrap ->
+                lastBootstrapState = bootstrap.toString()
+                updateBootstrapProgress(bootstrap)
+                AiStudioLiveDebugSurface.updateStatus(
+                    "R17.4 • ${bootstrap.optString("stage", "?")} • ${bootstrap.optString("lastBlocker", "?")} • " +
+                        "modelSeen=${bootstrap.optBoolean("modelSeen", false)} verified=${bootstrap.optBoolean("modelVerified", false)} • " +
+                        "start=${bootstrap.optInt("startAttempts", 0)}",
+                )
+            }
             root.optJSONObject("direct")?.let { direct ->
                 lastDirectState = direct.toString()
                 val requests = direct.optLong("carrierRequests", 0L)
@@ -399,6 +434,33 @@ internal class AiStudioWebRealtimeClient(
         }
     }
 
+    private fun updateBootstrapProgress(bootstrap: JSONObject) {
+        val signature = listOf(
+            bootstrap.optString("stage"),
+            bootstrap.optString("lastBlocker"),
+            bootstrap.optBoolean("streamSelected", false),
+            bootstrap.optBoolean("modelSeen", false),
+            bootstrap.optBoolean("modelVerified", false),
+            bootstrap.optBoolean("modelRouteRequested", false),
+            bootstrap.optBoolean("setupObserved", false),
+            bootstrap.optString("lastAction"),
+            bootstrap.optInt("streamAttempts", 0),
+            bootstrap.optInt("modelAttempts", 0),
+            bootstrap.optInt("modelSearchAttempts", 0),
+            bootstrap.optInt("startAttempts", 0),
+            bootstrap.optInt("modelGuardRequests", 0),
+            bootstrap.optInt("modelRewriteRequests", 0),
+        ).joinToString("|")
+        if (signature == lastBootstrapSignature) return
+        lastBootstrapSignature = signature
+        markBootstrapProgress(signature.take(180))
+    }
+
+    private fun markBootstrapProgress(reason: String) {
+        lastBootstrapProgressAt = SystemClock.elapsedRealtime()
+        logger.log(3, "AiStudioLive", "Bootstrap progress=${safe(reason, 220)}")
+    }
+
     private fun maybeDeliverSetup() {
         if (closed.get() || setupDelivered.get() || !serverSetupSeen) return
         val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
@@ -410,6 +472,7 @@ internal class AiStudioWebRealtimeClient(
             if (closed.get() || setupDelivered.get()) return@postDelayed
             setupDelivered.set(true)
             lastProgressAt = SystemClock.elapsedRealtime()
+            AiStudioLiveDebugSurface.updateStatus("R17.4 • READY • carrier=$carriers • ${direct.optString("templateMime")}")
             logger.log(2, "AiStudioLive", "Production setup ready carrierRequests=$carriers template=${direct.optString("templateMime")}")
             listener.onSetupComplete()
         }, ARM_SETTLE_MS)
@@ -463,7 +526,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             0,
             "AiStudioLive",
-            "Hidden WebSession thất bại setup=${setupDelivered.get()} routeRepairs=$routeRepairAttempts bootstrap=${safe(lastBootstrapState, 1200)} direct=${safe(lastDirectState, 1200)} output=${safe(lastOutputState, 1200)}",
+            "WebSession thất bại setup=${setupDelivered.get()} routeRepairs=$routeRepairAttempts bootstrap=${safe(lastBootstrapState, 1600)} direct=${safe(lastDirectState, 1200)} output=${safe(lastOutputState, 1200)}",
             error,
         )
         listener.onError(error)
@@ -482,11 +545,12 @@ internal class AiStudioWebRealtimeClient(
     private fun safe(value: String, max: Int): String = value.replace('\u0000', ' ').replace('\n', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-03-r17.3-direct-live-route"
+        const val VERSION = "2026-09-03-r17.4-visible-progress-bootstrap"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_LIVE = "https://aistudio.google.com/live"
         private const val HEALTH_TICK_MS = 650L
-        private const val SETUP_TIMEOUT_MS = 35_000L
+        private const val SETUP_STALL_TIMEOUT_MS = 20_000L
+        private const val SETUP_HARD_TIMEOUT_MS = 120_000L
         private const val LIVE_STALE_TIMEOUT_MS = 12_000L
         private const val ARM_SETTLE_MS = 180L
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L

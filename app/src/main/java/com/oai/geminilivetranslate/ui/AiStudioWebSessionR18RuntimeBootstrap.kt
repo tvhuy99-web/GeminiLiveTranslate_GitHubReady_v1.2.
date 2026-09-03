@@ -74,7 +74,7 @@ object AiStudioWebSessionR18RuntimeBootstrap {
     add('getUserMedia',16,/getUserMedia/);
     add('mediaDevices',10,/mediaDevices/);
     add('webAudio',10,/AudioContext|createMediaStreamSource|createMediaStreamTrackSource/);
-    add('audioPcm',10,/audio\\/pcm/i);
+    add('audioPcm',10,/audio\/pcm/i);
     add('translationConfig',9,/translation[_A-Za-z]*config|target[_A-Za-z]*language/i);
     add('setupProtocol',7,/setupComplete|setup_complete|generationConfig|generation_config/);
     add('xhrTransport',5,/XMLHttpRequest|URLSearchParams/);
@@ -188,7 +188,7 @@ object AiStudioWebSessionR18RuntimeBootstrap {
       const u=new URL(String(raw||''),location.href),out={names:[],count:0};
       u.searchParams.forEach(function(v,k){
         if(out.names.length>=40)return;const s=String(v||'');let kind='opaque';
-        if(/^\\d+$/.test(s))kind='numeric';else if(/^[A-Za-z0-9_-]{1,24}$/.test(s))kind='short-token';else if(s.length>80)kind='long-opaque';
+        if(/^\d+$/.test(s))kind='numeric';else if(/^[A-Za-z0-9_-]{1,24}$/.test(s))kind='short-token';else if(s.length>80)kind='long-opaque';
         out.names.push({name:String(k||'').slice(0,80),chars:s.length,kind:kind});out.count++;
       });
       return out;
@@ -250,7 +250,7 @@ object AiStudioWebSessionR18RuntimeBootstrap {
       X.prototype.send=function(body){
         try{
           const raw=String(this.__aisR183BRawUrl||''),text=typeof body==='string'?body:'';
-          if(raw.indexOf('/v1/bidiGenerateContent')>=0&&text.toLowerCase().indexOf(TARGET_MODEL)>=0&&!/audio\\/pcm/i.test(text))learnFromSetup(raw);
+          if(raw.indexOf('/v1/bidiGenerateContent')>=0&&text.toLowerCase().indexOf(TARGET_MODEL)>=0&&!/audio\/pcm/i.test(text))learnFromSetup(raw);
         }catch(_){}
         return currentSend.apply(this,arguments);
       };

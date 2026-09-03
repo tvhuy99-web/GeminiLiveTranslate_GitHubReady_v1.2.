@@ -2,6 +2,7 @@ package com.oai.geminilivetranslate.network
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -27,10 +28,9 @@ import java.util.concurrent.atomic.AtomicLong
  * R17 production-shaped AI Studio Live backend.
  *
  * Authentication and BrowserChannel credentials remain owned by the WebView page. This client owns
- * only the hidden WebView lifecycle, automatic Stream bootstrap, R14 PCM carrier replacement and
- * R16.1 reverse-direction decoding. It exposes the same semantic callbacks expected by
- * TranslationService without exporting page cookies, tokens, raw BrowserChannel bodies, Base64
- * audio or session-resumption handles.
+ * only the hidden WebView lifecycle, automatic Live bootstrap, R14 PCM carrier replacement and
+ * R16.1 reverse-direction decoding. R17.3 enters the dedicated /live route directly instead of
+ * opening Chat and trying to discover a Stream control that may not exist in that DOM.
  */
 internal class AiStudioWebRealtimeClient(
     private val targetLanguage: String,
@@ -69,6 +69,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastCarrierRequests = 0L
     @Volatile private var lastBrowserChunks = 0L
     @Volatile private var lastProgressAt = 0L
+    @Volatile private var routeRepairAttempts = 0
+    @Volatile private var lastRouteRepairAt = 0L
 
     fun connect() {
         if (closed.get()) return
@@ -284,10 +286,15 @@ internal class AiStudioWebRealtimeClient(
         runCatching { created.webView.onResume() }
         runCatching { created.webView.resumeTimers() }
         listener.onOpen()
-        created.start(AI_STUDIO_NEW_CHAT)
+        val liveUrl = liveRouteUrl()
+        created.start(liveUrl)
         main.removeCallbacks(healthTick)
         main.postDelayed(healthTick, HEALTH_TICK_MS)
-        logger.log(2, "AiStudioLive", "Khởi động hidden WebSession model=${AiStudioWebSessionR17ProductionBootstrap.TARGET_MODEL} mode=$operationMode target=$targetLanguage")
+        logger.log(
+            2,
+            "AiStudioLive",
+            "Khởi động hidden WebSession route=live model=${targetLiveModel()} mode=$operationMode target=$targetLanguage",
+        )
     }
 
     private val healthTick = object : Runnable {
@@ -295,9 +302,14 @@ internal class AiStudioWebRealtimeClient(
             if (closed.get()) return
             val current = executor ?: return
             val now = SystemClock.elapsedRealtime()
-            val host = runCatching { android.net.Uri.parse(current.webView.url.orEmpty()).host.orEmpty() }.getOrDefault("")
+            val currentUri = runCatching { Uri.parse(current.webView.url.orEmpty()) }.getOrNull()
+            val host = currentUri?.host.orEmpty()
             if (host.contains("accounts.google.") || host == "accounts.google.com") {
                 fail(IllegalStateException("AI_STUDIO_AUTH_REQUIRED"))
+                return
+            }
+            if (repairLiveRouteIfNeeded(current, currentUri, now)) {
+                main.postDelayed(this, HEALTH_TICK_MS)
                 return
             }
             configureBootstrapIfNeeded()
@@ -313,6 +325,32 @@ internal class AiStudioWebRealtimeClient(
             }
             main.postDelayed(this, HEALTH_TICK_MS)
         }
+    }
+
+    private fun repairLiveRouteIfNeeded(
+        current: AiStudioWebSessionExecutor,
+        currentUri: Uri?,
+        now: Long,
+    ): Boolean {
+        val host = currentUri?.host.orEmpty()
+        if (host != "aistudio.google.com") return false
+        val path = currentUri?.path.orEmpty().lowercase()
+        if (path == "/live" || path.startsWith("/live/")) return false
+        if (now - connectingStartedAt < ROUTE_REPAIR_GRACE_MS) return false
+        if (routeRepairAttempts >= MAX_ROUTE_REPAIR_ATTEMPTS) return false
+        if (lastRouteRepairAt > 0L && now - lastRouteRepairAt < ROUTE_REPAIR_MIN_INTERVAL_MS) return false
+
+        routeRepairAttempts += 1
+        lastRouteRepairAt = now
+        configured = false
+        lastBootstrapState = ""
+        logger.log(
+            1,
+            "AiStudioLive",
+            "Sửa route hidden WebSession attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}",
+        )
+        current.start(liveRouteUrl())
+        return true
     }
 
     private fun configureBootstrapIfNeeded() {
@@ -413,12 +451,19 @@ internal class AiStudioWebRealtimeClient(
         while (value > previous && !maxObservedQueuedBytes.compareAndSet(previous, value)) previous = maxObservedQueuedBytes.get()
     }
 
+    private fun targetLiveModel(): String = when (operationMode) {
+        GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
+        GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+    }
+
+    private fun liveRouteUrl(): String = "$AI_STUDIO_LIVE?model=${Uri.encode(targetLiveModel())}"
+
     private fun fail(error: Throwable) {
         if (closed.get() || !terminalDelivered.compareAndSet(false, true)) return
         logger.log(
             0,
             "AiStudioLive",
-            "Hidden WebSession thất bại setup=${setupDelivered.get()} bootstrap=${safe(lastBootstrapState, 1200)} direct=${safe(lastDirectState, 1200)} output=${safe(lastOutputState, 1200)}",
+            "Hidden WebSession thất bại setup=${setupDelivered.get()} routeRepairs=$routeRepairAttempts bootstrap=${safe(lastBootstrapState, 1200)} direct=${safe(lastDirectState, 1200)} output=${safe(lastOutputState, 1200)}",
             error,
         )
         listener.onError(error)
@@ -437,14 +482,17 @@ internal class AiStudioWebRealtimeClient(
     private fun safe(value: String, max: Int): String = value.replace('\u0000', ' ').replace('\n', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-03-r17-hidden-bidirectional-web-live-client"
+        const val VERSION = "2026-09-03-r17.3-direct-live-route"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
-        private const val AI_STUDIO_NEW_CHAT = "https://aistudio.google.com/prompts/new_chat"
+        private const val AI_STUDIO_LIVE = "https://aistudio.google.com/live"
         private const val HEALTH_TICK_MS = 650L
         private const val SETUP_TIMEOUT_MS = 35_000L
         private const val LIVE_STALE_TIMEOUT_MS = 12_000L
         private const val ARM_SETTLE_MS = 180L
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
+        private const val ROUTE_REPAIR_GRACE_MS = 2_500L
+        private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
+        private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2
     }
 }

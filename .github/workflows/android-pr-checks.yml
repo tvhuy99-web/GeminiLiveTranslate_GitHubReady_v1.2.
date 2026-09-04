@@ -41,7 +41,6 @@ jobs:
           if ! grep -q 'liveFileTranscribe=true' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt; then
             python3 - <<'R186EXTRACT'
           from pathlib import Path
-          import textwrap
           workflow = Path('.github/workflows/r186-ai-studio-all-modes.yml').read_text()
           start_marker = "          python3 - <<'PY'\n"
           end_marker = "\n          PY\n"
@@ -52,7 +51,8 @@ jobs:
           end = workflow.find(end_marker, start)
           if end < 0:
               raise SystemExit('R18.6 patch end marker not found')
-          script = textwrap.dedent(workflow[start:end])
+          raw = workflow[start:end]
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in raw.splitlines()) + "\n"
           Path('/tmp/r186_apply.py').write_text(script)
           print(f'Extracted R18.6 patch: {len(script)} chars')
           R186EXTRACT

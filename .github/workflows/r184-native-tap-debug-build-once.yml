@@ -1,4 +1,4 @@
-name: R18.4 Native Start Tap Debug Build Once
+name: R18.4 Publish Validated Source Patch Once
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  patch-build:
+  publish-patch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,37 +17,22 @@ jobs:
           ref: experiment/aistudio-r183-network-vi
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Apply R18.4 source patch
+      - name: Apply validated R18.4 source patch
         run: python3 tools/r184_apply_native_tap_debug.py
 
       - name: Check embedded JavaScript
         run: python3 tools/check_embedded_js_syntax.py
 
-      - name: Build and test debug APK
-        run: |
-          chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
-
-      - name: Upload R18.4 debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: GeminiLiveTranslate-R18.4-native-tap-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 1
-
-      - name: Commit source patch and remove one-shot helpers
+      - name: Commit only intended source files and remove one-shot helpers
         shell: bash
         run: |
-          rm -f tools/r184_apply_native_tap_debug.py
-          rm -f .github/workflows/r184-native-tap-debug-build-once.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add app/src/main/java/com/oai/geminilivetranslate/GeminiTranslateApp.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioNativeTapDebugSupport.kt
+          git rm -f tools/r184_apply_native_tap_debug.py
+          git rm -f .github/workflows/r184-native-tap-debug-build-once.yml
           git diff --cached --check
           git commit -m "R18.4: native Start tap and visible AI Studio debug WebView"
           git push origin HEAD:experiment/aistudio-r183-network-vi

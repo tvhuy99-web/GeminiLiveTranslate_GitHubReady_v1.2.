@@ -13,7 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 JAVA_ROOT = ROOT / "app" / "src" / "main" / "java"
 
 PATTERN = re.compile(
-    r"val\s+([A-Za-z0-9_]*DOCUMENT_START[A-Za-z0-9_]*)\s*:\s*String\s*=\s*\"\"\"(.*?)\"\"\"\.trimIndent\(\)",
+    r"val\s+([A-Za-z0-9_]*DOCUMENT_START[A-Za-z0-9_]*)\s*(?::\s*String\s*)?=\s*\"\"\"(.*?)\"\"\"\.trimIndent\(\)",
     re.DOTALL,
 )
 
@@ -25,6 +25,7 @@ def main() -> int:
         return 2
 
     checked = 0
+    checked_blocks: set[str] = set()
     failures: list[str] = []
 
     for path in sorted(JAVA_ROOT.rglob("*.kt")):
@@ -33,6 +34,7 @@ def main() -> int:
             name = match.group(1)
             script = textwrap.dedent(match.group(2)).strip() + "\n"
             checked += 1
+            checked_blocks.add(f"{path.relative_to(ROOT)}:{name}")
             with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as tmp:
                 tmp.write(script)
                 tmp_path = pathlib.Path(tmp.name)
@@ -54,6 +56,17 @@ def main() -> int:
         print("[FAIL] no DOCUMENT_START JavaScript blocks found", file=sys.stderr)
         return 3
 
+    required_r17 = (
+        "app/src/main/java/com/oai/geminilivetranslate/ui/"
+        "AiStudioWebSessionR17ProductionBootstrap.kt:DOCUMENT_START"
+    )
+    if required_r17 not in checked_blocks:
+        print(
+            f"[FAIL] production R17.6 JavaScript was not syntax-checked: {required_r17}",
+            file=sys.stderr,
+        )
+        return 4
+
     if failures:
         print(f"[FAIL] embedded JavaScript syntax errors: {len(failures)}", file=sys.stderr)
         for failure in failures:
@@ -61,6 +74,7 @@ def main() -> int:
         return 1
 
     print(f"[OK] Embedded JavaScript syntax: {checked} DOCUMENT_START blocks")
+    print(f"[OK] Production R17.6 syntax checked: {required_r17}")
     return 0
 
 

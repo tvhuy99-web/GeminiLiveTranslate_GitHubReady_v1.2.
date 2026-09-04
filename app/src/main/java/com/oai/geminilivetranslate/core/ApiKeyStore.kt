@@ -49,10 +49,17 @@ class ApiKeyStore(context: Context) {
         return save(current.copy(keys = normalized, selected = selected))
     }
 
+    /** Returns only a real app-owned Gemini API key. Never returns the AI Studio sentinel. */
     @Synchronized
-    fun currentGeminiKey(): String? {
-        val current = load()
-        val real = current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
+    fun currentGeminiKey(): String? = realGeminiKey(load())
+
+    /**
+     * Credential used only by Gemini Live. AI Studio mode may return the local routing sentinel
+     * when no app-owned key exists; non-Live clients must use currentGeminiKey()/orderedGeminiKeys().
+     */
+    @Synchronized
+    fun currentLiveCredential(): String? {
+        val real = realGeminiKey(load())
         return if (AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext)) {
             AiStudioLiveBackendPolicy.liveCredential(real)
         } else {
@@ -110,6 +117,9 @@ class ApiKeyStore(context: Context) {
         }
         invalidateLogRedactionCache()
     }
+
+    private fun realGeminiKey(current: State): String? =
+        current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
 
     private fun requireValidGeminiKey(key: String) {
         require(key.length >= 20 && key.none(Char::isWhitespace)) { "API Key không hợp lệ" }

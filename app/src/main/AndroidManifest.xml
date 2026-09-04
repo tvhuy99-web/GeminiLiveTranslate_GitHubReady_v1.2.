@@ -35,103 +35,13 @@
         <activity android:name=".ui.LogViewerActivity" android:exported="false" />
         <activity android:name=".ui.TtsSettingsActivity" android:exported="false" />
         <activity android:name=".ui.ApiSettingsActivity" android:exported="false" />
+        <activity
+            android:name=".ui.AiStudioAccountActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="Tài khoản Google / AI Studio" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
-
-        <activity
-            android:name=".ui.AiStudioWebSessionLogShareActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:label="Nhật ký AI Studio" />
-
-        <!-- R19: one real Start tap, then Android R14/R16 realtime handoff. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR18Activity"
-            android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio - 1 chạm Start">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <!-- R16 proven bidirectional bridge remains internal for regression comparison. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR16Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R16 - Bidirectional Live" />
-
-        <!-- R15 continuous real-source bridge remains internal for regression comparison. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR15Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R15 - Real Source Bridge" />
-
-        <!-- R14 direct carrier-replacement proof remains internal for regression comparison. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR14Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R14.2 - Direct Live Engine" />
-
-        <!-- R13.2 transport/deep probe remains internal for regression comparison. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR13Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R13.2 - Deep Live Probe" />
-
-        <!-- Proven R11.2 shell + R12 Direct Engine remains internal for closed-request regression tests. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR11R2Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R12 - Direct Engine" />
-
-        <!-- Historical experiments remain registered only for internal/reference use, not launcher UI. -->
-        <activity
-            android:name=".ui.AiStudioWebSessionR11UnifiedActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R11.1 internal" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR11Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R11 legacy" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR10Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R10 - Executor" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR7Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R7 - Không ghi textarea" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR6Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R6 - Prompt state trực tiếp" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR5Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R5 - Trực tiếp handler" />
-        <activity
-            android:name=".ui.AiStudioWebSessionR4Activity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session R4.1 - Không chạm" />
-        <activity
-            android:name=".ui.AiStudioWebSessionLabActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio Web Session Lab" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

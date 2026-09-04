@@ -1,6 +1,8 @@
 package com.oai.geminilivetranslate.network
 
 import com.oai.geminilivetranslate.GeminiTranslateApp
+import com.oai.geminilivetranslate.core.AiConnectionModeStore
+import com.oai.geminilivetranslate.core.AiFunctionModelCatalog
 import com.oai.geminilivetranslate.core.AiStudioLiveBackendPolicy
 import com.oai.geminilivetranslate.core.SessionLogger
 import kotlinx.coroutines.CompletableDeferred
@@ -9,14 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Stable Live client facade used by TranslationService.
- *
- * R17 deliberately preserves this public surface so the mature service queue/player/history logic
- * does not need a broad rewrite. The facade prefers the authenticated AI Studio Web Session on the
- * experiment branch and falls back to the original API-key WebSocket backend when a real API key
- * exists and the Web Session cannot bootstrap.
- */
+/** Stable Live facade used by TranslationService for both official connection modes. */
 class GeminiLiveClient(
     private val apiKey: String,
     private val model: String,
@@ -80,14 +75,19 @@ class GeminiLiveClient(
 
     fun connect() {
         if (closed.get()) return
+        val connectionMode = AiStudioLiveBackendPolicy.connectionMode(appContext)
         val hasRealApiKey = hasRealApiKey()
-        val configuredForWeb = AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext)
-        val preferWeb = AiStudioLiveBackendPolicy.preferAiStudio(appContext) ||
-            (!hasRealApiKey && configuredForWeb)
-        when {
-            preferWeb -> connectAiStudio()
-            hasRealApiKey -> connectApi()
-            else -> listener.onError(IllegalStateException("AI_STUDIO_BACKEND_UNAVAILABLE_AND_NO_API_KEY"))
+        logger.log(
+            2,
+            "LiveBackend",
+            "ROUTE mode=$connectionMode operation=$operationMode requestedModel=$model target=$targetLanguage realApiKeyPresent=$hasRealApiKey models={${AiFunctionModelCatalog.summary()}}",
+        )
+        when (connectionMode) {
+            AiConnectionModeStore.MODE_AI_STUDIO -> connectAiStudio()
+            else -> {
+                if (hasRealApiKey) connectApi()
+                else listener.onError(IllegalStateException("GEMINI_API_KEY_REQUIRED"))
+            }
         }
     }
 
@@ -121,7 +121,7 @@ class GeminiLiveClient(
         webBackend = null
         apiBackend?.close(graceful)
         apiBackend = null
-        logger.log(2, "LiveBackend", "Đóng facade backend=$backendName graceful=$graceful")
+        logger.log(2, "LiveBackend", "CLOSE backend=$backendName graceful=$graceful setup=$aiStudioSetupComplete")
         backendName = "closed"
     }
 
@@ -129,11 +129,10 @@ class GeminiLiveClient(
         if (closed.get()) return
         backendName = "aistudio"
         aiStudioSetupComplete = false
-        val apiFallback = hasRealApiKey() && AiStudioLiveBackendPolicy.allowApiFallback(appContext)
         logger.log(
             2,
             "LiveBackend",
-            "Chọn AI Studio Web Session version=${AiStudioWebRealtimeClient.VERSION} target=$targetLanguage mode=$operationMode apiFallback=$apiFallback webOnly=${!hasRealApiKey()}",
+            "CONNECT_AI_STUDIO version=${AiStudioWebRealtimeClient.VERSION} target=$targetLanguage operation=$operationMode appApiKeyPresent=${hasRealApiKey()} strictMode=true",
         )
         val backend = AiStudioWebRealtimeClient(
             targetLanguage = targetLanguage,
@@ -141,12 +140,14 @@ class GeminiLiveClient(
             logger = logger,
             maxQueuedWireBytes = maxQueuedWireBytes,
             listener = object : Listener {
-                override fun onOpen() = listener.onOpen()
+                override fun onOpen() {
+                    logger.log(3, "LiveBackend", "AI_STUDIO_OPEN operation=$operationMode")
+                    listener.onOpen()
+                }
 
                 override fun onSetupComplete() {
                     aiStudioSetupComplete = true
-                    AiStudioLiveBackendPolicy.clearCircuitBreaker()
-                    logger.log(2, "LiveBackend", "AI Studio Web Session setup thành công")
+                    logger.log(2, "LiveBackend", "AI_STUDIO_SETUP_COMPLETE operation=$operationMode target=$targetLanguage")
                     listener.onSetupComplete()
                 }
 
@@ -176,30 +177,23 @@ class GeminiLiveClient(
     private fun handleAiStudioTerminal(error: Throwable?, closedReason: String?) {
         if (closed.get()) return
         val detail = error?.message ?: closedReason ?: "AI Studio closed"
-        val canFallback = !aiStudioSetupComplete && hasRealApiKey() &&
-            AiStudioLiveBackendPolicy.allowApiFallback(appContext)
-        AiStudioLiveBackendPolicy.recordAiStudioFailure(hasApiFallback = canFallback)
-        if (canFallback) {
-            logger.log(1, "LiveBackend", "AI Studio chưa setup được ($detail); chuyển sang Gemini API fallback")
-            webBackend?.close(false)
-            webBackend = null
-            connectApi()
-            return
-        }
-        if (!hasRealApiKey()) {
-            logger.log(1, "LiveBackend", "AI Studio là backend Live duy nhất; giữ quyền thử lại qua reconnect/backoff reason=$detail")
-        }
+        logger.log(
+            if (aiStudioSetupComplete) 1 else 0,
+            "LiveBackend",
+            "AI_STUDIO_TERMINAL setup=$aiStudioSetupComplete strictMode=true reason=${detail.replace('\n', ' ').take(500)}",
+            error,
+        )
         if (error != null) listener.onError(error) else listener.onClosed(detail)
     }
 
     private fun connectApi() {
         if (closed.get()) return
         if (!hasRealApiKey()) {
-            listener.onError(IllegalStateException("Không có Gemini API Key để fallback"))
+            listener.onError(IllegalStateException("GEMINI_API_KEY_REQUIRED"))
             return
         }
         backendName = "api"
-        logger.log(2, "LiveBackend", "Chọn Gemini API WebSocket fallback model=$model mode=$operationMode")
+        logger.log(2, "LiveBackend", "CONNECT_API model=$model operation=$operationMode target=$targetLanguage")
         val backend = GeminiApiLiveClient(
             apiKey = apiKey,
             model = model,
@@ -221,7 +215,7 @@ class GeminiLiveClient(
     class GeminiApiException(val code: Int, message: String) : Exception("Gemini API $code: $message")
 
     companion object {
-        const val VERSION = "2026-09-03-r17.3-realtime-session-facade"
+        const val VERSION = "2026-09-04-production-dual-connection-live-facade"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
 
         internal fun createSetupMessage(

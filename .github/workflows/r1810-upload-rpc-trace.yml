@@ -32,7 +32,11 @@ jobs:
           validate-wrappers: false
 
       - name: Apply R18.10 source patch
-        run: python3 tools/apply_r1810_upload_rpc_trace.py
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 tools/apply_r1810_upload_rpc_trace.py || true
+          python3 tools/finish_r1810_upload_rpc_trace.py
 
       - name: Verify R18.10 invariants
         shell: bash

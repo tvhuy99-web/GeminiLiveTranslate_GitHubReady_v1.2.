@@ -36,7 +36,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R12.1 production-shaped executor for an authenticated AI Studio web session.
+ * R12.4 production-shaped executor for an authenticated AI Studio web session.
  *
  * R12 Direct Engine remains unchanged: the proven R9 adaptive path is first for text, and if it
  * reaches R9_HANDLER_FINAL the executor calls AI Studio's own page-local handlers directly rather
@@ -96,6 +96,7 @@ class AiStudioWebSessionExecutor(
         val size: Long,
         val startedAt: Long,
         val callback: (Boolean, String) -> Unit,
+        val requireUploadReady: Boolean,
         var readyScans: Int = 0,
         var readySince: Long = 0L,
     )
@@ -177,6 +178,7 @@ class AiStudioWebSessionExecutor(
         displayName: String,
         mimeType: String,
         size: Long,
+        requireUploadReady: Boolean = true,
         callback: (Boolean, String) -> Unit,
     ) {
         main.post {
@@ -197,6 +199,7 @@ class AiStudioWebSessionExecutor(
                 size = size,
                 startedAt = SystemClock.uptimeMillis(),
                 callback = callback,
+                requireUploadReady = requireUploadReady,
             )
             activeAttachment = item
             events?.onLog("R18_ATTACHMENT_START", "token=${item.token} name=${item.name} mime=${item.mimeType} size=${item.size}")
@@ -250,6 +253,11 @@ class AiStudioWebSessionExecutor(
             val present = obj?.optBoolean("present", false) == true
             val ready = obj?.optBoolean("ready", false) == true
             val now = SystemClock.uptimeMillis()
+            if (!item.requireUploadReady && present) {
+                events?.onLog("R19_ATTACHMENT_PRESENT_MANUAL", "token=$token waitedMs=${now - item.startedAt} detail=${decoded.take(6000)}")
+                finishAttachment(token, true, decoded)
+                return@evaluateJavascript
+            }
             if (ready) {
                 item.readyScans += 1
                 if (item.readySince == 0L) item.readySince = now
@@ -263,7 +271,7 @@ class AiStudioWebSessionExecutor(
                 finishAttachment(token, true, decoded)
             } else {
                 if (present && !ready) {
-                    events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean("busy", false)} uploadSettled=${obj?.optBoolean("uploadSettled", false)} submitReady=${obj?.optBoolean("submitReady", false)} activeUploads=${obj?.optInt("activeUploads", 0)}")
+                    events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean("busy", false)} uploadObserved=${obj?.optBoolean("uploadObserved", false)} uploadSettled=${obj?.optBoolean("uploadSettled", false)} submitReady=${obj?.optBoolean("submitReady", false)} activeUploads=${obj?.optInt("activeUploads", 0)} started=${obj?.optInt("uploadStarted", 0)} completed=${obj?.optInt("uploadCompleted", 0)} failed=${obj?.optInt("uploadFailed", 0)}")
                 }
                 main.postDelayed({ pollAttachment(token) }, 500L)
             }
@@ -276,6 +284,101 @@ class AiStudioWebSessionExecutor(
         activeAttachment = null
         events?.onLog("R18_ATTACHMENT_DONE", "token=$token ok=$ok detail=${detail.take(5000)}")
         item.callback(ok, detail)
+    }
+
+    private fun prepareAttachmentPrompt(prompt: String, callback: (Boolean, String, Int) -> Unit) {
+        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__&&window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment?window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment(${JSONObject.quote(prompt)}):({ok:false,error:'manual-prompt-preparer-not-installed'}))"
+        webView.evaluateJavascript(expression) { raw ->
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val ok = obj?.optBoolean("ok") == true
+            val baseline = obj?.optInt("baselineCaptureCount", -1) ?: -1
+            events?.onLog("R19_PROMPT_PREPARE", decoded.take(10000))
+            callback(ok, decoded, baseline)
+        }
+    }
+
+    private fun beginPreparedAttachmentRequest(
+        prompt: String,
+        callback: (Result) -> Unit,
+        mode: String,
+    ): Pending {
+        seq += 1
+        val request = Pending(
+            seq = seq,
+            prompt = prompt,
+            marker = "",
+            callback = callback,
+            startedAt = SystemClock.uptimeMillis(),
+            progressAware = true,
+        )
+        pending = request
+        directRecoverySeq = -1
+        setState(State.GENERATING, "request=${request.seq} mode=$mode")
+        schedulePolls(request.seq)
+        scheduleProgressWatchdog(request.seq)
+        return request
+    }
+
+    fun generateAttachmentNativeOnly(
+        prompt: String,
+        callback: (Result) -> Unit,
+    ): Boolean {
+        if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
+            callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
+            return false
+        }
+        prepareAttachmentPrompt(prompt) { ok, detail, _ ->
+            if (!ok) {
+                callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
+                return@prepareAttachmentPrompt
+            }
+            val request = beginPreparedAttachmentRequest(prompt, callback, "attachment-native-only")
+            events?.onLog("R19_NATIVE_FILE_SUBMIT_ARMED", "seq=${request.seq} promptChars=${prompt.length}")
+            tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0, allowProgrammaticFallback = false)
+        }
+        return true
+    }
+
+    fun awaitManualAttachmentGenerate(
+        prompt: String,
+        callback: (Result) -> Unit,
+    ): Boolean {
+        if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
+            callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
+            return false
+        }
+        prepareAttachmentPrompt(prompt) { ok, detail, baseline ->
+            if (!ok) {
+                callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
+                return@prepareAttachmentPrompt
+            }
+            val request = beginPreparedAttachmentRequest(prompt, callback, "manual-video-submit")
+            events?.onLog("R19_MANUAL_VIDEO_ARMED", "seq=${request.seq} baseline=$baseline promptChars=${prompt.length} autoSubmit=false")
+            monitorManualAttachmentReadiness(request.seq, baseline, prompt)
+        }
+        return true
+    }
+
+    private fun monitorManualAttachmentReadiness(requestSeq: Int, baseline: Int, prompt: String) {
+        if (pending?.seq != requestSeq || destroyed) return
+        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,uploadObserved:!!a.uploadObserved,uploadSettled:!!a.uploadSettled,submitReady:!!a.submitReady,activeUploads:Number(a.activeUploads||0),uploadStarted:Number(a.uploadStarted||0),uploadCompleted:Number(a.uploadCompleted||0),uploadFailed:Number(a.uploadFailed||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
+        webView.evaluateJavascript(script) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            events?.onLog("R19_MANUAL_VIDEO_READINESS", decoded.take(8000))
+            if (obj?.optBoolean("manualSubmitSeen") == true) {
+                events?.onLog("R19_MANUAL_SUBMIT_DETECTED", "seq=$requestSeq captureCount=${obj.optInt("captureCount", -1)} baseline=$baseline")
+                readNormalized(requestSeq, "manual-submit-detected")
+                return@evaluateJavascript
+            }
+            val promptCheck = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__&&window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment?window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment(${JSONObject.quote(prompt)}):({ok:false,error:'manual-prompt-preparer-not-installed'}))"
+            webView.evaluateJavascript(promptCheck) { prepared ->
+                if (pending?.seq == requestSeq) events?.onLog("R19_MANUAL_PROMPT_REFRESH", decodeEvalValue(prepared).take(3000))
+            }
+            main.postDelayed({ monitorManualAttachmentReadiness(requestSeq, baseline, prompt) }, MANUAL_READINESS_POLL_MS)
+        }
     }
 
     fun generate(
@@ -507,7 +610,7 @@ class AiStudioWebSessionExecutor(
         tryNativeAttachmentSubmit(requestSeq, reason, 0)
     }
 
-    private fun tryNativeAttachmentSubmit(requestSeq: Int, reason: String, attempt: Int) {
+    private fun tryNativeAttachmentSubmit(requestSeq: Int, reason: String, attempt: Int, allowProgrammaticFallback: Boolean = true) {
         if (pending?.seq != requestSeq) return
         events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1}")
         val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.nativeTargetIfAttachment() : ({ok:false,error:'native-submit-target-not-installed'}))"
@@ -518,9 +621,10 @@ class AiStudioWebSessionExecutor(
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             if (obj?.optBoolean("ok") != true) {
                 if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
-                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
                 } else {
-                    tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
+                    if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
+                    else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_TARGET_UNAVAILABLE"))
                 }
                 return@evaluateJavascript
             }
@@ -528,8 +632,8 @@ class AiStudioWebSessionExecutor(
             val yRatio = obj.optDouble("yRatio", Double.NaN)
             val baseline = obj.optInt("baselineCaptureCount", -1)
             if (!xRatio.isFinite() || !yRatio.isFinite() || baseline < 0) {
-                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
-                else tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target")
+                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
+                else if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target") else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_INVALID_TARGET"))
                 return@evaluateJavascript
             }
             nativeTapController.requestNativeTap(
@@ -550,9 +654,10 @@ class AiStudioWebSessionExecutor(
                         readNormalized(requestSeq, "native-submit")
                     } else if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
                         events?.onLog("R12_NATIVE_SUBMIT_RETRY", "seq=$requestSeq attempt=${attempt + 1} reason=no-capture")
-                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
                     } else {
-                        tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
+                        if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
+                        else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_NO_CAPTURE"))
                     }
                 }
             }, NATIVE_SUBMIT_ACK_MS)
@@ -813,7 +918,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-04-web-session-r12.3-upload-ready-native-submit"
+        const val VERSION = "2026-09-05-web-session-r12.4-manual-video-native-file"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
@@ -831,6 +936,7 @@ class AiStudioWebSessionExecutor(
         private const val NATIVE_SUBMIT_ACK_MS = 1_250L
         private const val NATIVE_SUBMIT_RETRY_MS = 900L
         private const val NATIVE_SUBMIT_MAX_RETRIES = 3
+        private const val MANUAL_READINESS_POLL_MS = 1_000L
         private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

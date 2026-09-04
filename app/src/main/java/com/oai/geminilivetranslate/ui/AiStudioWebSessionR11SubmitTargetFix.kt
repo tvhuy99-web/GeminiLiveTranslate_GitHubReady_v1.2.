@@ -15,7 +15,7 @@ package com.oai.geminilivetranslate.ui
  * It never reads cookies, auth headers, passwords, API keys, or file bytes.
  */
 object AiStudioWebSessionR11SubmitTargetFix {
-    const val VERSION = "2026-09-04-web-session-r11.6-upload-readiness-native-submit"
+    const val VERSION = "2026-09-05-web-session-r11.7-manual-ready-prompt"
 
     val DOCUMENT_START: String = """
         (function(){
@@ -258,6 +258,47 @@ object AiStudioWebSessionR11SubmitTargetFix {
             return attachmentWindowActive()&&!!findAttachmentSurface();
           }
 
+          function setPromptValue(el,text){
+            try{
+              const value=String(text||'');
+              if(!el)return {ok:false,error:'NO_PROMPT'};
+              try{el.focus();}catch(_){}
+              const tag=String(el.tagName||'').toUpperCase();
+              if(tag==='TEXTAREA'&&window.HTMLTextAreaElement){
+                const d=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value');
+                if(d&&d.set)d.set.call(el,value);else el.value=value;
+              }else if(tag==='INPUT'&&window.HTMLInputElement){
+                const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+                if(d&&d.set)d.set.call(el,value);else el.value=value;
+              }else if(el.isContentEditable){
+                el.textContent=value;
+              }else if('value' in el){
+                el.value=value;
+              }else{
+                el.textContent=value;
+              }
+              let ev=null;
+              try{ev=new InputEvent('input',{bubbles:true,composed:true,inputType:'insertText',data:value});}catch(_){ev=new Event('input',{bubbles:true,composed:true});}
+              el.dispatchEvent(ev);
+              el.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
+              const observed=String(('value' in el?el.value:el.textContent)||'');
+              return {ok:observed.length>0,observedChars:observed.length,tag:tag,role:String(el.getAttribute&&el.getAttribute('role')||'')};
+            }catch(err){return {ok:false,error:'PROMPT_SET_ERROR',detail:String(err).slice(0,600)};}
+          }
+
+          function preparePromptIfAttachment(promptText){
+            const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
+            if(!attachmentPresent())return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
+            const d=discover();
+            if(!d.prompt)return {ok:false,error:'NO_PROMPT',baselineCaptureCount:baseline,hasAttachment:!!d.attachment,hasComposerRoot:!!d.composerRoot};
+            const set=setPromptValue(d.prompt,promptText);
+            if(net){net.expectedMarker='';net.lastResult=null;net.lastProgress=null;net.lastXhrLifecycle=null;}
+            const readiness=submissionReadinessIfAttachment();
+            const out={ok:!!set.ok,baselineCaptureCount:baseline,promptChars:String(promptText||'').length,observedChars:Number(set.observedChars||0),tag:String(set.tag||''),role:String(set.role||''),submitReady:!!readiness.ready,submitDisabled:!!readiness.disabled,submitScore:Number(readiness.score||-1),submitLabel:String(readiness.label||'').slice(0,180),fingerprint:readiness.fingerprint||null};
+            emit('R19_MANUAL_PROMPT_PREPARED',out);
+            return out;
+          }
+
           function submitIfAttachment(){
             const net=window.__AIS_WEB_SESSION__;
             const baseline=Number(net&&net.captureCount||0);
@@ -389,6 +430,7 @@ object AiStudioWebSessionR11SubmitTargetFix {
                 candidates:d.candidates.slice(0,10).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,listenerCount:x.listenerCount,listenerScore:x.listenerScore,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})};
             },
             submissionReadinessIfAttachment:submissionReadinessIfAttachment,
+            preparePromptIfAttachment:preparePromptIfAttachment,
             nativeTargetIfAttachment:nativeTargetIfAttachment,
             submitIfAttachment:submitIfAttachment,
             state:function(){return {ok:true,version:'$VERSION',submitAttempts:submitAttempts,proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,clickEntries:clickEntries.filter(function(e){return e.active;}).length};}

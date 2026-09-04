@@ -90,8 +90,9 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
             if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
             25,
         )
-        logger.log(2, TAG, "Generate promptChars=${prompt.length} model=$model mode=$mode")
-        val webResult = generateAndAwait(exec, prompt)
+        logger.log(2, TAG, "Manual generate armed promptChars=${prompt.length} model=$model mode=$mode autoSubmit=false")
+        onProgress("Video đã gắn. Hãy chờ trang AI Studio xử lý xong rồi tự nhấn Send/Run trên trang web.", 25)
+        val webResult = generateAndAwaitManual(exec, prompt)
         val output = webResult.modelText.trim()
         if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
         onPartial(output)
@@ -158,7 +159,11 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
                         }
                     }
                     override fun onLog(name: String, detail: String) {
-                        val level = if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
+                        val level = when {
+                            name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
+                            name.contains("ERROR") || name.contains("TIMEOUT") -> 1
+                            else -> 3
+                        }
                         logger.log(level, "AiStudioVideoWeb", "$name ${detail.take(4000)}")
                     }
                 },
@@ -206,36 +211,35 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         val latch = CountDownLatch(1)
         val okRef = AtomicReference(false)
         val detailRef = AtomicReference("")
-        exec.attachFile(uri, displayName, mimeType, size) { ok, detail ->
+        exec.attachFile(uri, displayName, mimeType, size, requireUploadReady = false) { ok, detail ->
             okRef.set(ok); detailRef.set(detail); latch.countDown()
         }
         if (!latch.await(95, TimeUnit.SECONDS)) error("Hết thời gian gắn video vào AI Studio")
         throwIfCancelled()
         if (!okRef.get()) error("Không gắn được video vào AI Studio: ${detailRef.get().take(500)}")
-        logger.log(2, TAG, "Attachment upload-ready name=$displayName size=$size")
+        logger.log(2, TAG, "Attachment visible; manual readiness monitoring will continue name=$displayName size=$size")
     }
 
-    private fun generateAndAwait(
+    private fun generateAndAwaitManual(
         exec: AiStudioWebSessionExecutor,
         prompt: String,
     ): AiStudioWebSessionExecutor.Result {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.generate(prompt = prompt, marker = "") { result ->
+            val accepted = exec.awaitManualAttachmentGenerate(prompt = prompt) { result ->
                 resultRef.set(result)
                 latch.countDown()
             }
             if (!accepted && resultRef.get() == null) {
-                resultRef.set(AiStudioWebSessionExecutor.Result(ok = false, error = "GENERATE_NOT_ACCEPTED"))
+                resultRef.set(AiStudioWebSessionExecutor.Result(ok = false, error = "MANUAL_GENERATE_NOT_ARMED"))
                 latch.countDown()
             }
         }
-        val waitMs = requestTimeoutMs.coerceIn(30_000, 900_000).toLong() + 10_000L
-        if (!latch.await(waitMs, TimeUnit.MILLISECONDS)) error("Hết thời gian chờ AI Studio mô tả video")
+        if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ bạn nhấn Send/Run thủ công trong AI Studio")
         throwIfCancelled()
-        val result = resultRef.get() ?: error("AI Studio không trả trạng thái GenerateContent")
-        if (!result.ok) error("AI Studio GenerateContent thất bại: ${result.error.ifBlank { "HTTP ${result.status}" }}")
+        val result = resultRef.get() ?: error("AI Studio không trả trạng thái sau thao tác thủ công")
+        if (!result.ok) error("AI Studio GenerateContent thất bại sau thao tác thủ công: ${result.error.ifBlank { "HTTP ${result.status}" }}")
         return result
     }
 

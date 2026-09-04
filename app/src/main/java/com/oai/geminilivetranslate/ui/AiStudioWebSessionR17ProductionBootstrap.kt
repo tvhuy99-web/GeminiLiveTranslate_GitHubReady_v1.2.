@@ -12,7 +12,7 @@ package com.oai.geminilivetranslate.ui
  * No auth material, request body, cookie, token, or media payload is exported to diagnostics.
  */
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-04-web-session-r17.8-progress-aware-start-ack"
+    const val VERSION = "2026-09-05-web-session-r17.9-fast-progress-recovery"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val TARGET_MODEL = "function-specific"
@@ -22,7 +22,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-04-web-session-r17.8-progress-aware-start-ack';
+  const VERSION='2026-09-05-web-session-r17.9-fast-progress-recovery';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const state={
@@ -99,7 +99,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(!state.streamSelected){state.lastBlocker='waiting-stream';return;}if(!state.modelSeen&&!state.modelGuardInstalled){state.lastBlocker='waiting-model';return;}
     const now=Date.now();
     if(state.lastAction==='start-live'&&state.lastActionAt){
-      const age=now-state.lastActionAt,progress=startProgressEvidence(),limit=progress.progress?30000:10000;
+      const age=now-state.lastActionAt,progress=startProgressEvidence(),limit=progress.progress?8000:10000;
       if(age<limit){state.stage='start-clicked';state.lastBlocker=progress.progress?'waiting-start-ack-progress-'+progress.kind:'waiting-start-ack';return;}
       state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts,progress:progress.progress,progressKind:progress.kind,limitMs:limit});
       state.lastAction='start-ack-timeout';state.lastActionAt=0;state.startStableScans=0;state.lastStartSignature='';

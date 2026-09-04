@@ -836,7 +836,7 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-ai-studio-live-r6-progress-aware-start-debug"
+        const val VERSION = "2026-09-05-production-ai-studio-live-r7-fast-start-recovery-debug"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"

@@ -30,9 +30,9 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     }
 
     @Test
-    fun executorUsesDirectEngineThenNativeComposerTapBeforeLegacyFallback() {
+    fun executorSupportsManualVideoObservationAndStrictNativeFileSubmit() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(src.contains("2026-09-04-web-session-r12.3-upload-ready-native-submit"))
+        assertTrue(src.contains("2026-09-05-web-session-r12.4-manual-video-native-file"))
         assertTrue(src.contains("AiStudioWebSessionDirectEngine.DOCUMENT_START"))
         assertTrue(src.contains("tryDirectEngineRecovery"))
         assertTrue(src.contains("R12_DIRECT_RECOVERY_START"))
@@ -47,10 +47,16 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
         assertTrue(src.contains("R18_ATTACHMENT_UPLOAD_READY"))
         val requestFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
         val submitFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt")
-        assertTrue(requestFix.contains("uploadSettled"))
+        assertTrue(requestFix.contains("uploadObserved=uploadStarted>0"))
+        assertTrue(requestFix.contains("uploadSettled=uploadObserved"))
         assertTrue(requestFix.contains("submitReady"))
         assertTrue(requestFix.contains("ready:ready"))
         assertTrue(submitFix.contains("submissionReadinessIfAttachment"))
+        assertTrue(submitFix.contains("preparePromptIfAttachment"))
+        assertTrue(src.contains("awaitManualAttachmentGenerate"))
+        assertTrue(src.contains("R19_MANUAL_VIDEO_READINESS"))
+        assertTrue(src.contains("generateAttachmentNativeOnly"))
+        assertTrue(src.contains("allowProgrammaticFallback = false"))
         assertFalse(src.contains("dispatchTouchEvent"))
         assertFalse(src.contains("MotionEvent"))
         assertFalse(src.contains("InputDevice.SOURCE_TOUCHSCREEN"))

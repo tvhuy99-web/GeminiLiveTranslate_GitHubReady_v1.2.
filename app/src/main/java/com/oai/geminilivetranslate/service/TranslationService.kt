@@ -40,6 +40,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
+import com.oai.geminilivetranslate.network.AiStudioFileTranscribeClient
 import com.oai.geminilivetranslate.network.AiStudioVideoDescriptionClient
 import com.oai.geminilivetranslate.network.GeminiApiErrorClassifier
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
@@ -101,6 +102,7 @@ class TranslationService : LifecycleService() {
     private var sourceJob: Job? = null
     @Volatile private var videoDescriptionClient: GeminiVideoDescriptionClient? = null
     @Volatile private var aiStudioVideoDescriptionClient: AiStudioVideoDescriptionClient? = null
+    @Volatile private var aiStudioFileTranscribeClient: AiStudioFileTranscribeClient? = null
     @Volatile private var proxyVideoDescriptionClient: OpenAiCompatibleVideoDescriptionClient? = null
     @Volatile private var transcribeFileViaLive = false
     private var subtitleTranslationJob: Job? = null
@@ -313,11 +315,11 @@ class TranslationService : LifecycleService() {
         } else {
             apiKey.orEmpty()
         }
-        val useLiveFileTranscribe = aiStudioMode && isTranscribeMode() && mode == SourceMode.FILE
+        val useLiveFileTranscribe = false // FILE uses gemini-3.5-transcribe, never the Live model.
         logger.log(
             2,
             "BackendRoute",
-            "START connectionMode=$connectionMode processing=$processingMode source=$mode apiKeyRequired=${!aiStudioMode && !useProxyVideoDescription} liveFileTranscribe=$useLiveFileTranscribe videoProvider=${aiApi.provider}",
+            "START connectionMode=$connectionMode processing=$processingMode source=$mode apiKeyRequired=${!aiStudioMode && !useProxyVideoDescription} liveFileTranscribe=$useLiveFileTranscribe fileTranscribeBackend=${if (aiStudioMode && isTranscribeMode() && mode == SourceMode.FILE) "aistudio-file" else "default"} videoProvider=${aiApi.provider}",
         )
         if (mode == SourceMode.FILE && selectedUri == null) {
             updateError(if (isVideoDescriptionMode()) "Chưa chọn video" else "Chưa chọn tệp âm thanh/video")
@@ -477,6 +479,8 @@ class TranslationService : LifecycleService() {
         videoDescriptionClient?.cancel()
         aiStudioVideoDescriptionClient?.cancel()
         aiStudioVideoDescriptionClient = null
+        aiStudioFileTranscribeClient?.cancel()
+        aiStudioFileTranscribeClient = null
         proxyVideoDescriptionClient?.cancel()
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
@@ -1779,150 +1783,90 @@ class TranslationService : LifecycleService() {
                 stopTranslation("Chưa chọn tệp")
                 return@launch
             }
-            val workDir = File(cacheDir, "transcribe-$sessionId").apply {
-                deleteRecursively()
-                mkdirs()
-            }
+            val workDir = File(cacheDir, "transcribe-$sessionId").apply { deleteRecursively(); mkdirs() }
             val totalStartedAt = SystemClock.elapsedRealtime()
             try {
                 val name = selectedFileName ?: uri.lastPathSegment ?: "audio"
                 val mimeType = selectedMimeType(uri, name)
                 val video = mimeType.startsWith("video/") || isVideoFileName(name)
                 val sourceBytes = sourceSizeBytes(uri)
-                logger.log(
-                    2,
-                    "TranscribeFile",
-                    "Bắt đầu xử lý name=$name mime=$mimeType video=$video sourceBytes=$sourceBytes",
-                )
+                logger.log(2, "TranscribeFile", "Bắt đầu xử lý name=$name mime=$mimeType video=$video sourceBytes=$sourceBytes")
 
-                var durationMs: Long
-                val result = if (video) {
-                        val extractStartedAt = SystemClock.elapsedRealtime()
-                        logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
-                        updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
-                        val extracted = VideoAudioExtractor.extract(
-                            context = this@TranslationService,
-                            uri = uri,
-                            output = File(workDir, "audio.m4a"),
-                            maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
-                        ) { percent ->
-                            updateState {
-                                it.copy(
-                                    status = "Đang tách âm thanh...",
-                                    progressPercent = (percent / 10).coerceIn(0, 10),
-                                )
-                            }
-                        }
-                        durationMs = extracted.durationMs
-                        val extractElapsedMs = SystemClock.elapsedRealtime() - extractStartedAt
-                        logger.log(
-                            2,
-                            "TranscribeFile",
-                            "Tách audio xong elapsedMs=$extractElapsedMs durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}",
-                        )
-                        runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
-                            val client = GeminiFileTranscribeClient(candidateKey, logger)
-                            try {
-                                if (keyIndex > 0) {
-                                    updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
-                                }
-                                client.transcribe(
-                                    file = extracted.file,
-                                    mimeType = extracted.mimeType,
-                                    speakerDiarization = speakerDiarization,
-                                ) { status, percent ->
-                                    updateState {
-                                        it.copy(
-                                            status = status,
-                                            progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98),
-                                        )
-                                    }
-                                }
-                            } finally {
-                                client.close()
-                            }
-                        }
-                    } else {
-                        val metadataStartedAt = SystemClock.elapsedRealtime()
-                        durationMs = mediaDurationMs(uri)
-                        val metadataElapsedMs = SystemClock.elapsedRealtime() - metadataStartedAt
-                        logger.log(
-                            2,
-                            "TranscribeFile",
-                            "Đọc metadata audio xong elapsedMs=$metadataElapsedMs durationMs=$durationMs",
-                        )
-                        if (durationMs <= 0L) error("Không đọc được thời lượng tệp")
-                        if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) {
-                            error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
-                        }
-                        updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
-                        runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
-                            val client = GeminiFileTranscribeClient(candidateKey, logger)
-                            try {
-                                if (keyIndex > 0) {
-                                    updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
-                                }
-                                client.transcribe(
-                                    resolver = contentResolver,
-                                    uri = uri,
-                                    displayName = name,
-                                    mimeType = mimeType,
-                                    speakerDiarization = speakerDiarization,
-                                ) { status, percent ->
-                                    updateState {
-                                        it.copy(
-                                            status = status,
-                                            progressPercent = percent.coerceIn(0, 98),
-                                        )
-                                    }
-                                }
-                            } finally {
-                                client.close()
-                            }
-                        }
-                    }
+                var durationMs = mediaDurationMs(uri)
+                if (durationMs <= 0L) error("Không đọc được thời lượng tệp")
+                if (durationMs > MAX_TRANSCRIBE_FILE_DURATION_MS) error("Tệp dài quá 30 phút. Hãy cắt tệp ngắn hơn rồi thử lại")
 
-                val resultBuildStartedAt = SystemClock.elapsedRealtime()
-                val cues = buildTranscriptionCues(result.words, speakerDiarization)
-                if (cues.isNotEmpty()) {
-                    subtitles.replaceTimed(cues)
-                } else {
-                    subtitles.reset()
-                    result.text.trim().takeIf(String::isNotBlank)?.let {
-                        subtitles.appendTimed(it, 0L, durationMs.coerceAtLeast(1_000L))
-                    }
-                }
-                transcribePlainText = if (speakerDiarization && cues.isNotEmpty()) {
-                    subtitles.plainText()
-                } else {
-                    result.text.trim().ifBlank { subtitles.plainText() }
-                }
-                val resultBuildElapsedMs = SystemClock.elapsedRealtime() - resultBuildStartedAt
-                fileInputEnded = true
-                updateState {
-                    it.copy(
-                        transcript = transcribePlainText.takeLast(MAX_TRANSCRIPT_CHARS),
-                        status = "Đã hoàn tất chép lời",
-                        progressPercent = 100,
+                val aiStudioMode = AiStudioLiveBackendPolicy.preferAiStudio(this@TranslationService)
+                val result: GeminiFileTranscribeClient.Result = if (aiStudioMode) {
+                    logger.log(2, "BackendRoute", "FILE_TRANSCRIBE backend=aistudio-file model=${AppPreferences.TRANSCRIBE_FILE_MODEL} live=false")
+                    val c = AiStudioFileTranscribeClient(
+                        context = this@TranslationService,
+                        logger = logger,
+                        model = AppPreferences.TRANSCRIBE_FILE_MODEL,
                     )
+                    aiStudioFileTranscribeClient = c
+                    try {
+                        c.transcribe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            speakerDiarization = speakerDiarization,
+                        ) { status, percent ->
+                            updateState { it.copy(status = status, progressPercent = percent.coerceIn(0, 98)) }
+                        }
+                    } finally {
+                        c.close()
+                        if (aiStudioFileTranscribeClient === c) aiStudioFileTranscribeClient = null
+                    }
+                } else if (video) {
+                    val extractStartedAt = SystemClock.elapsedRealtime()
+                    logger.log(2, "TranscribeFile", "Bắt đầu tách audio track từ video")
+                    updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = 0) }
+                    val extracted = VideoAudioExtractor.extract(
+                        context = this@TranslationService,
+                        uri = uri,
+                        output = File(workDir, "audio.m4a"),
+                        maxDurationMs = MAX_TRANSCRIBE_FILE_DURATION_MS,
+                    ) { percent -> updateState { it.copy(status = "Đang tách âm thanh...", progressPercent = (percent / 10).coerceIn(0, 10)) } }
+                    durationMs = extracted.durationMs
+                    logger.log(2, "TranscribeFile", "Tách audio xong elapsedMs=${SystemClock.elapsedRealtime()-extractStartedAt} durationMs=$durationMs samples=${extracted.sampleCount} outputBytes=${extracted.outputBytes} trackMime=${extracted.trackMimeType} outputMime=${extracted.mimeType} strategy=${extracted.strategy}")
+                    runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
+                        val c = GeminiFileTranscribeClient(candidateKey, logger)
+                        try {
+                            if (keyIndex > 0) updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
+                            c.transcribe(extracted.file, extracted.mimeType, speakerDiarization) { status, percent ->
+                                updateState { it.copy(status = status, progressPercent = (10 + percent * 90 / 100).coerceIn(10, 98)) }
+                            }
+                        } finally { c.close() }
+                    }
+                } else {
+                    updateState { it.copy(status = "Đang tải tệp lên...", progressPercent = 0) }
+                    runWithGeminiKeyFailover("chép lời tệp") { candidateKey, keyIndex, keyCount ->
+                        val c = GeminiFileTranscribeClient(candidateKey, logger)
+                        try {
+                            if (keyIndex > 0) updateState { it.copy(status = "Đang thử API Key ${keyIndex + 1}/$keyCount để chép lời...") }
+                            c.transcribe(contentResolver, uri, name, mimeType, speakerDiarization) { status, percent ->
+                                updateState { it.copy(status = status, progressPercent = percent.coerceIn(0, 98)) }
+                            }
+                        } finally { c.close() }
+                    }
                 }
-                logger.log(
-                    2,
-                    "TranscribeFile",
-                    "Hoàn tất toàn bộ totalElapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt} resultBuildMs=$resultBuildElapsedMs chars=${transcribePlainText.length} words=${result.words.size} cues=${cues.size}",
-                )
+
+                val cues = buildTranscriptionCues(result.words, speakerDiarization)
+                if (cues.isNotEmpty()) subtitles.replaceTimed(cues) else {
+                    subtitles.reset()
+                    result.text.trim().takeIf(String::isNotBlank)?.let { subtitles.appendTimed(it, 0L, durationMs.coerceAtLeast(1_000L)) }
+                }
+                transcribePlainText = if (speakerDiarization && cues.isNotEmpty()) subtitles.plainText() else result.text.trim().ifBlank { subtitles.plainText() }
+                fileInputEnded = true
+                updateState { it.copy(transcript = transcribePlainText.takeLast(MAX_TRANSCRIPT_CHARS), status = "Đã hoàn tất chép lời", progressPercent = 100) }
+                logger.log(2, "TranscribeFile", "Hoàn tất toàn bộ totalElapsedMs=${SystemClock.elapsedRealtime()-totalStartedAt} chars=${transcribePlainText.length} words=${result.words.size} cues=${cues.size} backend=${if (aiStudioMode) "aistudio-file" else "gemini-api"}")
                 stopTranslation("Đã hoàn tất chép lời")
             } catch (error: Throwable) {
                 if (error is kotlinx.coroutines.CancellationException) return@launch
-                logger.log(
-                    0,
-                    "TranscribeFile",
-                    "Chép lời tệp thất bại elapsedMs=${SystemClock.elapsedRealtime() - totalStartedAt}",
-                    error,
-                )
-                if (_state.value.running) {
-                    stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
-                }
+                logger.log(0, "TranscribeFile", "Chép lời tệp thất bại elapsedMs=${SystemClock.elapsedRealtime()-totalStartedAt}", error)
+                if (_state.value.running) stopTranslation("Lỗi chép lời: ${error.message ?: error.javaClass.simpleName}")
             } finally {
                 workDir.deleteRecursively()
             }

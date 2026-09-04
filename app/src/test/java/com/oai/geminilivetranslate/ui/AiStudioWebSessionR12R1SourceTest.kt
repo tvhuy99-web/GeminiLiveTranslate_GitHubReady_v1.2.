@@ -12,7 +12,7 @@ class AiStudioWebSessionR12R1SourceTest {
     @Test
     fun r121KeepsProgressWatchdogAndTerminal2xxCompletion() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-04-web-session-r12.3-upload-ready-native-submit"))
+        assertTrue(executor.contains("2026-09-05-web-session-r12.4-manual-video-native-file"))
         assertTrue(executor.contains("FIRST_PROGRESS_TIMEOUT_MS = 300_000L"))
         assertTrue(executor.contains("PROGRESS_IDLE_TIMEOUT_MS = 60_000L"))
         assertTrue(executor.contains("PROGRESS_HARD_TIMEOUT_MS = 900_000L"))
@@ -24,6 +24,8 @@ class AiStudioWebSessionR12R1SourceTest {
         assertTrue(executor.contains("NATIVE_SUBMIT_MAX_RETRIES = 3"))
         assertTrue(executor.contains("ATTACHMENT_TIMEOUT_MS = 300_000L"))
         assertTrue(executor.contains("ATTACHMENT_READY_STABLE_SCANS = 3"))
+        assertTrue(executor.contains("MANUAL_READINESS_POLL_MS = 1_000L"))
+        assertTrue(executor.contains("R19_MANUAL_VIDEO_ARMED"))
         assertTrue(executor.contains("AiStudioDebugWebViewHost.retain"))
     }
 

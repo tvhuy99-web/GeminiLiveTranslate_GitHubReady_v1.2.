@@ -64,6 +64,20 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
+    fun aiStudioSentinelIsScopedToLiveOperationsAndNeverBecomesANonLiveApiKey() {
+        val keyStore = source("core/ApiKeyStore.kt")
+        val service = source("service/TranslationService.kt")
+        assertTrue(keyStore.contains("currentLiveCredential()"))
+        assertTrue(keyStore.contains("selectedOperationUsesGeminiLive()"))
+        assertTrue(keyStore.contains("PROCESSING_MODE_VIDEO_DESCRIPTION -> false"))
+        assertTrue(keyStore.contains("PROCESSING_MODE_TRANSCRIBE"))
+        assertTrue(keyStore.contains("selectedSource != SourceMode.FILE.name"))
+        assertTrue(keyStore.contains("realGeminiKey(load())"))
+        assertTrue(service.contains("keyStore.orderedGeminiKeys()"))
+        assertTrue(service.contains("if (candidates.isEmpty()) error(\"Chưa có Gemini API Key\")"))
+    }
+
+    @Test
     fun functionSpecificDefaultModelsRemainSeparate() {
         val preferences = source("core/AppPreferences.kt")
         val catalog = source("core/AiFunctionModelCatalog.kt")

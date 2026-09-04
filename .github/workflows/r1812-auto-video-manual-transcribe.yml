@@ -1,0 +1,156 @@
+name: R18.12 Auto Video + Manual Transcribe Trace
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r1812-auto-video-manual-transcribe.yml
+
+permissions:
+  contents: write
+
+env:
+  BRANCH_NAME: experiment/aistudio-r183-network-vi
+  APK_NAME: GeminiLiveTranslate-R18.12-auto-video-manual-transcribe-trace.apk
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH_NAME }}
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.12 patch
+        run: |
+          python3 tools/r1812_patch.py
+
+      - name: Verify R18.12 invariants
+        run: |
+          set -euxo pipefail
+          VIDEO=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          TRANSCRIBE=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt
+          EXEC=app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          REQ=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt
+
+          grep -F 'R22_VIDEO_AUTO_SUBMIT_AFTER_READY' "$VIDEO"
+          grep -F 'requireUploadReady = true' "$VIDEO"
+          grep -F 'generateAttachmentNativeOnly(prompt = prompt)' "$VIDEO"
+          ! grep -F 'awaitManualAttachmentGenerate(prompt = prompt)' "$VIDEO"
+
+          grep -F 'manualRun=true' "$TRANSCRIBE"
+          grep -F 'awaitManualAttachmentFileOnlyGenerate' "$TRANSCRIBE"
+          ! grep -F 'generateAttachmentFileOnlyNative(exec)' "$TRANSCRIBE"
+          ! grep -F 'Hãy chép lời CHÍNH XÁC' "$TRANSCRIBE"
+
+          grep -F 'R22_FILE_TRANSCRIBE_MANUAL_ARMED' "$EXEC"
+          grep -F 'R22_FILE_TRANSCRIBE_MANUAL_STATE' "$EXEC"
+          grep -F 'R22_FILE_TRANSCRIBE_MANUAL_SUBMIT_DETECTED' "$EXEC"
+          grep -F 'autoSubmit=false' "$EXEC"
+
+          grep -F '2026-09-05-web-session-r11.10-manual-config-trace' "$REQ"
+          grep -F 'R22_GENERATE_REQUEST_SHAPE' "$REQ"
+          grep -F 'R22_GENERATE_RESPONSE_ERROR' "$REQ"
+          grep -F '<API_KEY_REDACTED>' "$REQ"
+          grep -F '<OAUTH_REDACTED>' "$REQ"
+          grep -F '<EMAIL_REDACTED>' "$REQ"
+
+      - name: Embedded JavaScript syntax check
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess, tempfile
+          paths = [
+              Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt'),
+              Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt'),
+              Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11Support.kt'),
+          ]
+          for p in paths:
+              s = p.read_text(encoding='utf-8')
+              m = re.search(r'val DOCUMENT_START: String = """\n(.*?)\n\s*"""\.trimIndent\(\)', s, re.S)
+              if not m:
+                  raise SystemExit(f'DOCUMENT_START not found: {p}')
+              js = m.group(1)
+              # Kotlin trimIndent: remove common indentation.
+              lines = js.splitlines()
+              nonempty = [len(x)-len(x.lstrip()) for x in lines if x.strip()]
+              indent = min(nonempty) if nonempty else 0
+              js = '\n'.join(x[indent:] if len(x) >= indent else x for x in lines)
+              # Replace the single Kotlin version interpolation used by these scripts.
+              version = re.search(r'const val VERSION = "([^"]+)"', s)
+              if version:
+                  js = js.replace('$VERSION', version.group(1))
+              with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as f:
+                  f.write(js); name=f.name
+              subprocess.run(['node','--check',name], check=True)
+              print('JS OK', p)
+          PY
+
+      - name: Build, unit test, lint
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK and signature
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          cp "$APK" "$APK_NAME"
+          sha256sum "$APK_NAME" | tee r1812-sha256.txt
+          stat -c '%s bytes' "$APK_NAME" | tee r1812-size.txt
+          AAPT=$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          "$AAPT" dump badging "$APK_NAME" | head -5 | tee r1812-badging.txt
+          "$APKSIGNER" verify --verbose --print-certs "$APK_NAME" | tee r1812-signature.txt
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' r1812-signature.txt
+          grep -F 'Verified using v3 scheme (APK Signature Scheme v3): true' r1812-signature.txt
+
+      - name: Commit validated R18.12 source
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java app/src/test/java
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: auto video after readiness and trace manual file transcribe'
+            git push origin HEAD:${BRANCH_NAME}
+          fi
+          git rev-parse HEAD | tee r1812-source-head.txt
+
+      - name: Upload R18.12 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.12-auto-video-manual-transcribe-trace
+          path: |
+            ${{ env.APK_NAME }}
+            r1812-sha256.txt
+            r1812-size.txt
+            r1812-badging.txt
+            r1812-signature.txt
+            r1812-source-head.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup one-shot helper and workflow
+        if: success()
+        run: |
+          set -euxo pipefail
+          git fetch origin "$BRANCH_NAME"
+          git checkout "$BRANCH_NAME"
+          git reset --hard "origin/$BRANCH_NAME"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f tools/r1812_patch.py .github/workflows/r1812-auto-video-manual-transcribe.yml
+          git commit -m 'chore: remove one-shot R18.12 build helpers'
+          git push origin HEAD:${BRANCH_NAME}

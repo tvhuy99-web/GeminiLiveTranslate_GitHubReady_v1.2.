@@ -1,0 +1,54 @@
+name: R18.5 Production Language Guard Build Once
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build:
+    if: contains(github.event.head_commit.message, 'R18.5 language guard')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.5 source patch
+        run: python3 tools/r185_apply_language_guard.py
+
+      - name: Check embedded JavaScript
+        run: python3 tools/check_embedded_js_syntax.py
+
+      - name: Build and test debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Upload R18.5 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.5-language-guard-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 1
+
+      - name: Commit validated source and remove one-shot helpers
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt
+          git rm -f tools/r185_apply_language_guard.py
+          git rm -f .github/workflows/r185-language-guard-build-once.yml
+          git diff --cached --check
+          git commit -m "R18.5: promote target-language guard into production Live"
+          git push origin HEAD:experiment/aistudio-r183-network-vi

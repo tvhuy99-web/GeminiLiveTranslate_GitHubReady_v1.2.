@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.7-strict-upload-observation"
+    const val VERSION = "2026-09-05-web-session-r11.8-upload-rpc-trace"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -49,6 +49,16 @@ object AiStudioWebSessionR11RequestFix {
             attachmentLastChangedSize: -1,
             attachmentFileReadCount: 0,
             attachmentLastReadKind: '',
+            attachmentFileReadStarted: 0,
+            attachmentFileReadCompleted: 0,
+            attachmentFileReadFailed: 0,
+            attachmentFileReadBytes: -1,
+            attachmentFileReadResultChars: -1,
+            attachmentPayloadStarted: 0,
+            attachmentPayloadCompleted: 0,
+            attachmentPayloadFailed: 0,
+            attachmentPayloadActive: 0,
+            attachmentLastPayload: null,
             attachmentNetworkStarted: 0,
             attachmentNetworkCompleted: 0,
             attachmentNetworkFailed: 0,
@@ -62,6 +72,8 @@ object AiStudioWebSessionR11RequestFix {
 
           const clickEntries = [];
           let nextClickId = 1;
+          let attachmentDataProbe = null;
+          let nextPayloadId = 1;
 
           function emit(kind, payload) {
             try {
@@ -141,6 +153,17 @@ object AiStudioWebSessionR11RequestFix {
             fix.attachmentLastChangedSize = -1;
             fix.attachmentFileReadCount = 0;
             fix.attachmentLastReadKind = '';
+            fix.attachmentFileReadStarted = 0;
+            fix.attachmentFileReadCompleted = 0;
+            fix.attachmentFileReadFailed = 0;
+            fix.attachmentFileReadBytes = -1;
+            fix.attachmentFileReadResultChars = -1;
+            fix.attachmentPayloadStarted = 0;
+            fix.attachmentPayloadCompleted = 0;
+            fix.attachmentPayloadFailed = 0;
+            fix.attachmentPayloadActive = 0;
+            fix.attachmentLastPayload = null;
+            attachmentDataProbe = null;
             fix.attachmentNetworkStarted = 0;
             fix.attachmentNetworkCompleted = 0;
             fix.attachmentNetworkFailed = 0;
@@ -187,18 +210,88 @@ object AiStudioWebSessionR11RequestFix {
             return out;
           }
 
+          function buildDataProbe(result) {
+            try {
+              if (typeof result !== 'string' || result.length < 128) return null;
+              const comma = result.indexOf(',');
+              const payload = comma >= 0 ? result.slice(comma + 1) : result;
+              if (payload.length < 96) return null;
+              const width = 24;
+              const starts = [
+                Math.max(0, Math.floor(payload.length * 0.08) - 12),
+                Math.max(0, Math.floor(payload.length * 0.50) - 12),
+                Math.max(0, Math.floor(payload.length * 0.92) - 12)
+              ];
+              const segments = starts.map(function(at){return payload.slice(at, at + width);}).filter(function(x){return x.length === width;});
+              return {resultChars:result.length,payloadChars:payload.length,segments:segments};
+            } catch (_) { return null; }
+          }
+
+          function probeMatchCount(text) {
+            try {
+              if (!attachmentDataProbe || !Array.isArray(attachmentDataProbe.segments) || typeof text !== 'string') return 0;
+              let matches = 0;
+              for (let i=0;i<attachmentDataProbe.segments.length;i++) if (text.indexOf(attachmentDataProbe.segments[i]) >= 0) matches += 1;
+              return matches;
+            } catch (_) { return 0; }
+          }
+
+          function attachmentPayloadMeta(body) {
+            const meta = bodyMeta(body);
+            let probeMatches = 0, likely = false, reason = 'none';
+            try {
+              const expected = Math.max(0, Number(fix.attachmentExpectedSize || 0));
+              const readDone = Number(fix.attachmentFileReadCompleted || 0) > 0;
+              if (typeof body === 'string') {
+                probeMatches = probeMatchCount(body);
+                if (probeMatches >= 2) { likely = true; reason = 'dataurl-probe'; }
+                else if (readDone && expected > 0 && body.length >= Math.floor(expected * 1.20)) { likely = true; reason = 'large-string-after-file-read'; }
+              } else if (meta.fileCount > 0 && expected > 0 && meta.fileBytes >= Math.floor(expected * 0.90)) {
+                likely = true; reason = 'file-formdata-size';
+              } else if (readDone && expected > 0 && meta.bytes >= Math.floor(expected * 0.90)) {
+                likely = true; reason = 'binary-size-match';
+              }
+            } catch (_) {}
+            return Object.assign({},meta,{probeMatches:probeMatches,likelyFilePayload:likely,reason:reason});
+          }
+
+          function markPayloadCandidate(token, url, source, method, body) {
+            if (!token || token.payloadCandidate || !attachmentWindowActive()) return token;
+            const pm = attachmentPayloadMeta(body);
+            if (!pm.likelyFilePayload) return token;
+            const hp = hostPath(url);
+            token.payloadCandidate = true;
+            token.payloadId = nextPayloadId++;
+            token.payloadMeta = pm;
+            token.payloadProgressBucket = -1;
+            fix.attachmentPayloadStarted += 1;
+            fix.attachmentPayloadActive += 1;
+            fix.attachmentLastPayload = {
+              id:token.payloadId,source:String(source||''),host:hp.host,path:hp.path,method:String(method||''),
+              bodyKind:pm.kind,bodyBytes:pm.bytes,bodyChars:pm.chars,probeMatches:pm.probeMatches,reason:pm.reason,
+              isGenerate:isGenerateUrl(url),startedAt:Date.now(),status:-1
+            };
+            emit('R20_ATTACHMENT_PAYLOAD_START',{
+              id:token.payloadId,source:String(source||''),host:hp.host,path:hp.path,method:String(method||''),
+              bodyKind:pm.kind,bodyBytes:pm.bytes,bodyChars:pm.chars,probeMatches:pm.probeMatches,reason:pm.reason,
+              expectedSize:fix.attachmentExpectedSize,isGenerate:isGenerateUrl(url),active:fix.attachmentPayloadActive,started:fix.attachmentPayloadStarted
+            });
+            return token;
+          }
+
           function noteAttachmentNetStart(source, url, method, body) {
-            if (!attachmentWindowActive() || isGenerateUrl(url)) return null;
+            if (!attachmentWindowActive()) return null;
             const hp = hostPath(url);
             const meta = bodyMeta(body);
             fix.attachmentNetworkStarted += 1;
-            const token = {source:String(source||''),host:hp.host,path:hp.path,method:String(method||''),meta:meta,at:Date.now(),done:false};
+            const token = {source:String(source||''),host:hp.host,path:hp.path,method:String(method||''),meta:meta,at:Date.now(),done:false,payloadCandidate:false};
             fix.attachmentLastNet = token;
             emit('R11_ATTACHMENT_NET_REQUEST',{
               source:token.source,host:token.host,path:token.path,method:token.method,
               bodyKind:meta.kind,bodyBytes:meta.bytes,bodyChars:meta.chars,fileCount:meta.fileCount,fileBytes:meta.fileBytes,
-              started:fix.attachmentNetworkStarted
+              isGenerate:isGenerateUrl(url),started:fix.attachmentNetworkStarted
             });
+            markPayloadCandidate(token,url,source,method,body);
             return token;
           }
 
@@ -213,6 +306,18 @@ object AiStudioWebSessionR11RequestFix {
               source:token.source,host:token.host,path:token.path,method:token.method,status:s,ok:ok,
               completed:fix.attachmentNetworkCompleted,failed:fix.attachmentNetworkFailed
             });
+            if (token.payloadCandidate) {
+              fix.attachmentPayloadActive = Math.max(0,fix.attachmentPayloadActive-1);
+              if (ok) fix.attachmentPayloadCompleted += 1; else fix.attachmentPayloadFailed += 1;
+              fix.attachmentLastPayload = {
+                id:token.payloadId,source:token.source,host:token.host,path:token.path,method:token.method,
+                status:s,ok:ok,finishedAt:Date.now(),reason:token.payloadMeta&&token.payloadMeta.reason||'unknown'
+              };
+              emit('R20_ATTACHMENT_PAYLOAD_RESULT',{
+                id:token.payloadId,source:token.source,host:token.host,path:token.path,method:token.method,status:s,ok:ok,
+                active:fix.attachmentPayloadActive,completed:fix.attachmentPayloadCompleted,failed:fix.attachmentPayloadFailed
+              });
+            }
           }
 
           function rewriteBody(url, body, source) {
@@ -256,6 +361,21 @@ object AiStudioWebSessionR11RequestFix {
                   netToken = noteAttachmentNetStart('xhr',meta.url||'',meta.method||'POST',nextBody);
                   if (netToken) {
                     const xhr = this;
+                    if (netToken.payloadCandidate && xhr.upload && xhr.upload.addEventListener) {
+                      xhr.upload.addEventListener('progress',function(ev){
+                        try {
+                          if (!ev || !ev.lengthComputable || Number(ev.total||0) <= 0) return;
+                          const ratio = Math.max(0,Math.min(1,Number(ev.loaded||0)/Number(ev.total||1)));
+                          const bucket = Math.floor(ratio * 10);
+                          if (bucket === netToken.payloadProgressBucket) return;
+                          netToken.payloadProgressBucket = bucket;
+                          emit('R20_ATTACHMENT_PAYLOAD_PROGRESS',{
+                            id:netToken.payloadId,loaded:Number(ev.loaded||0),total:Number(ev.total||0),percent:Math.round(ratio*100),
+                            host:netToken.host,path:netToken.path
+                          });
+                        } catch (_) {}
+                      },false);
+                    }
                     xhr.addEventListener('loadend',function(){
                       let status=-1;try{status=Number(xhr.status||-1);}catch(_){}
                       noteAttachmentNetDone(netToken,status);
@@ -289,6 +409,19 @@ object AiStudioWebSessionR11RequestFix {
                   method = String(init && init.method || input && input.method || 'GET');
                   body = init && Object.prototype.hasOwnProperty.call(init,'body') ? init.body : null;
                   token = noteAttachmentNetStart('fetch',url,method,body);
+                  if (body == null && input && typeof input.clone === 'function' && typeof input.text === 'function') {
+                    try {
+                      input.clone().text().then(function(text){
+                        if (!token || token.done) return;
+                        markPayloadCandidate(token,url,'fetch-request-clone',method,text);
+                        const pm = attachmentPayloadMeta(text);
+                        emit('R20_FETCH_REQUEST_CLONE_META',{
+                          host:hostPath(url).host,path:hostPath(url).path,chars:String(text||'').length,
+                          likelyFilePayload:pm.likelyFilePayload,probeMatches:pm.probeMatches,reason:pm.reason
+                        });
+                      }).catch(function(){});
+                    } catch (_) {}
+                  }
                 } catch (_) {}
                 const p = current.apply(this,arguments);
                 if (token && p && typeof p.then === 'function') {
@@ -316,20 +449,69 @@ object AiStudioWebSessionR11RequestFix {
                   const current = FileReader.prototype[name];
                   if (!current || current.__aisR11FileRead === true) return;
                   const wrapped = function(blob) {
+                    const reader = this;
+                    let matched = false, startedAt = 0, settled = false, lastProgressBucket = -1;
                     try {
                       if (attachmentWindowActive() && blob) {
+                        const blobName = String(blob.name||'');
+                        const blobMime = String(blob.type||'');
+                        const blobSize = Number(blob.size||-1);
+                        matched = (blobName && blobName === fix.attachmentExpectedName) || (blobSize > 0 && blobSize === Number(fix.attachmentExpectedSize||-1));
                         fix.attachmentFileReadCount += 1;
                         fix.attachmentLastReadKind = name;
+                        if (matched) {
+                          fix.attachmentFileReadStarted += 1;
+                          startedAt = Date.now();
+                        }
                         emit('R11_ATTACHMENT_FILE_READ',{
-                          method:name,
-                          name:String(blob.name||'').slice(0,260),
-                          mime:String(blob.type||'').slice(0,180),
-                          size:Number(blob.size||-1),
-                          readCount:fix.attachmentFileReadCount
+                          method:name,name:blobName.slice(0,260),mime:blobMime.slice(0,180),size:blobSize,
+                          readCount:fix.attachmentFileReadCount,matched:matched,started:fix.attachmentFileReadStarted
                         });
+                        if (matched && reader && reader.addEventListener) {
+                          reader.addEventListener('progress',function(ev){
+                            try {
+                              if (!ev || !ev.lengthComputable || Number(ev.total||0) <= 0) return;
+                              const ratio = Math.max(0,Math.min(1,Number(ev.loaded||0)/Number(ev.total||1)));
+                              const bucket = Math.floor(ratio * 4);
+                              if (bucket === lastProgressBucket) return;
+                              lastProgressBucket = bucket;
+                              emit('R20_ATTACHMENT_FILE_READ_PROGRESS',{
+                                method:name,loaded:Number(ev.loaded||0),total:Number(ev.total||0),percent:Math.round(ratio*100)
+                              });
+                            } catch (_) {}
+                          },false);
+                          reader.addEventListener('load',function(){
+                            if (settled) return; settled = true;
+                            try {
+                              const result = reader.result;
+                              const resultChars = typeof result === 'string' ? result.length : -1;
+                              const resultBytes = result && typeof result !== 'string' && typeof result.byteLength === 'number' ? Number(result.byteLength) : Number(blob.size||-1);
+                              if (name === 'readAsDataURL' && typeof result === 'string') attachmentDataProbe = buildDataProbe(result);
+                              fix.attachmentFileReadCompleted += 1;
+                              fix.attachmentFileReadBytes = resultBytes;
+                              fix.attachmentFileReadResultChars = resultChars;
+                              emit('R20_ATTACHMENT_FILE_READ_DONE',{
+                                method:name,size:Number(blob.size||-1),resultKind:typeof result === 'string'?'string':'binary',
+                                resultChars:resultChars,resultBytes:resultBytes,payloadChars:attachmentDataProbe?attachmentDataProbe.payloadChars:-1,
+                                probeSegments:attachmentDataProbe&&attachmentDataProbe.segments?attachmentDataProbe.segments.length:0,
+                                elapsedMs:startedAt?Date.now()-startedAt:-1,completed:fix.attachmentFileReadCompleted
+                              });
+                            } catch (_) {}
+                          },{once:true});
+                          const fail = function(kind){
+                            if (settled) return; settled = true; fix.attachmentFileReadFailed += 1;
+                            emit('R20_ATTACHMENT_FILE_READ_ERROR',{method:name,kind:kind,elapsedMs:startedAt?Date.now()-startedAt:-1,failed:fix.attachmentFileReadFailed});
+                          };
+                          reader.addEventListener('error',function(){fail('error');},{once:true});
+                          reader.addEventListener('abort',function(){fail('abort');},{once:true});
+                        }
                       }
                     } catch (_) {}
-                    return current.apply(this,arguments);
+                    try { return current.apply(this,arguments); }
+                    catch (err) {
+                      if (matched && !settled) { settled = true; fix.attachmentFileReadFailed += 1; emit('R20_ATTACHMENT_FILE_READ_ERROR',{method:name,kind:'throw',failed:fix.attachmentFileReadFailed}); }
+                      throw err;
+                    }
                   };
                   wrapped.__aisR11FileRead = true;
                   FileReader.prototype[name] = wrapped;
@@ -667,16 +849,26 @@ object AiStudioWebSessionR11RequestFix {
                 const activeUploads=Number(support.activeUploads||0),uploadStarted=Number(support.uploadStarted||0),uploadCompleted=Number(support.uploadCompleted||0),uploadFailed=Number(support.uploadFailed||0);
                 const uploadObserved=uploadStarted>0;
                 const uploadSettled=uploadObserved&&activeUploads===0&&uploadFailed===0&&uploadCompleted>=uploadStarted;
+                const localReadReady=fix.attachmentFileReadCompleted>0&&fix.attachmentFileReadFailed===0;
+                const serverPayloadObserved=fix.attachmentPayloadStarted>0;
+                const serverPayloadSettled=serverPayloadObserved&&fix.attachmentPayloadActive===0&&fix.attachmentPayloadFailed===0&&fix.attachmentPayloadCompleted>=fix.attachmentPayloadStarted;
                 const busy=!!support.busy,submitReady=!!submit.ready;
-                const ready=present&&!busy&&uploadSettled&&submitReady;
+                const attachmentPrepared=present&&!busy&&localReadReady&&submitReady;
+                const ready=attachmentPrepared;
                 return {
                   ok:true,version:fix.version,windowActive:attachmentWindowActive(),present:present,ready:ready,nameVisible:attachmentNameVisible(),busy:busy,submitReady:submitReady,
                   submitScore:Number(submit.score||-1),submitDisabled:!!submit.disabled,submitLabel:String(submit.label||'').slice(0,180),
+                  attachmentPrepared:attachmentPrepared,localReadReady:localReadReady,
+                  serverPayloadObserved:serverPayloadObserved,serverPayloadSettled:serverPayloadSettled,
+                  payloadActive:fix.attachmentPayloadActive,payloadStarted:fix.attachmentPayloadStarted,payloadCompleted:fix.attachmentPayloadCompleted,payloadFailed:fix.attachmentPayloadFailed,
+                  lastPayload:fix.attachmentLastPayload,
                   uploadObserved:uploadObserved,uploadSettled:uploadSettled,activeUploads:activeUploads,uploadStarted:uploadStarted,uploadCompleted:uploadCompleted,uploadFailed:uploadFailed,
                   expectedName:fix.attachmentExpectedName,expectedMime:fix.attachmentExpectedMime,expectedSize:fix.attachmentExpectedSize,
                   fileChangeCount:fix.attachmentFileChangeCount,fileChangeMatched:fix.attachmentFileChangeMatched,
                   lastChangedName:fix.attachmentLastChangedName,lastChangedMime:fix.attachmentLastChangedMime,lastChangedSize:fix.attachmentLastChangedSize,
                   fileReadCount:fix.attachmentFileReadCount,lastReadKind:fix.attachmentLastReadKind,
+                  fileReadStarted:fix.attachmentFileReadStarted,fileReadCompleted:fix.attachmentFileReadCompleted,fileReadFailed:fix.attachmentFileReadFailed,
+                  fileReadBytes:fix.attachmentFileReadBytes,fileReadResultChars:fix.attachmentFileReadResultChars,
                   networkStarted:fix.attachmentNetworkStarted,networkCompleted:fix.attachmentNetworkCompleted,networkFailed:fix.attachmentNetworkFailed,
                   submitFallbacks:fix.attachmentSubmitFallbacks,buttonClicks:fix.attachmentSubmitButtonClicks,
                   listenerInvokes:fix.attachmentSubmitListenerInvokes,lastSubmitLabel:fix.attachmentLastSubmitLabel,lastSubmitPath:fix.attachmentLastSubmitPath,

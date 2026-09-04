@@ -267,11 +267,11 @@ class AiStudioWebSessionExecutor(
             }
             events?.onLog("R18_ATTACHMENT_STATE", "readyScans=${item.readyScans} ${decoded.take(7000)}")
             if (ready && item.readyScans >= ATTACHMENT_READY_STABLE_SCANS && now - item.readySince >= ATTACHMENT_READY_SETTLE_MS) {
-                events?.onLog("R18_ATTACHMENT_UPLOAD_READY", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt}")
+                events?.onLog("R20_ATTACHMENT_PREPARED", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt} localReadReady=${obj?.optBoolean("localReadReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)}")
                 finishAttachment(token, true, decoded)
             } else {
                 if (present && !ready) {
-                    events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean("busy", false)} uploadObserved=${obj?.optBoolean("uploadObserved", false)} uploadSettled=${obj?.optBoolean("uploadSettled", false)} submitReady=${obj?.optBoolean("submitReady", false)} activeUploads=${obj?.optInt("activeUploads", 0)} started=${obj?.optInt("uploadStarted", 0)} completed=${obj?.optInt("uploadCompleted", 0)} failed=${obj?.optInt("uploadFailed", 0)}")
+                    events?.onLog("R20_ATTACHMENT_WAIT_PREPARED", "token=$token busy=${obj?.optBoolean("busy", false)} present=$present localReadReady=${obj?.optBoolean("localReadReady", false)} attachmentPrepared=${obj?.optBoolean("attachmentPrepared", false)} submitReady=${obj?.optBoolean("submitReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)} payloadActive=${obj?.optInt("payloadActive", 0)} payloadStarted=${obj?.optInt("payloadStarted", 0)} payloadCompleted=${obj?.optInt("payloadCompleted", 0)} payloadFailed=${obj?.optInt("payloadFailed", 0)}")
                 }
                 main.postDelayed({ pollAttachment(token) }, 500L)
             }

@@ -42,7 +42,7 @@ class AiStudioFileTranscribeClient(
         onProgress("Đang mở AI Studio cho chép lời tệp...", 2)
         val exec = createAndAwaitReady()
         selectModel(exec)
-        onProgress("Đang tải tệp lên AI Studio...", 8)
+        onProgress("Đang đưa tệp vào AI Studio và chờ trang đọc xong...", 8)
         attachAndWait(exec, uri, displayName, mimeType, size)
         val prompt = buildPrompt(speakerDiarization)
         onProgress("Tệp đã sẵn sàng; đang chép lời bằng model tệp...", 55)
@@ -105,7 +105,7 @@ class AiStudioFileTranscribeClient(
         exec.attachFile(uri, name, mime, size, requireUploadReady = true) { yes, d -> ok.set(yes); detail.set(d); latch.countDown() }
         if (!latch.await(5, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio tải tệp chép lời")
         if (!ok.get()) error("AI Studio chưa xác nhận tệp sẵn sàng: ${detail.get().take(700)}")
-        logger.log(2, TAG, "ATTACHMENT_READY model=$model name=$name")
+        logger.log(2, TAG, "ATTACHMENT_PREPARED model=$model name=$name")
     }
 
     private fun generateNative(exec: AiStudioWebSessionExecutor, prompt: String): AiStudioWebSessionExecutor.Result {

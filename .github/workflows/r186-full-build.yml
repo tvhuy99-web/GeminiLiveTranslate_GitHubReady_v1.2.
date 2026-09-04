@@ -1,4 +1,4 @@
-name: R18.6 Full AI Studio Build
+name: R18.6 Full AI Studio Build JUnit4
 
 on:
   push:

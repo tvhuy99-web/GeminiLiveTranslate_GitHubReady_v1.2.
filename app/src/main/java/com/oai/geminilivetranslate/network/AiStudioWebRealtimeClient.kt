@@ -30,6 +30,7 @@ import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR14DirectLiveEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR17ProductionBootstrap
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR18LanguageGuard
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,8 +40,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Production hidden AI Studio Live backend.
  *
  * This client intentionally owns a dedicated WebView instead of reusing the old R12 Chat/Lab
- * executor. Only the three proven Live engines are installed in this WebView: R14 input carrier,
- * R16 output bridge and R17 production model/language/Start automation.
+ * executor. Production now installs R14 input carrier, R16 output bridge, R18 request-level target
+ * language guard and R17 route/model/Start automation. R18 is required for Translate because current
+ * AI Studio Live can encode the target language positionally instead of exposing translationConfig.
  *
  * R17 installation is verified after every recovery injection. Failed injection does not count as
  * bootstrap progress. Recovery is bounded and exports a sanitized JavaScript exception so a device
@@ -84,6 +86,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastBootstrapState = ""
     @Volatile private var lastDirectState = ""
     @Volatile private var lastOutputState = ""
+    @Volatile private var lastLanguageGuardState = ""
+    @Volatile private var languageGuardConfigured = false
     @Volatile private var lastCarrierRequests = 0L
     @Volatile private var lastBrowserChunks = 0L
     @Volatile private var lastProgressAt = 0L
@@ -104,7 +108,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CONNECT hidden=false debugVisible=true isolatedLiveHost=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION}",
+            "CONNECT hidden=false debugVisible=true isolatedLiveHost=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION} languageGuard=${AiStudioWebSessionR18LanguageGuard.VERSION}",
         )
         main.post { startOnMain() }
     }
@@ -228,6 +232,11 @@ internal class AiStudioWebRealtimeClient(
         WebViewCompat.addDocumentStartJavaScript(
             created,
             AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START,
+            setOf(AI_STUDIO_ORIGIN),
+        )
+        WebViewCompat.addDocumentStartJavaScript(
+            created,
+            AiStudioWebSessionR18LanguageGuard.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
         WebViewCompat.addDocumentStartJavaScript(
@@ -360,6 +369,8 @@ internal class AiStudioWebRealtimeClient(
                 serverSetupSeen = false
                 lastDirectState = ""
                 lastOutputState = ""
+                lastLanguageGuardState = ""
+                languageGuardConfigured = false
                 logger.log(3, "AiStudioLive", "PAGE_STARTED generation=$pageGeneration host=${hostOf(url)} path=${pathOf(url)}")
             }
 
@@ -472,9 +483,11 @@ internal class AiStudioWebRealtimeClient(
     private fun bootstrapRecoveryScript(): String = """
         (function(){
           try{
+            ${AiStudioWebSessionR18LanguageGuard.DOCUMENT_START}
             ${AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START}
             var r=window.__AIS_R17_PRODUCTION__;
-            return JSON.stringify({ok:!!(r&&r.version),version:r&&String(r.version)||'',type:typeof r});
+            var l=window.__AIS_R183_LANGUAGE__;
+            return JSON.stringify({ok:!!(r&&r.version),version:r&&String(r.version)||'',type:typeof r,languageGuard:!!(l&&l.version),languageVersion:l&&String(l.version)||''});
           }catch(e){
             return JSON.stringify({
               ok:false,
@@ -547,6 +560,8 @@ internal class AiStudioWebRealtimeClient(
         lastBootstrapInstallError = ""
         lastBootstrapState = ""
         lastBootstrapSignature = ""
+        lastLanguageGuardState = ""
+        languageGuardConfigured = false
         markBootstrapProgress("route-repair-$routeRepairAttempts")
         logger.log(1, "AiStudioLive", "ROUTE_REPAIR attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}")
         current.loadUrl(liveRouteUrl())
@@ -558,25 +573,37 @@ internal class AiStudioWebRealtimeClient(
         val current = webView ?: return
         val language = JSONObject.quote(targetLanguage)
         val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
+        val transcribeJs = if (transcribe) "true" else "false"
+        val languageCall = if (transcribe) {
+            "null"
+        } else {
+            "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
+        }
         current.evaluateJavascript(
-            "JSON.stringify(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,${if (transcribe) "true" else "false"}):({ok:false,error:'r17-not-installed'}))",
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            if (obj?.optBoolean("ok") == true) {
+            val root = runCatching { JSONObject(decoded) }.getOrNull()
+            val bootstrap = root?.optJSONObject("bootstrap")
+            val languageGuard = root?.optJSONObject("language")
+            val bootstrapOk = bootstrap?.optBoolean("ok") == true
+            val languageOk = transcribe || languageGuard?.optBoolean("ok") == true
+            if (bootstrapOk && languageOk) {
                 configured = true
-                lastBootstrapState = decoded
-                updateBootstrapProgress(obj)
-                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe model=${targetLiveModel()}")
+                languageGuardConfigured = !transcribe && languageOk
+                lastBootstrapState = bootstrap.toString()
+                if (!transcribe && languageGuard != null) lastLanguageGuardState = languageGuard.toString()
+                updateBootstrapProgress(bootstrap)
+                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured")
             } else if (decoded.isNotBlank()) {
-                logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING ${safe(decoded, 900)}")
+                logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk ${safe(decoded, 1200)}")
             }
         }
     }
 
     private fun requestStates() {
         val current = webView ?: return
-        val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
+        val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,language:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
         current.evaluateJavascript(js) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return@evaluateJavascript
@@ -584,6 +611,12 @@ internal class AiStudioWebRealtimeClient(
                 bootstrapInstalled = true
                 lastBootstrapState = bootstrap.toString()
                 updateBootstrapProgress(bootstrap)
+            }
+            root.optJSONObject("language")?.let { language ->
+                lastLanguageGuardState = language.toString()
+                if (language.optBoolean("targetLanguageVerified", false)) {
+                    markBootstrapProgress("language-verified-${language.optString("lastStrategy", "unknown")}")
+                }
             }
             root.optJSONObject("direct")?.let { direct ->
                 lastDirectState = direct.toString()
@@ -646,6 +679,13 @@ internal class AiStudioWebRealtimeClient(
 
     private fun maybeDeliverSetup() {
         if (closed.get() || setupDelivered.get() || !serverSetupSeen) return
+        if (operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
+            val language = runCatching { JSONObject(lastLanguageGuardState) }.getOrNull() ?: return
+            if (!languageGuardConfigured || !language.optBoolean("targetLanguageVerified", false)) {
+                logger.log(2, "AiStudioLanguage", "WAITING_TARGET_LANGUAGE target=$targetLanguage configured=$languageGuardConfigured verified=${language.optBoolean("targetLanguageVerified", false)} strategy=${safe(language.optString("lastStrategy", "none"), 120)} bidiRequests=${language.optLong("bidiRequests", 0L)} setupRequests=${language.optLong("setupRequests", 0L)} translateSetup=${language.optLong("translateSetupRequests", 0L)} fallbackCandidates=${language.optInt("lastFallbackCandidates", 0)}")
+                return
+            }
+        }
         val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
         val template = direct.optBoolean("templateObserved", false)
         val carriers = direct.optLong("carrierRequests", 0L)
@@ -711,7 +751,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             0,
             "AiStudioLive",
-            "FAIL hidden=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
+            "FAIL hidden=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured languageGuardConfigured=$languageGuardConfigured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} language=${safe(lastLanguageGuardState, 2200)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
             error,
         )
         listener.onError(error)
@@ -726,6 +766,7 @@ internal class AiStudioWebRealtimeClient(
             val kind = parsed?.optString("kind").orEmpty()
             when {
                 kind.startsWith("R17_") -> logger.log(3, "AiStudioBootstrap", "JS_$kind ${safe(text, 2800)}")
+                kind.startsWith("R183_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioLanguage", "JS_$kind ${safe(text, 2800)}")
                 kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||
                     kind == "R14_INJECT_HTTP_2XX" ||
                     kind == "R14_INJECT_HTTP_ERROR" ||
@@ -760,7 +801,7 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-ai-studio-live-r3-visible-native-tap-debug"
+        const val VERSION = "2026-09-04-production-ai-studio-live-r4-native-tap-language-guard-debug"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"

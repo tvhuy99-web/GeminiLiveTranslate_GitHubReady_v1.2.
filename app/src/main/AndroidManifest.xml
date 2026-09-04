@@ -44,12 +44,12 @@
             android:excludeFromRecents="true"
             android:label="Nhật ký AI Studio" />
 
-        <!-- R18.1/R18.2: current observational causal-capture launcher. No automated UI interaction. -->
+        <!-- R19: one real Start tap, then Android R14/R16 realtime handoff. -->
         <activity
             android:name=".ui.AiStudioWebSessionR18Activity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:label="AI Studio R18 - Bắt đường Live">
+            android:label="AI Studio - 1 chạm Start">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

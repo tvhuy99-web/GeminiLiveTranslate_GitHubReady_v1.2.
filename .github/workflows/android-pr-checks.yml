@@ -38,7 +38,7 @@ jobs:
           # R18.6 was prepared as a one-shot patch workflow. The previous PR build
           # never executed that patch, so extract and execute its embedded Python
           # before validation. Once the source is committed this becomes a no-op.
-          if ! grep -q 'liveFileTranscribe=true' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt; then
+          if ! grep -q 'val useLiveFileTranscribe = aiStudioMode' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt; then
             python3 - <<'R186EXTRACT'
           from pathlib import Path
           workflow = Path('.github/workflows/r186-ai-studio-all-modes.yml').read_text()
@@ -77,7 +77,8 @@ jobs:
           fi
 
           grep -q '!aiStudioMode && apiKey.isNullOrBlank()' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
-          grep -q 'liveFileTranscribe=true' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'val useLiveFileTranscribe = aiStudioMode' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'mode == SourceMode.FILE && !transcribeFileViaLive' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
           test -s app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
 
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"

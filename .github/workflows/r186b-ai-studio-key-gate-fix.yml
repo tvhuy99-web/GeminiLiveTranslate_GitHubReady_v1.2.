@@ -1,0 +1,190 @@
+name: R18.6b AI Studio key gate fix
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r186b-ai-studio-key-gate-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply source fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt')
+          s = p.read_text()
+
+          def once(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 occurrence, got {n}')
+              s = s.replace(old, new, 1)
+
+          once(
+              'import com.oai.geminilivetranslate.core.AiApiSettingsStore\nimport com.oai.geminilivetranslate.core.ApiKeyStore',
+              'import com.oai.geminilivetranslate.core.AiApiSettingsStore\nimport com.oai.geminilivetranslate.core.AiStudioLiveBackendPolicy\nimport com.oai.geminilivetranslate.core.ApiKeyStore',
+              'policy import',
+          )
+
+          once(
+              '''        val aiApi = AiApiSettingsStore(this).load()
+        val useProxyVideoDescription =
+            isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
+        val apiKey = if (useProxyVideoDescription) null else keyStore.currentGeminiKey()
+''',
+              '''        val aiApi = AiApiSettingsStore(this).load()
+        val useProxyVideoDescription =
+            isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
+        val aiStudioMode = AiStudioLiveBackendPolicy.preferAiStudio(this)
+        val apiKey = if (useProxyVideoDescription || aiStudioMode) null else keyStore.currentGeminiKey()
+''',
+              'start route selection',
+          )
+
+          once(
+              '''        } else if (apiKey.isNullOrBlank()) {
+            updateError("Chưa có Gemini API Key")
+            return
+        }
+        val geminiApiKey = apiKey.orEmpty()
+''',
+              '''        } else if (!aiStudioMode && apiKey.isNullOrBlank()) {
+            updateError("Chưa có Gemini API Key")
+            return
+        }
+        val geminiApiKey = if (aiStudioMode) {
+            AiStudioLiveBackendPolicy.liveCredential(apiKey).orEmpty()
+        } else {
+            apiKey.orEmpty()
+        }
+''',
+              'start key gate',
+          )
+
+          once(
+              '''        val selectedKey = keyStore.currentGeminiKey()
+        if (selectedKey.isNullOrBlank()) {
+            stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")
+            return
+        }
+        logger.log(1, "ApiKey", "API Key đang dùng đã thay đổi; tạo kết nối Gemini mới")
+        liveApiKey = selectedKey
+        liveKeyFailoverAttempts = 0
+        sessionResumptionHandle = null
+        source?.pause()
+        clearPendingInputForFreshSession()
+        updateState { it.copy(setupComplete = false, status = "Đang áp dụng API Key mới...") }
+        connectGemini(selectedKey)
+''',
+              '''        val aiStudioMode = AiStudioLiveBackendPolicy.preferAiStudio(this)
+        val selectedKey = if (aiStudioMode) null else keyStore.currentGeminiKey()
+        if (!aiStudioMode && selectedKey.isNullOrBlank()) {
+            stopTranslation("API Key đã bị xóa; phiên dịch đã dừng")
+            return
+        }
+        val credential = if (aiStudioMode) {
+            AiStudioLiveBackendPolicy.liveCredential(selectedKey).orEmpty()
+        } else {
+            selectedKey.orEmpty()
+        }
+        logger.log(
+            1,
+            "ApiKey",
+            if (aiStudioMode) "Đang dùng AI Studio; bỏ qua yêu cầu API Key và tạo lại kết nối AI Studio"
+            else "API Key đang dùng đã thay đổi; tạo kết nối Gemini mới",
+        )
+        liveApiKey = credential
+        liveKeyFailoverAttempts = 0
+        sessionResumptionHandle = null
+        source?.pause()
+        clearPendingInputForFreshSession()
+        updateState {
+            it.copy(
+                setupComplete = false,
+                status = if (aiStudioMode) "Đang kết nối lại AI Studio..." else "Đang áp dụng API Key mới...",
+            )
+        }
+        connectGemini(credential)
+''',
+              'refresh key routing',
+          )
+
+          p.write_text(s)
+
+          # Hard verification of the exact failure path reported on-device.
+          out = p.read_text()
+          assert 'val aiStudioMode = AiStudioLiveBackendPolicy.preferAiStudio(this)' in out
+          assert '} else if (!aiStudioMode && apiKey.isNullOrBlank()) {' in out
+          assert 'AiStudioLiveBackendPolicy.liveCredential(apiKey).orEmpty()' in out
+          assert 'if (!aiStudioMode && selectedKey.isNullOrBlank()) {' in out
+          print('R18.6b source assertions passed')
+          PY
+
+      - name: Verify source and embedded JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n "!aiStudioMode && apiKey.isNullOrBlank" app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -n "liveCredential(apiKey)" app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          python3 tools/verify_github_ready.py
+          python3 tools/check_embedded_js_syntax.py
+
+      - name: Test lint and build
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK differs from R18.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          NEW_SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          echo "R18.6b APK SHA256=$NEW_SHA"
+          test "$NEW_SHA" != "a3b78e9c3370b5986e7d93a5728b933b722e0f2bb8964d45c574101d780a6d71"
+          cp "$APK" GeminiLiveTranslate-R18.6b-ai-studio-key-gate-fixed.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.6b-ai-studio-key-gate-fixed
+          path: GeminiLiveTranslate-R18.6b-ai-studio-key-gate-fixed.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit validated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/r186b-ai-studio-key-gate-fix.yml
+          git add app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt .github/workflows/r186b-ai-studio-key-gate-fix.yml
+          git diff --cached --check
+          git diff --cached --quiet && { echo "No validated source changes"; exit 1; }
+          git commit -m "fix: bypass API key gate in AI Studio mode"
+          git push origin HEAD:experiment/aistudio-r183-network-vi

@@ -9,7 +9,7 @@ class AiStudioWebSessionR18SourceTest {
     private fun source(path: String): String = sequenceOf(
         File("src/main/java/com/oai/geminilivetranslate/$path"),
         File("app/src/main/java/com/oai/geminilivetranslate/$path"),
-    ).firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy source R18/R19: $path")
+    ).firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy source production: $path")
 
     private fun manifest(): String = sequenceOf(
         File("src/main/AndroidManifest.xml"),
@@ -17,123 +17,96 @@ class AiStudioWebSessionR18SourceTest {
     ).firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy AndroidManifest.xml")
 
     @Test
-    fun r18CausalProbeRemainsObservational() {
-        val probe = source("ui/AiStudioWebSessionR18CausalProbe.kt")
-        assertTrue(probe.contains("R18.1/R18.2 observational probe"))
-        assertTrue(probe.contains("TRUSTED_EVENT"))
-        assertTrue(probe.contains("GET_USER_MEDIA_CALL"))
-        assertTrue(probe.contains("BIDI_OPEN"))
-        assertTrue(probe.contains("BIDI_SEND"))
-        assertFalse(probe.contains("import android.view.MotionEvent"))
-        assertFalse(probe.contains("MotionEvent.obtain("))
-        assertFalse(probe.contains(".click()"))
+    fun apiSettingsExposeExactlyTheOfficialConnectionChoiceWithoutRemovingExistingSettings() {
+        val activity = source("ui/ApiSettingsActivity.kt")
+        val modeStore = source("core/AiConnectionModeStore.kt")
+
+        assertTrue(modeStore.contains("MODE_API_KEY = \"api_key\""))
+        assertTrue(modeStore.contains("MODE_AI_STUDIO = \"ai_studio\""))
+        assertTrue(modeStore.contains("LABEL_API_KEY = \"API Key\""))
+        assertTrue(modeStore.contains("LABEL_AI_STUDIO = \"Tài khoản Google / AI Studio\""))
+        assertTrue(activity.contains("Chế độ kết nối Gemini Live"))
+        assertTrue(activity.contains("ĐĂNG NHẬP / ĐĂNG XUẤT / CHUYỂN TÀI KHOẢN"))
+        assertTrue(activity.contains("Gemini API Key"))
+        assertTrue(activity.contains("Nhà cung cấp cho Mô tả video"))
+        assertTrue(activity.contains("Kết nối và tự khôi phục"))
+        assertTrue(activity.contains("Lời nhắc: Mô tả theo thời gian"))
+        assertTrue(activity.contains("Lời nhắc: Mô tả tổng hợp"))
+        assertTrue(activity.contains("AiFunctionModelCatalog.summary"))
     }
 
     @Test
-    fun r183LanguageGuardForcesVietnameseWithoutLanguageUi() {
-        val guard = source("ui/AiStudioWebSessionR18LanguageGuard.kt")
-        assertTrue(guard.contains("r18.3a-network-language-guard"))
-        assertTrue(guard.contains("gemini-3.5-live-translate-preview"))
-        assertTrue(guard.contains("targetLanguage:'vi'"))
-        assertTrue(guard.contains("/v1/bidiGenerateContent"))
-        assertTrue(guard.contains("targetLanguageVerified"))
-        assertFalse(guard.contains("querySelector("))
-        assertFalse(guard.contains(".click()"))
-        assertFalse(guard.contains("MotionEvent"))
-        assertFalse(guard.contains("Authorization"))
-        assertFalse(guard.contains("document.cookie"))
+    fun accountManagerKeepsAuthInsideWebViewAndLogsOnlyRouteMetadata() {
+        val activity = source("ui/AiStudioAccountActivity.kt")
+        assertTrue(activity.contains("CookieManager.getInstance()"))
+        assertTrue(activity.contains("removeAllCookies"))
+        assertTrue(activity.contains("WebStorage.getInstance().deleteAllData()"))
+        assertTrue(activity.contains("aistudio.google.com/live"))
+        assertTrue(activity.contains("AiStudioAccount"))
+        assertFalse(activity.contains("getCookie("))
+        assertFalse(activity.contains("Authorization"))
+        assertFalse(activity.contains("access_token"))
+        assertFalse(activity.contains("id_token"))
     }
 
     @Test
-    fun r189ColdExperimentStaysZeroUiAndDoesNotHardcodeLearnedCallback() {
-        val bootstrap = source("ui/AiStudioWebSessionR18RuntimeBootstrap.kt")
-        assertTrue(bootstrap.contains("r18.9-cold-reload-bootstrap"))
-        assertTrue(bootstrap.contains("coldMatchCount"))
-        assertTrue(bootstrap.contains("coldReplayAttempts"))
-        assertTrue(bootstrap.contains("coldR16SetupDelta"))
-        assertTrue(bootstrap.contains("coldBootstrapProven"))
-        assertTrue(bootstrap.contains("sessionStorage"))
-        assertTrue(bootstrap.contains("ev.isTrusted===false"))
-        assertFalse(bootstrap.contains("e062283a"))
-        assertFalse(bootstrap.contains("573200da"))
-        assertFalse(bootstrap.contains("document.querySelector("))
-        assertFalse(bootstrap.contains("document.querySelectorAll("))
-        assertFalse(bootstrap.contains(".click()"))
-        assertFalse(bootstrap.contains("new MouseEvent"))
-        assertFalse(bootstrap.contains("MotionEvent"))
-        assertFalse(bootstrap.contains("getBoundingClientRect()"))
-        assertFalse(bootstrap.contains("aria-label"))
-        assertFalse(bootstrap.contains("data-testid"))
+    fun liveFacadeUsesStrictSelectedModeAndNeverSilentlyCrossesBackends() {
+        val facade = source("network/GeminiLiveClient.kt")
+        val policy = source("core/AiStudioLiveBackendPolicy.kt")
+        assertTrue(facade.contains("AiConnectionModeStore.MODE_AI_STUDIO"))
+        assertTrue(facade.contains("CONNECT_AI_STUDIO"))
+        assertTrue(facade.contains("CONNECT_API"))
+        assertTrue(facade.contains("GEMINI_API_KEY_REQUIRED"))
+        assertTrue(facade.contains("strictMode=true"))
+        assertFalse(facade.contains("chuyển sang Gemini API fallback"))
+        assertTrue(policy.contains("allowApiFallback(context: Context): Boolean = false"))
+        assertTrue(policy.contains("AI_STUDIO_SENTINEL"))
     }
 
     @Test
-    fun r19SilentCarrierProvidesAudioOnlyStreamWithoutUiActivation() {
-        val carrier = source("ui/AiStudioWebSessionPhysicalCarrier.kt")
-        assertTrue(carrier.contains("r19-trusted-start-silent-carrier"))
-        assertTrue(carrier.contains("navigator.mediaDevices"))
-        assertTrue(carrier.contains("getUserMedia"))
-        assertTrue(carrier.contains("createMediaStreamDestination"))
-        assertTrue(carrier.contains("sampleRate:16000"))
-        assertTrue(carrier.contains("gain.gain.value=0"))
-        assertTrue(carrier.contains("__AIS_PHYSICAL_CARRIER__"))
-        assertFalse(carrier.contains("querySelector("))
-        assertFalse(carrier.contains("querySelectorAll("))
-        assertFalse(carrier.contains(".click()"))
-        assertFalse(carrier.contains("new MouseEvent"))
-        assertFalse(carrier.contains("dispatchEvent("))
-        assertFalse(carrier.contains("MotionEvent"))
-        assertFalse(carrier.contains("getBoundingClientRect"))
-        assertFalse(carrier.contains("aria-label"))
-        assertFalse(carrier.contains("data-testid"))
+    fun functionSpecificDefaultModelsRemainSeparate() {
+        val preferences = source("core/AppPreferences.kt")
+        val catalog = source("core/AiFunctionModelCatalog.kt")
+        val bootstrap = source("ui/AiStudioWebSessionR17ProductionBootstrap.kt")
+        assertTrue(preferences.contains("gemini-3.5-live-translate-preview"))
+        assertTrue(preferences.contains("gemini-3.5-transcribe"))
+        assertTrue(preferences.contains("gemini-3.5-transcribe-live"))
+        assertTrue(preferences.contains("gemini-3.5-flash-lite"))
+        assertTrue(preferences.contains("gemini-3.7-flash"))
+        assertTrue(catalog.contains("liveTranslate="))
+        assertTrue(catalog.contains("liveTranscribe="))
+        assertTrue(catalog.contains("fileTranscribe="))
+        assertTrue(catalog.contains("subtitleTranslate="))
+        assertTrue(catalog.contains("videoDescription="))
+        assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
+        assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }
 
     @Test
-    fun historicalOracleRemainsExplicitlyLabOnly() {
-        val oracle = source("ui/AiStudioWebSessionR18StartOracle.kt")
-        assertTrue(oracle.contains("LAB_ONLY_UI_ORACLE"))
-        assertTrue(oracle.contains("r18.5-r174-start-oracle-async-causal-lab"))
-        assertTrue(oracle.contains("markOracleTarget"))
-        assertTrue(oracle.contains("createMediaStreamDestination"))
-        assertTrue(oracle.contains("maxAttempts:3"))
+    fun productionAiStudioBootstrapMayAutomateTheHiddenUiAndHasDetailedState() {
+        val bootstrap = source("ui/AiStudioWebSessionR17ProductionBootstrap.kt")
+        assertTrue(bootstrap.contains("querySelectorAll('*')"))
+        assertTrue(bootstrap.contains("typeof el.click==='function'"))
+        assertTrue(bootstrap.contains("new w.MouseEvent('click'"))
+        assertTrue(bootstrap.contains("startScans"))
+        assertTrue(bootstrap.contains("startCandidates"))
+        assertTrue(bootstrap.contains("startAttempts"))
+        assertTrue(bootstrap.contains("modelVerified"))
+        assertTrue(bootstrap.contains("targetLanguageVerified"))
+        assertTrue(bootstrap.contains("setupObserved"))
+        assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
+        assertFalse(bootstrap.contains("Authorization"))
+        assertFalse(bootstrap.contains("document.cookie"))
     }
 
     @Test
-    fun r19ActivityRequiresPhysicalStartThenHandsOffToR14AndR16() {
-        val activity = source("ui/AiStudioWebSessionR18Activity.kt")
+    fun manifestContainsOnlyTheOfficialLauncherAndNoExperimentalActivity() {
         val manifest = manifest()
-
-        assertTrue(activity.contains("r19-one-trusted-tap-physical-handoff"))
-        assertTrue(activity.contains("CHẠM START TRỰC TIẾP"))
-        assertTrue(activity.contains("AiStudioWebSessionPhysicalCarrier.DOCUMENT_START"))
-        assertTrue(activity.contains("AiStudioWebSessionR18LanguageGuard.DOCUMENT_START"))
-        assertTrue(activity.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
-        assertTrue(activity.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
-        assertTrue(activity.contains("AiStudioWebLiveClient"))
-        assertTrue(activity.contains("AiStudioWebLiveOutputBridge"))
-        assertTrue(activity.contains("MicAudioSource"))
-        assertTrue(activity.contains("StreamingPcmPlayer"))
-        assertTrue(activity.contains("inputClient.sendAudio(data)"))
-        assertTrue(activity.contains("translatedPlayer?.enqueue(pcm24kMono)"))
-        assertTrue(activity.contains("setupCompleteEvents"))
-        assertTrue(activity.contains("targetLanguageVerified"))
-        assertTrue(activity.contains("IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS"))
-        assertTrue(activity.contains("lp.height = dp(2)"))
-        assertTrue(activity.contains("executor.webView.alpha = 0f"))
-
-        // The physical-handoff Activity must not contain or install any UI oracle/cold replay path.
-        assertFalse(activity.contains("AiStudioWebSessionR18StartOracle.DOCUMENT_START"))
-        assertFalse(activity.contains("AiStudioWebSessionR18StartOracleProbe.DOCUMENT_START"))
-        assertFalse(activity.contains("AiStudioWebSessionR18RuntimeBootstrap.DOCUMENT_START"))
-        assertFalse(activity.contains("window.__AIS_R184_START_ORACLE__"))
-        assertFalse(activity.contains("document.querySelector("))
-        assertFalse(activity.contains(".click()"))
-        assertFalse(activity.contains("dispatchEvent("))
-        assertFalse(activity.contains("import android.view.MotionEvent"))
-        assertFalse(activity.contains("MotionEvent.obtain("))
-        assertFalse(activity.contains("getBoundingClientRect("))
-
-        assertTrue(manifest.contains(".ui.AiStudioWebSessionR18Activity"))
-        assertTrue(manifest.contains("AI Studio - 1 chạm Start"))
-        assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 2)
+        assertTrue(manifest.contains(".ui.AiStudioAccountActivity"))
+        assertTrue(manifest.contains(".MainActivity"))
+        assertTrue(Regex("android.intent.category.LAUNCHER").findAll(manifest).count() == 1)
+        assertFalse(manifest.contains(".ui.AiStudioWebSessionR"))
+        assertFalse(manifest.contains(".ui.AiStudioWebSessionLabActivity"))
+        assertFalse(manifest.contains("AI Studio - 1 chạm Start"))
     }
 }

@@ -24,6 +24,8 @@ jobs:
           java-version: '17'
       - name: Apply R18.7 source patch
         run: python3 tools/r187_patch.py
+      - name: Update R18.7 source assertions
+        run: python3 tools/r187_patch_tests.py
       - name: Verify R18.7 source markers
         shell: bash
         run: |
@@ -34,6 +36,7 @@ jobs:
           grep -q 'R12_NATIVE_SUBMIT_ACK' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           grep -q 'VISIBLE_WEBVIEW_RETAINED' app/src/main/java/com/oai/geminilivetranslate/network/AiStudioNativeTapDebugSupport.kt
           grep -q 'r5-start-ack-persistent-debug' app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt
+          grep -q 'executorUsesDirectEngineThenNativeComposerTapBeforeLegacyFallback' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
           python3 tools/check_no_secrets.py
           python3 tools/verify_project.py
           python3 tools/verify_github_ready.py
@@ -70,10 +73,11 @@ jobs:
           set -euo pipefail
           rm -f .github/workflows/r187-reliability-build.yml
           rm -f tools/r187_patch.py
+          rm -f tools/r187_patch_tests.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java app/src/test/java
-          git add -u .github/workflows/r187-reliability-build.yml tools/r187_patch.py
+          git add -u .github/workflows/r187-reliability-build.yml tools/r187_patch.py tools/r187_patch_tests.py
           git diff --cached --check
           git diff --cached --quiet && { echo "No validated R18.7 source changes"; exit 1; }
           git commit -m "fix: make AI Studio activation acknowledgement-driven"

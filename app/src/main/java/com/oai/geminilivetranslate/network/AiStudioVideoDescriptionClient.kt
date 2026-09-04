@@ -59,7 +59,7 @@ class AiStudioVideoDescriptionClient(
         onProgress("Đang chọn model mô tả video...", 8)
         selectModel(exec)
         throwIfCancelled()
-        onProgress("Đang gắn nguyên video vào AI Studio...", 12)
+        onProgress("Đang tải và chờ AI Studio xử lý nguyên video...", 12)
         attachVideo(exec, uri, displayName, mimeType, sourceBytes)
         throwIfCancelled()
 
@@ -212,7 +212,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         if (!latch.await(95, TimeUnit.SECONDS)) error("Hết thời gian gắn video vào AI Studio")
         throwIfCancelled()
         if (!okRef.get()) error("Không gắn được video vào AI Studio: ${detailRef.get().take(500)}")
-        logger.log(2, TAG, "Attachment ready name=$displayName size=$size")
+        logger.log(2, TAG, "Attachment upload-ready name=$displayName size=$size")
     }
 
     private fun generateAndAwait(

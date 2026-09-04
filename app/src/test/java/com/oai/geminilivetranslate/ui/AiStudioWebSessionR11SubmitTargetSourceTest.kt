@@ -32,7 +32,7 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     @Test
     fun executorUsesDirectEngineThenNativeComposerTapBeforeLegacyFallback() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(src.contains("2026-09-04-web-session-r12.2-native-submit-persistent-debug"))
+        assertTrue(src.contains("2026-09-04-web-session-r12.3-upload-ready-native-submit"))
         assertTrue(src.contains("AiStudioWebSessionDirectEngine.DOCUMENT_START"))
         assertTrue(src.contains("tryDirectEngineRecovery"))
         assertTrue(src.contains("R12_DIRECT_RECOVERY_START"))
@@ -43,6 +43,14 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
         assertTrue(src.contains("tryNativeAttachmentSubmit"))
         assertTrue(src.contains("nativeTapController.requestNativeTap"))
         assertTrue(src.contains("R12_NATIVE_SUBMIT_ACK"))
+        assertTrue(src.contains("R18_ATTACHMENT_WAIT_UPLOAD"))
+        assertTrue(src.contains("R18_ATTACHMENT_UPLOAD_READY"))
+        val requestFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
+        val submitFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt")
+        assertTrue(requestFix.contains("uploadSettled"))
+        assertTrue(requestFix.contains("submitReady"))
+        assertTrue(requestFix.contains("ready:ready"))
+        assertTrue(submitFix.contains("submissionReadinessIfAttachment"))
         assertFalse(src.contains("dispatchTouchEvent"))
         assertFalse(src.contains("MotionEvent"))
         assertFalse(src.contains("InputDevice.SOURCE_TOUCHSCREEN"))

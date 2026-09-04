@@ -98,6 +98,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastBootstrapRecoveryAt = 0L
     @Volatile private var lastBootstrapInstallError = ""
     @Volatile private var pageGeneration = 0
+    @Volatile private var startSessionRecoveryAttempts = 0
+    @Volatile private var lastStartSessionRecoveryAt = 0L
 
     fun connect() {
         if (closed.get()) return
@@ -517,6 +519,10 @@ internal class AiStudioWebRealtimeClient(
             configureBootstrapIfNeeded()
             requestStates()
             maybeSilenceCarrier(force = false)
+            if (!setupDelivered.get() && recoverStartSessionIfNeeded(current, now)) {
+                main.postDelayed(this, HEALTH_TICK_MS)
+                return
+            }
 
             if (!setupDelivered.get()) {
                 val stalledFor = now - lastBootstrapProgressAt.coerceAtLeast(connectingStartedAt)
@@ -537,6 +543,32 @@ internal class AiStudioWebRealtimeClient(
             }
             main.postDelayed(this, HEALTH_TICK_MS)
         }
+    }
+
+    private fun recoverStartSessionIfNeeded(current: WebView, now: Long): Boolean {
+        if (serverSetupSeen || setupDelivered.get() || startSessionRecoveryAttempts >= MAX_START_SESSION_RECOVERY_ATTEMPTS) return false
+        val bootstrap = runCatching { JSONObject(lastBootstrapState) }.getOrNull() ?: return false
+        val timedOut = bootstrap.optInt("startAckTimeouts", 0) > 0 && bootstrap.optString("lastAction") == "start-ack-timeout"
+        val noCandidate = bootstrap.optInt("startCandidates", 0) == 0
+        if (!timedOut || !noCandidate) return false
+        if (lastStartSessionRecoveryAt > 0L && now - lastStartSessionRecoveryAt < START_SESSION_RECOVERY_MIN_INTERVAL_MS) return false
+        startSessionRecoveryAttempts += 1
+        lastStartSessionRecoveryAt = now
+        configured = false
+        bootstrapInstalled = false
+        bootstrapRecoveryAttempts = 0
+        bootstrapRecoveryInFlight = false
+        lastBootstrapRecoveryAt = 0L
+        lastBootstrapInstallError = ""
+        lastBootstrapState = ""
+        lastBootstrapSignature = ""
+        lastLanguageGuardState = ""
+        languageGuardConfigured = false
+        serverSetupSeen = false
+        markBootstrapProgress("start-session-recovery-$startSessionRecoveryAttempts")
+        logger.log(1, "AiStudioLive", "START_SESSION_RECOVERY attempt=$startSessionRecoveryAttempts/$MAX_START_SESSION_RECOVERY_ATTEMPTS reason=ack-timeout-no-start-control model=${targetLiveModel()} operation=$operationMode")
+        current.loadUrl(liveRouteUrl())
+        return true
     }
 
     private fun repairLiveRouteIfNeeded(current: WebView, currentUri: Uri?, now: Long): Boolean {
@@ -804,7 +836,7 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-ai-studio-live-r5-start-ack-persistent-debug"
+        const val VERSION = "2026-09-04-production-ai-studio-live-r6-progress-aware-start-debug"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
@@ -819,6 +851,8 @@ internal class AiStudioWebRealtimeClient(
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
         private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2
+        private const val MAX_START_SESSION_RECOVERY_ATTEMPTS = 2
+        private const val START_SESSION_RECOVERY_MIN_INTERVAL_MS = 10_000L
         private const val BOOTSTRAP_RECOVERY_MIN_INTERVAL_MS = 1_250L
         private const val MAX_BOOTSTRAP_RECOVERY_ATTEMPTS = 5
         private val BOOTSTRAP_RECOVERY_DELAYS_MS = longArrayOf(900L, 2_200L, 4_500L, 7_500L, 11_500L)

@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-02-web-session-r11.3-attachment-submit"
+    const val VERSION = "2026-09-04-web-session-r11.6-upload-ready-gate"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -130,7 +130,7 @@ object AiStudioWebSessionR11RequestFix {
           }
 
           function resetAttachmentObservation(name, mime, size) {
-            fix.attachmentWindowUntil = Date.now() + 90000;
+            fix.attachmentWindowUntil = Date.now() + 300000;
             fix.attachmentExpectedName = String(name || '').slice(0,260);
             fix.attachmentExpectedMime = String(mime || '').slice(0,180);
             fix.attachmentExpectedSize = Number(size || -1);
@@ -154,7 +154,7 @@ object AiStudioWebSessionR11RequestFix {
               name:fix.attachmentExpectedName,
               mime:fix.attachmentExpectedMime,
               size:fix.attachmentExpectedSize,
-              windowMs:90000
+              windowMs:300000
             });
           }
 
@@ -660,8 +660,18 @@ object AiStudioWebSessionR11RequestFix {
               };
 
               api.attachmentEvidence = function() {
+                let support={},submit={};
+                try{support=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentState?window.__AIS_R11_SUPPORT__.attachmentState(fix.attachmentExpectedName):{};}catch(_){}
+                try{submit=window.__AIS_R11_SUBMIT_TARGET__&&window.__AIS_R11_SUBMIT_TARGET__.submissionReadinessIfAttachment?window.__AIS_R11_SUBMIT_TARGET__.submissionReadinessIfAttachment():{};}catch(_){}
+                const present=attachmentPresent();
+                const activeUploads=Number(support.activeUploads||0),uploadStarted=Number(support.uploadStarted||0),uploadCompleted=Number(support.uploadCompleted||0),uploadFailed=Number(support.uploadFailed||0);
+                const uploadSettled=activeUploads===0&&(uploadStarted===0||(uploadCompleted+uploadFailed)>=uploadStarted);
+                const busy=!!support.busy,submitReady=!!submit.ready;
+                const ready=present&&!busy&&uploadSettled&&submitReady;
                 return {
-                  ok:true,version:fix.version,windowActive:attachmentWindowActive(),present:attachmentPresent(),nameVisible:attachmentNameVisible(),
+                  ok:true,version:fix.version,windowActive:attachmentWindowActive(),present:present,ready:ready,nameVisible:attachmentNameVisible(),busy:busy,submitReady:submitReady,
+                  submitScore:Number(submit.score||-1),submitDisabled:!!submit.disabled,submitLabel:String(submit.label||'').slice(0,180),
+                  uploadSettled:uploadSettled,activeUploads:activeUploads,uploadStarted:uploadStarted,uploadCompleted:uploadCompleted,uploadFailed:uploadFailed,
                   expectedName:fix.attachmentExpectedName,expectedMime:fix.attachmentExpectedMime,expectedSize:fix.attachmentExpectedSize,
                   fileChangeCount:fix.attachmentFileChangeCount,fileChangeMatched:fix.attachmentFileChangeMatched,
                   lastChangedName:fix.attachmentLastChangedName,lastChangedMime:fix.attachmentLastChangedMime,lastChangedSize:fix.attachmentLastChangedSize,

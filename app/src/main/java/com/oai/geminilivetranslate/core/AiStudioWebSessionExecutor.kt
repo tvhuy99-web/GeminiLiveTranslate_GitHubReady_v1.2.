@@ -96,6 +96,8 @@ class AiStudioWebSessionExecutor(
         val size: Long,
         val startedAt: Long,
         val callback: (Boolean, String) -> Unit,
+        var readyScans: Int = 0,
+        var readySince: Long = 0L,
     )
 
     private data class Pending(
@@ -246,9 +248,25 @@ class AiStudioWebSessionExecutor(
             val decoded = decodeEvalValue(raw)
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             val present = obj?.optBoolean("present", false) == true
-            events?.onLog("R18_ATTACHMENT_STATE", decoded.take(7000))
-            if (present) finishAttachment(token, true, decoded)
-            else main.postDelayed({ pollAttachment(token) }, 500L)
+            val ready = obj?.optBoolean("ready", false) == true
+            val now = SystemClock.uptimeMillis()
+            if (ready) {
+                item.readyScans += 1
+                if (item.readySince == 0L) item.readySince = now
+            } else {
+                item.readyScans = 0
+                item.readySince = 0L
+            }
+            events?.onLog("R18_ATTACHMENT_STATE", "readyScans=${item.readyScans} ${decoded.take(7000)}")
+            if (ready && item.readyScans >= ATTACHMENT_READY_STABLE_SCANS && now - item.readySince >= ATTACHMENT_READY_SETTLE_MS) {
+                events?.onLog("R18_ATTACHMENT_UPLOAD_READY", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt}")
+                finishAttachment(token, true, decoded)
+            } else {
+                if (present && !ready) {
+                    events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean("busy", false)} uploadSettled=${obj?.optBoolean("uploadSettled", false)} submitReady=${obj?.optBoolean("submitReady", false)} activeUploads=${obj?.optInt("activeUploads", 0)}")
+                }
+                main.postDelayed({ pollAttachment(token) }, 500L)
+            }
         }
     }
 
@@ -795,12 +813,14 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-04-web-session-r12.2-native-submit-persistent-debug"
+        const val VERSION = "2026-09-04-web-session-r12.3-upload-ready-native-submit"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
-        private const val ATTACHMENT_TIMEOUT_MS = 90_000L
+        private const val ATTACHMENT_TIMEOUT_MS = 300_000L
+        private const val ATTACHMENT_READY_SETTLE_MS = 1_200L
+        private const val ATTACHMENT_READY_STABLE_SCANS = 3
         private const val FIXED_TIMEOUT_MAX_MS = 300_000L
         private const val FIRST_PROGRESS_TIMEOUT_MS = 300_000L
         private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L

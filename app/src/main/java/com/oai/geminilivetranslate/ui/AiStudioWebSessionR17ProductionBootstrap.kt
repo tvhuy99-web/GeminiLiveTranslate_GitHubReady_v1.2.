@@ -12,7 +12,7 @@ package com.oai.geminilivetranslate.ui
  * No auth material, request body, cookie, token, or media payload is exported to diagnostics.
  */
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-04-web-session-r17.7-start-ack-retry"
+    const val VERSION = "2026-09-04-web-session-r17.8-progress-aware-start-ack"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val TARGET_MODEL = "function-specific"
@@ -22,7 +22,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-04-web-session-r17.7-start-ack-retry';
+  const VERSION='2026-09-04-web-session-r17.8-progress-aware-start-ack';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const state={
@@ -88,14 +88,20 @@ object AiStudioWebSessionR17ProductionBootstrap {
     let s=0;if(/\b(start|begin|connect|talk|speak|join)\b/.test(l))s+=9;if(l.indexOf('go live')>=0||l.indexOf('start session')>=0||l.indexOf('start live')>=0)s+=10;
     if(l.indexOf('microphone')>=0||l.indexOf(' mic')>=0)s+=5;if(l.indexOf('live')>=0||l.indexOf('stream')>=0)s+=2;return s;
   }
+  function startProgressEvidence(){
+    try{const o=window.__AIS_LIVE_OUTPUT_ENGINE__;const d=o&&typeof o.describe==='function'?o.describe():null;if(d&&Number(d.setupCompleteEvents||0)>0)return {progress:true,kind:'server-setup'};}catch(_){}
+    try{const l=window.__AIS_R183_LANGUAGE__;const d=l&&typeof l.describe==='function'?l.describe():null;if(d&&(d.targetLanguageVerified||Number(d.rewriteRequests||0)>0||Number(d.translateSetupRequests||0)>0))return {progress:true,kind:'language-setup'};}catch(_){}
+    try{const r=window.__AIS_LIVE_DIRECT_ENGINE__;const d=r&&typeof r.describe==='function'?r.describe():null;if(d&&(d.templateObserved||Number(d.carrierRequests||0)>0))return {progress:true,kind:'carrier-template'};}catch(_){}
+    return {progress:false,kind:'none'};
+  }
   function tryStart(snapshot){
     state.startScans++;if(setupSeen()){state.setupObserved=true;state.stage='setup-complete';state.lastBlocker='none';return;}
     if(!state.streamSelected){state.lastBlocker='waiting-stream';return;}if(!state.modelSeen&&!state.modelGuardInstalled){state.lastBlocker='waiting-model';return;}
     const now=Date.now();
     if(state.lastAction==='start-live'&&state.lastActionAt){
-      const age=now-state.lastActionAt;
-      if(age<3000){state.stage='start-clicked';state.lastBlocker='waiting-start-ack';return;}
-      state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts});
+      const age=now-state.lastActionAt,progress=startProgressEvidence(),limit=progress.progress?30000:10000;
+      if(age<limit){state.stage='start-clicked';state.lastBlocker=progress.progress?'waiting-start-ack-progress-'+progress.kind:'waiting-start-ack';return;}
+      state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts,progress:progress.progress,progressKind:progress.kind,limitMs:limit});
       state.lastAction='start-ack-timeout';state.lastActionAt=0;state.startStableScans=0;state.lastStartSignature='';
     }
     const scored=[];for(let i=0;i<snapshot.interactive.length;i++){const score=startScore(snapshot.interactive[i]);if(score>=7)scored.push({el:snapshot.interactive[i],score:score});}

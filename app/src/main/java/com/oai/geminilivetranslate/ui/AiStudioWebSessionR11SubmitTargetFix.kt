@@ -15,7 +15,7 @@ package com.oai.geminilivetranslate.ui
  * It never reads cookies, auth headers, passwords, API keys, or file bytes.
  */
 object AiStudioWebSessionR11SubmitTargetFix {
-    const val VERSION = "2026-09-04-web-session-r11.5-native-composer-submit"
+    const val VERSION = "2026-09-04-web-session-r11.6-upload-readiness-native-submit"
 
     val DOCUMENT_START: String = """
         (function(){
@@ -306,6 +306,15 @@ object AiStudioWebSessionR11SubmitTargetFix {
             return {ok:clicked,pending:true,attempted:true,baselineCaptureCount:baseline,score:best.score,label:best.label.slice(0,180),proven:provenButton===best.button};
           }
 
+          function submissionReadinessIfAttachment(){
+            const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
+            if(!attachmentPresent())return {ok:true,ready:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
+            const d=discover(),list=d.candidates;
+            if(!list.length)return {ok:true,ready:false,error:'NO_BUTTON_CANDIDATE',baselineCaptureCount:baseline,hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot};
+            const best=list[0],ready=!best.disabled&&best.score>=2500;
+            return {ok:true,ready:ready,disabled:!!best.disabled,score:best.score,label:best.label.slice(0,180),baselineCaptureCount:baseline,hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot,fingerprint:fingerprint(best.button,d.composerRoot,d.prompt,d.attachment)};
+          }
+
           function nativeTargetIfAttachment(){
             const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
             if(!attachmentPresent())return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
@@ -379,6 +388,7 @@ object AiStudioWebSessionR11SubmitTargetFix {
                 proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,
                 candidates:d.candidates.slice(0,10).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,listenerCount:x.listenerCount,listenerScore:x.listenerScore,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})};
             },
+            submissionReadinessIfAttachment:submissionReadinessIfAttachment,
             nativeTargetIfAttachment:nativeTargetIfAttachment,
             submitIfAttachment:submitIfAttachment,
             state:function(){return {ok:true,version:'$VERSION',submitAttempts:submitAttempts,proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,clickEntries:clickEntries.filter(function(e){return e.active;}).length};}

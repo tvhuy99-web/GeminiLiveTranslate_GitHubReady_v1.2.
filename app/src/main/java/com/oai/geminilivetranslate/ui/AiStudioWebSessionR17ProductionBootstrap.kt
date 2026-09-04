@@ -17,7 +17,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val TARGET_MODEL = "function-specific"
 
-    val DOCUMENT_START = """
+    val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
@@ -167,7 +167,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   function installOutputMute(){
     try{const A=window.AudioNode&&window.AudioNode.prototype;if(!A||typeof A.connect!=='function'||A.connect.__aisR176Muted)return;const native=A.connect,muteByContext=new WeakMap();const wrapped=function(destination){try{const name=destination&&destination.constructor&&destination.constructor.name||'';if(name==='AudioDestinationNode'&&this.context&&typeof this.context.createGain==='function'){let g=muteByContext.get(this.context);if(!g){g=this.context.createGain();g.gain.value=0;native.call(g,destination);muteByContext.set(this.context,g);}state.pageOutputMuted=true;return native.call(this,g);}}catch(_){}return native.apply(this,arguments);};wrapped.__aisR176Muted=true;A.connect=wrapped;diag('HOOK',{target:'webaudio-output-mute'});}catch(e){diag('HOOK_ERROR',{target:'webaudio-output-mute',name:String(e&&e.name||'Error')});}
   }
-  function detectAuth(){try{const h=String(location.hostname||'').toLowerCase();state.authRequired=h.indexOf('accounts.google.')>=0||h==='accounts.google.com';}catch(_){}
+  function detectAuth(){try{const h=String(location.hostname||'').toLowerCase();state.authRequired=h.indexOf('accounts.google.')>=0||h==='accounts.google.com';}catch(_){}}
   function reportDiscovery(){
     const signature=[state.stage,state.lastBlocker,state.streamSelected,state.modelSeen,state.modelVerified,state.targetLanguageVerified,state.setupObserved,state.startCandidates,state.startAttempts,state.modelGuardRequests,state.modelRewriteRequests,state.routeKind].join('|');
     if(signature===lastDiscoverySignature)return;lastDiscoverySignature=signature;

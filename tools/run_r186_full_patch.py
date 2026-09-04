@@ -30,3 +30,16 @@ script = script.replace(
 )
 print(f'Executing R18.6 full source patch: {len(script)} chars')
 exec(compile(script, '<r18.6-full-patch>', 'exec'), {'__name__': '__main__'})
+
+# The repository test suite uses JUnit4, not kotlin-test. Normalize the generated
+# source-routing regression test to the same imports used by the existing tests.
+test_path = Path('app/src/test/java/com/oai/geminilivetranslate/service/AiStudioAllModesRoutingSourceTest.kt')
+if test_path.is_file():
+    test_source = test_path.read_text()
+    test_source = test_source.replace('import kotlin.test.Test', 'import org.junit.Test')
+    test_source = test_source.replace('import kotlin.test.assertFalse', 'import org.junit.Assert.assertFalse')
+    test_source = test_source.replace('import kotlin.test.assertTrue', 'import org.junit.Assert.assertTrue')
+    test_path.write_text(test_source)
+    if 'import kotlin.test.' in test_source:
+        raise SystemExit('R18.6 generated test still contains kotlin.test imports')
+    print('R18.6 generated routing test normalized to JUnit4')

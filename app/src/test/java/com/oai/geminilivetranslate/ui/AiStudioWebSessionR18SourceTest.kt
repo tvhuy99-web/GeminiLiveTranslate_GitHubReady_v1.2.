@@ -20,7 +20,6 @@ class AiStudioWebSessionR18SourceTest {
     fun apiSettingsExposeExactlyTheOfficialConnectionChoiceWithoutRemovingExistingSettings() {
         val activity = source("ui/ApiSettingsActivity.kt")
         val modeStore = source("core/AiConnectionModeStore.kt")
-
         assertTrue(modeStore.contains("MODE_API_KEY = \"api_key\""))
         assertTrue(modeStore.contains("MODE_AI_STUDIO = \"ai_studio\""))
         assertTrue(modeStore.contains("LABEL_API_KEY = \"API Key\""))
@@ -111,6 +110,26 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
         assertFalse(bootstrap.contains("Authorization"))
         assertFalse(bootstrap.contains("document.cookie"))
+    }
+
+    @Test
+    fun hiddenLiveRuntimeIsIsolatedFromLegacyChatLabAndBootstrapRecoveryIsVerifiedAndBounded() {
+        val live = source("network/AiStudioWebRealtimeClient.kt")
+        assertTrue(live.contains("isolatedLiveHost=true"))
+        assertTrue(live.contains("WebView(appContext)"))
+        assertTrue(live.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
+        assertTrue(live.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
+        assertTrue(live.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
+        assertTrue(live.contains("MAX_BOOTSTRAP_RECOVERY_ATTEMPTS = 5"))
+        assertTrue(live.contains("RECOVERY_FAILED"))
+        assertTrue(live.contains("R17_BOOTSTRAP_INSTALL_FAILED"))
+        assertTrue(live.contains("bootstrapProbeScript"))
+        assertTrue(live.contains("bootstrapRecoveryScript"))
+        assertTrue(live.contains("lastBootstrapInstallError"))
+        assertFalse(live.contains("AiStudioWebSessionExecutor"))
+        assertFalse(live.contains("AiStudioWebSessionLabScripts"))
+        assertFalse(live.contains("AiStudioWebSessionAdaptiveRuntime"))
+        assertFalse(live.contains("AiStudioWebSessionR11SubmitTargetFix"))
     }
 
     @Test

@@ -177,13 +177,30 @@ class GeminiLiveClient(
     private fun handleAiStudioTerminal(error: Throwable?, closedReason: String?) {
         if (closed.get()) return
         val detail = error?.message ?: closedReason ?: "AI Studio closed"
+        val localBootstrapFatal = !aiStudioSetupComplete && (
+            detail.startsWith("R17_BOOTSTRAP_INSTALL_FAILED") ||
+                detail.startsWith("AI_STUDIO_LIVE_SETUP_HARD_TIMEOUT") ||
+                detail.startsWith("AI_STUDIO_LIVE_SETUP_STALLED")
+            )
         logger.log(
             if (aiStudioSetupComplete) 1 else 0,
             "LiveBackend",
-            "AI_STUDIO_TERMINAL setup=$aiStudioSetupComplete strictMode=true reason=${detail.replace('\n', ' ').take(500)}",
+            "AI_STUDIO_TERMINAL setup=$aiStudioSetupComplete strictMode=true localBootstrapFatal=$localBootstrapFatal reason=${detail.replace('\n', ' ').take(500)}",
             error,
         )
-        if (error != null) listener.onError(error) else listener.onClosed(detail)
+        when {
+            error != null && localBootstrapFatal -> {
+                logger.log(
+                    0,
+                    "LiveBackend",
+                    "AI_STUDIO_LOCAL_BOOTSTRAP_FATAL noRetry=true reason=${detail.replace('\n', ' ').take(500)}",
+                    error,
+                )
+                listener.onError(GeminiApiException(400, "AI_STUDIO_LOCAL_BOOTSTRAP_FATAL: $detail"))
+            }
+            error != null -> listener.onError(error)
+            else -> listener.onClosed(detail)
+        }
     }
 
     private fun connectApi() {

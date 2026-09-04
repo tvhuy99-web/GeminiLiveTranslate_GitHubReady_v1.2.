@@ -1,7 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
 import android.annotation.SuppressLint
-import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -107,12 +106,13 @@ class AiStudioAccountActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 val host = safeHost(url)
+                val ready = host == "aistudio.google.com"
                 statusView.text = when {
-                    host == "aistudio.google.com" -> "AI Studio đã mở. Nếu thấy nội dung AI Studio, phiên đăng nhập đã sẵn sàng."
+                    ready -> "AI Studio đã mở. Nếu thấy nội dung AI Studio, phiên đăng nhập đã sẵn sàng."
                     host.contains("accounts.google") -> "Hãy hoàn tất đăng nhập hoặc chọn tài khoản Google."
                     else -> "Trang tài khoản đang ở host=$host"
                 }
-                logger.log(2, "AiStudioAccount", "pageFinished host=$host aiStudioReady=${host == \"aistudio.google.com\"}")
+                logger.log(2, "AiStudioAccount", "pageFinished host=$host aiStudioReady=$ready")
             }
         }
     }

@@ -20,6 +20,7 @@ class AiStudioWebSessionR18SourceTest {
     fun apiSettingsExposeExactlyTheOfficialConnectionChoiceWithoutRemovingExistingSettings() {
         val activity = source("ui/ApiSettingsActivity.kt")
         val modeStore = source("core/AiConnectionModeStore.kt")
+
         assertTrue(modeStore.contains("MODE_API_KEY = \"api_key\""))
         assertTrue(modeStore.contains("MODE_AI_STUDIO = \"ai_studio\""))
         assertTrue(modeStore.contains("LABEL_API_KEY = \"API Key\""))
@@ -91,6 +92,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(catalog.contains("fileTranscribe="))
         assertTrue(catalog.contains("subtitleTranslate="))
         assertTrue(catalog.contains("videoDescription="))
+        assertTrue(bootstrap.contains("r17.6-lean-live-bootstrap"))
         assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
         assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }
@@ -113,23 +115,24 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun hiddenLiveRuntimeIsIsolatedFromLegacyChatLabAndBootstrapRecoveryIsVerifiedAndBounded() {
-        val live = source("network/AiStudioWebRealtimeClient.kt")
-        assertTrue(live.contains("isolatedLiveHost=true"))
-        assertTrue(live.contains("WebView(appContext)"))
-        assertTrue(live.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
-        assertTrue(live.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
-        assertTrue(live.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
-        assertTrue(live.contains("MAX_BOOTSTRAP_RECOVERY_ATTEMPTS = 5"))
-        assertTrue(live.contains("RECOVERY_FAILED"))
-        assertTrue(live.contains("R17_BOOTSTRAP_INSTALL_FAILED"))
-        assertTrue(live.contains("bootstrapProbeScript"))
-        assertTrue(live.contains("bootstrapRecoveryScript"))
-        assertTrue(live.contains("lastBootstrapInstallError"))
-        assertFalse(live.contains("AiStudioWebSessionExecutor"))
-        assertFalse(live.contains("AiStudioWebSessionLabScripts"))
-        assertFalse(live.contains("AiStudioWebSessionAdaptiveRuntime"))
-        assertFalse(live.contains("AiStudioWebSessionR11SubmitTargetFix"))
+    fun hiddenLiveBackendUsesIsolatedWebViewAndBoundedVerifiedBootstrapRecovery() {
+        val realtime = source("network/AiStudioWebRealtimeClient.kt")
+        assertTrue(realtime.contains("isolatedLiveHost=true"))
+        assertTrue(realtime.contains("val created = WebView(appContext)"))
+        assertTrue(realtime.contains("AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START"))
+        assertTrue(realtime.contains("AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START"))
+        assertTrue(realtime.contains("AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START"))
+        assertTrue(realtime.contains("bootstrapProbeScript"))
+        assertTrue(realtime.contains("RECOVERY_BEGIN"))
+        assertTrue(realtime.contains("RECOVERY_OK"))
+        assertTrue(realtime.contains("RECOVERY_FAILED"))
+        assertTrue(realtime.contains("R17_BOOTSTRAP_INSTALL_FAILED"))
+        assertTrue(realtime.contains("MAX_BOOTSTRAP_RECOVERY_ATTEMPTS = 5"))
+        assertTrue(realtime.contains("generation != pageGeneration"))
+        assertFalse(realtime.contains("AiStudioWebSessionExecutor"))
+        assertFalse(realtime.contains("AiStudioWebSessionLabScripts"))
+        assertFalse(realtime.contains("AiStudioWebSessionAdaptiveRuntime"))
+        assertFalse(realtime.contains("AiStudioWebSessionR11SubmitTargetFix"))
     }
 
     @Test

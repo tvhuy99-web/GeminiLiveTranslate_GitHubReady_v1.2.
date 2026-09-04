@@ -22,6 +22,8 @@ import com.oai.geminilivetranslate.audio.RobustTtsEngine
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.audio.VideoAudioExtractor
 import com.oai.geminilivetranslate.core.AiApiSettingsStore
+import com.oai.geminilivetranslate.core.AiConnectionModeStore
+import com.oai.geminilivetranslate.core.AiStudioLiveBackendPolicy
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.AppSettings
@@ -38,6 +40,7 @@ import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.core.TimelineWavMixer
 import com.oai.geminilivetranslate.core.WavWriter
+import com.oai.geminilivetranslate.network.AiStudioVideoDescriptionClient
 import com.oai.geminilivetranslate.network.GeminiApiErrorClassifier
 import com.oai.geminilivetranslate.network.GeminiFileTranscribeClient
 import com.oai.geminilivetranslate.network.GeminiLiveClient
@@ -97,7 +100,9 @@ class TranslationService : LifecycleService() {
     @Volatile private var source: AudioSource? = null
     private var sourceJob: Job? = null
     @Volatile private var videoDescriptionClient: GeminiVideoDescriptionClient? = null
+    @Volatile private var aiStudioVideoDescriptionClient: AiStudioVideoDescriptionClient? = null
     @Volatile private var proxyVideoDescriptionClient: OpenAiCompatibleVideoDescriptionClient? = null
+    @Volatile private var transcribeFileViaLive = false
     private var subtitleTranslationJob: Job? = null
     private var historySaveJob: Job? = null
     private var currentHistorySession: HistorySession? = null
@@ -289,6 +294,8 @@ class TranslationService : LifecycleService() {
         speakerDiarization = preferences.loadSpeakerDiarization()
         currentMode = mode
         val aiApi = AiApiSettingsStore(this).load()
+        val connectionMode = AiStudioLiveBackendPolicy.connectionMode(this)
+        val aiStudioMode = connectionMode == AiConnectionModeStore.MODE_AI_STUDIO
         val useProxyVideoDescription =
             isVideoDescriptionMode() && aiApi.provider == AiApiSettingsStore.PROVIDER_OPENAI
         val apiKey = if (useProxyVideoDescription) null else keyStore.currentGeminiKey()
@@ -297,11 +304,21 @@ class TranslationService : LifecycleService() {
                 updateError("Chưa chọn model OpenAI-compatible")
                 return
             }
-        } else if (apiKey.isNullOrBlank()) {
+        } else if (!aiStudioMode && apiKey.isNullOrBlank()) {
             updateError("Chưa có Gemini API Key")
             return
         }
-        val geminiApiKey = apiKey.orEmpty()
+        val geminiCredential = if (aiStudioMode) {
+            AiStudioLiveBackendPolicy.liveCredential(apiKey).orEmpty()
+        } else {
+            apiKey.orEmpty()
+        }
+        val useLiveFileTranscribe = aiStudioMode && isTranscribeMode() && mode == SourceMode.FILE
+        logger.log(
+            2,
+            "BackendRoute",
+            "START connectionMode=$connectionMode processing=$processingMode source=$mode apiKeyRequired=${!aiStudioMode && !useProxyVideoDescription} liveFileTranscribe=$useLiveFileTranscribe videoProvider=${aiApi.provider}",
+        )
         if (mode == SourceMode.FILE && selectedUri == null) {
             updateError(if (isVideoDescriptionMode()) "Chưa chọn video" else "Chưa chọn tệp âm thanh/video")
             return
@@ -338,6 +355,7 @@ class TranslationService : LifecycleService() {
         }
 
         resetSessionState()
+        transcribeFileViaLive = useLiveFileTranscribe
         sessionStartedAt = SystemClock.elapsedRealtime()
         sessionId = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + "-" + UUID.randomUUID().toString().take(8)
         DiagnosticContext.clearSession()
@@ -389,7 +407,7 @@ class TranslationService : LifecycleService() {
             return
         }
 
-        if (isTranscribeMode() && mode == SourceMode.FILE) {
+        if (isTranscribeMode() && mode == SourceMode.FILE && !transcribeFileViaLive) {
             runCatching { acquireWakeLock() }.onFailure {
                 logger.log(0, "TranscribeFile", "Không tạo được wake lock", it)
             }
@@ -430,9 +448,9 @@ class TranslationService : LifecycleService() {
             "Session",
             "Bắt đầu session=$sessionId nguồn=$mode model=${activeModelName()} processing=$processingMode đích=${settings.targetLanguage} profile=${settings.performanceProfile} queue=${settings.pacingMaxBuffer} quality=${settings.qualityMode} fileSpeed=${formatFileSpeed()}x",
         )
-        liveApiKey = geminiApiKey
+        liveApiKey = geminiCredential
         startHealthMonitor()
-        connectGemini(geminiApiKey)
+        connectGemini(geminiCredential)
     }
 
     fun stopTranslation(
@@ -457,6 +475,8 @@ class TranslationService : LifecycleService() {
         healthJob?.cancel(); healthJob = null
         source?.stop(); source = null
         videoDescriptionClient?.cancel()
+        aiStudioVideoDescriptionClient?.cancel()
+        aiStudioVideoDescriptionClient = null
         proxyVideoDescriptionClient?.cancel()
         sourceJob?.cancel(); sourceJob = null
         sourceStarted = false
@@ -509,12 +529,13 @@ class TranslationService : LifecycleService() {
         }
         sessionStartedAt = 0L
         sessionId = ""
+        transcribeFileViaLive = false
         stopping.set(false)
     }
 
     fun pause() {
         if (!_state.value.running || _state.value.paused) return
-        if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+        if (usesLiveTranscription()) {
             finalizeLiveTranscriptionFallback("reconnect")
         }
         source?.pause()
@@ -1387,7 +1408,7 @@ class TranslationService : LifecycleService() {
 
                 override fun onTurnComplete() {
                     if (generation != connectionGeneration) return
-                    if (isTranscribeMode() && currentMode != SourceMode.FILE) {
+                    if (usesLiveTranscription()) {
                         finalizeLiveTranscriptionFallback("turnComplete")
                     }
                     lastRawTranscript = ""
@@ -1561,6 +1582,45 @@ class TranslationService : LifecycleService() {
                     } finally {
                         proxy.close()
                         if (proxyVideoDescriptionClient === proxy) proxyVideoDescriptionClient = null
+                    }
+                } else if (AiStudioLiveBackendPolicy.preferAiStudio(this@TranslationService)) {
+                    val aiStudio = AiStudioVideoDescriptionClient(
+                        context = this@TranslationService,
+                        logger = logger,
+                        includeOutputInLogs = settings.logIncludeTranscript,
+                        model = aiApi.geminiModel,
+                        timelinePromptTemplate = aiApi.timelinePrompt,
+                        summaryPromptTemplate = aiApi.summaryPrompt,
+                        requestTimeoutMs = aiApi.requestTimeoutMs,
+                    )
+                    aiStudioVideoDescriptionClient = aiStudio
+                    try {
+                        updateState {
+                            it.copy(
+                                status = "Đang mở AI Studio để mô tả video...",
+                                progressPercent = 0,
+                            )
+                        }
+                        aiStudio.describe(
+                            resolver = contentResolver,
+                            uri = uri,
+                            displayName = name,
+                            mimeType = mimeType,
+                            durationMs = durationMs,
+                            mode = modeValue,
+                            onProgress = { status, percent ->
+                                updateState {
+                                    it.copy(
+                                        status = status,
+                                        progressPercent = percent.coerceIn(0, 98),
+                                    )
+                                }
+                            },
+                            onPartial = partial,
+                        )
+                    } finally {
+                        aiStudio.close()
+                        if (aiStudioVideoDescriptionClient === aiStudio) aiStudioVideoDescriptionClient = null
                     }
                 } else {
                     val resolvedMime = geminiVideoMimeType(uri, name, mimeType)
@@ -2034,7 +2094,12 @@ class TranslationService : LifecycleService() {
                     fileInputEnded = true
                     closeInputAccumulator(send = true)
                     enqueueInputStreamEnd()
-                    updateState { it.copy(status = "Đã gửi hết audio; đang chờ Gemini hoàn tất bản dịch...", progressPercent = 100) }
+                    updateState {
+                        it.copy(
+                            status = if (isTranscribeMode()) "Đã gửi hết audio; đang chờ Gemini hoàn tất chép lời..." else "Đã gửi hết audio; đang chờ Gemini hoàn tất bản dịch...",
+                            progressPercent = 100,
+                        )
+                    }
                     fileFinishFallbackJob?.cancel()
                     fileFinishFallbackJob = serviceScope.launch {
                         delay(60_000)
@@ -2252,8 +2317,11 @@ class TranslationService : LifecycleService() {
         )
     }
 
+    private fun usesLiveTranscription(): Boolean =
+        isTranscribeMode() && (currentMode != SourceMode.FILE || transcribeFileViaLive)
+
     private fun finalizeLiveTranscriptionFallback(reason: String) {
-        if (!isTranscribeMode() || currentMode == SourceMode.FILE) return
+        if (!usesLiveTranscription()) return
         val preview = mergeLiveTranscript(liveCommittedTranscript, liveInterimTranscript).trim()
         if (preview.isBlank()) {
             logger.log(

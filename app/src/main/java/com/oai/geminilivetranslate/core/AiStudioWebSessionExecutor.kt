@@ -3,6 +3,7 @@ package com.oai.geminilivetranslate.core
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +15,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.ValueCallback
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -24,8 +26,12 @@ import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionDirectEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11RequestFix
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11SubmitTargetFix
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11Support
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionResponseCore
+import com.oai.geminilivetranslate.network.AiStudioDebugWebViewHost
+import com.oai.geminilivetranslate.network.AiStudioNativeTapController
 import org.json.JSONObject
 import org.json.JSONTokener
 
@@ -78,6 +84,19 @@ class AiStudioWebSessionExecutor(
     private var seq = 0
     private var pending: Pending? = null
     private var directRecoverySeq = -1
+    private var attachmentSeq = 0
+    private var activeAttachment: PendingAttachment? = null
+    private val nativeTapController = AiStudioNativeTapController(webView, null)
+
+    private data class PendingAttachment(
+        val token: Int,
+        val uri: Uri,
+        val name: String,
+        val mimeType: String,
+        val size: Long,
+        val startedAt: Long,
+        val callback: (Boolean, String) -> Unit,
+    )
 
     private data class Pending(
         val seq: Int,
@@ -110,6 +129,7 @@ class AiStudioWebSessionExecutor(
         events?.onLog("R12_START_URL", "source=$source host=${runCatching { android.net.Uri.parse(resolvedUrl).host }.getOrNull().orEmpty()}")
         setState(State.LOADING, "loading AI Studio source=$source")
         pageFinished = false
+        AiStudioDebugWebViewHost.attach(webView, null)
         webView.loadUrl(resolvedUrl)
     }
 
@@ -131,6 +151,113 @@ class AiStudioWebSessionExecutor(
                 }
             }
         }
+    }
+
+
+    fun selectModel(modelId: String, callback: (Boolean, String) -> Unit) {
+        main.post {
+            if (destroyed || !pageFinished) {
+                callback(false, "NOT_READY")
+                return@post
+            }
+            val script = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.selectModel?window.__AIS_R11_SUPPORT__.selectModel(${JSONObject.quote(modelId)}):({ok:false,error:'r11-support-not-installed'}))"
+            webView.evaluateJavascript(script) { raw ->
+                val decoded = decodeEvalValue(raw)
+                val ok = runCatching { JSONObject(decoded).optBoolean("ok", false) }.getOrDefault(false)
+                events?.onLog("R18_MODEL_SELECT", decoded.take(6000))
+                callback(ok, decoded)
+            }
+        }
+    }
+
+    fun attachFile(
+        uri: Uri,
+        displayName: String,
+        mimeType: String,
+        size: Long,
+        callback: (Boolean, String) -> Unit,
+    ) {
+        main.post {
+            if (destroyed || !pageFinished || state != State.READY) {
+                callback(false, "NOT_READY")
+                return@post
+            }
+            if (activeAttachment != null) {
+                callback(false, "ATTACHMENT_BUSY")
+                return@post
+            }
+            attachmentSeq += 1
+            val item = PendingAttachment(
+                token = attachmentSeq,
+                uri = uri,
+                name = displayName.take(260),
+                mimeType = mimeType.take(180),
+                size = size,
+                startedAt = SystemClock.uptimeMillis(),
+                callback = callback,
+            )
+            activeAttachment = item
+            events?.onLog("R18_ATTACHMENT_START", "token=${item.token} name=${item.name} mime=${item.mimeType} size=${item.size}")
+            armAttachment(item.token, 0)
+        }
+    }
+
+    private fun armAttachment(token: Int, attempt: Int) {
+        val item = activeAttachment ?: return
+        if (item.token != token || destroyed) return
+        if (attempt > 7) {
+            finishAttachment(token, false, "FILE_INPUT_NOT_FOUND")
+            return
+        }
+        val script = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.armTrustedFileChooser?window.__AIS_R11_SUPPORT__.armTrustedFileChooser():({ok:false,error:'r11-file-arm-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (activeAttachment?.token != token) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            events?.onLog("R18_ATTACHMENT_ARM", "attempt=$attempt ${decoded.take(5000)}")
+            if (obj?.optBoolean("ok") == true) {
+                main.postDelayed({
+                    if (activeAttachment?.token != token) return@postDelayed
+                    nativeTapController.requestNativeTap("{\"xRatio\":0.5,\"yRatio\":0.5,\"tag\":\"FILE_CHOOSER\",\"role\":\"attachment\"}")
+                    main.postDelayed({ pollAttachment(token) }, 350L)
+                }, 120L)
+            } else {
+                // If the file input is lazily created, ask the page's own attachment control to expose it,
+                // then arm the trusted click again. The actual URI is still supplied only by WebChromeClient.
+                val expose = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachFile?window.__AIS_R11_SUPPORT__.attachFile():({ok:false,error:'r11-attach-not-installed'}))"
+                webView.evaluateJavascript(expose) { exposed ->
+                    events?.onLog("R18_ATTACHMENT_EXPOSE", decodeEvalValue(exposed).take(5000))
+                    main.postDelayed({ armAttachment(token, attempt + 1) }, 550L)
+                }
+            }
+        }
+    }
+
+    private fun pollAttachment(token: Int) {
+        val item = activeAttachment ?: return
+        if (item.token != token || destroyed) return
+        if (SystemClock.uptimeMillis() - item.startedAt > ATTACHMENT_TIMEOUT_MS) {
+            finishAttachment(token, false, "ATTACHMENT_TIMEOUT")
+            return
+        }
+        val script = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():({ok:false,error:'r11-attachment-evidence-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (activeAttachment?.token != token) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val present = obj?.optBoolean("present", false) == true
+            events?.onLog("R18_ATTACHMENT_STATE", decoded.take(7000))
+            if (present) finishAttachment(token, true, decoded)
+            else main.postDelayed({ pollAttachment(token) }, 500L)
+        }
+    }
+
+    private fun finishAttachment(token: Int, ok: Boolean, detail: String) {
+        val item = activeAttachment ?: return
+        if (item.token != token) return
+        activeAttachment = null
+        events?.onLog("R18_ATTACHMENT_DONE", "token=$token ok=$ok detail=${detail.take(5000)}")
+        item.callback(ok, detail)
     }
 
     fun generate(
@@ -217,6 +344,9 @@ class AiStudioWebSessionExecutor(
         cancelCurrent()
         destroyed = true
         state = State.DESTROYED
+        activeAttachment?.let { it.callback(false, "DESTROYED") }
+        activeAttachment = null
+        AiStudioDebugWebViewHost.detach(webView, null)
         runCatching {
             webView.stopLoading()
             webView.removeJavascriptInterface(JS_BRIDGE_NAME)
@@ -548,6 +678,8 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionResponseCore.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, R11_BROAD_FALLBACK_GUARD, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11Support.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11RequestFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionDirectEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
@@ -581,7 +713,23 @@ class AiStudioWebSessionExecutor(
                 setState(State.ERROR, "SSL error ${error?.primaryError}")
             }
         }
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?,
+            ): Boolean {
+                val item = activeAttachment ?: return false
+                val callback = filePathCallback ?: return false
+                callback.onReceiveValue(arrayOf(item.uri))
+                val mark = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.markFileChooserServed?window.__AIS_R11_SUPPORT__.markFileChooserServed(${JSONObject.quote(item.name)},${JSONObject.quote(item.mimeType)},${item.size}):({ok:false,error:'r11-mark-file-not-installed'}))"
+                this@AiStudioWebSessionExecutor.webView.evaluateJavascript(mark) { raw ->
+                    events?.onLog("R18_ATTACHMENT_URI_SERVED", decodeEvalValue(raw).take(5000))
+                    main.postDelayed({ pollAttachment(item.token) }, 250L)
+                }
+                return true
+            }
+        }
     }
 
     private fun inspectDirectEngine(source: String) {
@@ -598,6 +746,7 @@ class AiStudioWebSessionExecutor(
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
         private const val DEFAULT_TIMEOUT_MS = 20_000L
+        private const val ATTACHMENT_TIMEOUT_MS = 90_000L
         private const val FIXED_TIMEOUT_MAX_MS = 300_000L
         private const val FIRST_PROGRESS_TIMEOUT_MS = 300_000L
         private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L

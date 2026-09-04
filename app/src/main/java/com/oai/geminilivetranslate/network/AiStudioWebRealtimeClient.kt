@@ -665,10 +665,16 @@ internal class AiStudioWebRealtimeClient(
         if (signature == lastBootstrapSignature) return
         lastBootstrapSignature = signature
         markBootstrapProgress(signature.take(180))
+        val r17LanguageVerified = bootstrap.optBoolean("targetLanguageVerified", false)
+        val r18LanguageVerified = runCatching {
+            JSONObject(lastLanguageGuardState).optBoolean("targetLanguageVerified", false)
+        }.getOrDefault(false)
+        val effectiveLanguageVerified =
+            operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE || r18LanguageVerified
         logger.log(
             2,
             "AiStudioStage",
-            "stage=${bootstrap.optString("stage", "?")} blocker=${bootstrap.optString("lastBlocker", "?")} route=${bootstrap.optString("routeKind", "?")} model=${bootstrap.optString("targetModel", targetLiveModel())} modelSeen=${bootstrap.optBoolean("modelSeen", false)} modelVerified=${bootstrap.optBoolean("modelVerified", false)} language=$targetLanguage languageUi=${bootstrap.optBoolean("languageUiSelected", false)} languageVerified=${bootstrap.optBoolean("targetLanguageVerified", false)} startScans=${bootstrap.optInt("startScans", 0)} startCandidates=${bootstrap.optInt("startCandidates", 0)} startAttempts=${bootstrap.optInt("startAttempts", 0)} setup=${bootstrap.optBoolean("setupObserved", false)} carrier=${bootstrap.optBoolean("carrierActive", false)} syntheticCarrier=${bootstrap.optBoolean("syntheticCarrier", false)} lastAction=${safe(bootstrap.optString("lastAction", ""), 100)}",
+            "stage=${bootstrap.optString("stage", "?")} blocker=${bootstrap.optString("lastBlocker", "?")} route=${bootstrap.optString("routeKind", "?")} model=${bootstrap.optString("targetModel", targetLiveModel())} modelSeen=${bootstrap.optBoolean("modelSeen", false)} modelVerified=${bootstrap.optBoolean("modelVerified", false)} language=$targetLanguage languageUi=${bootstrap.optBoolean("languageUiSelected", false)} languageVerified=$effectiveLanguageVerified r17LanguageVerified=$r17LanguageVerified r18LanguageVerified=$r18LanguageVerified startScans=${bootstrap.optInt("startScans", 0)} startCandidates=${bootstrap.optInt("startCandidates", 0)} startAttempts=${bootstrap.optInt("startAttempts", 0)} setup=${bootstrap.optBoolean("setupObserved", false)} carrier=${bootstrap.optBoolean("carrierActive", false)} syntheticCarrier=${bootstrap.optBoolean("syntheticCarrier", false)} lastAction=${safe(bootstrap.optString("lastAction", ""), 100)}",
         )
     }
 

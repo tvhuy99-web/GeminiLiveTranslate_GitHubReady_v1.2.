@@ -21,7 +21,7 @@ object AiStudioWebSessionR18LanguageGuard {
   const VERSION='2026-09-03-r18.3a-network-language-guard';
   const TARGET_MODEL='gemini-3.5-live-translate-preview';
   const state={
-    targetLanguage:'vi',enabled:true,guardInstalled:false,
+    targetLanguage:'',enabled:false,guardInstalled:false,
     bidiRequests:0,setupRequests:0,translateSetupRequests:0,
     parseErrors:0,namedConfigSeen:0,namedConfigChanged:0,
     fallbackCandidateRequests:0,fallbackAppliedRequests:0,ambiguousFallbackRequests:0,
@@ -39,8 +39,8 @@ object AiStudioWebSessionR18LanguageGuard {
     }catch(_){}
   }
   function safeCode(value){
-    const s=String(value||'vi').trim().slice(0,32);
-    return /^[A-Za-z0-9-]+$/.test(s)?s:'vi';
+    const s=String(value||'').trim().slice(0,32);
+    return s&&/^[A-Za-z0-9-]+$/.test(s)?s:'';
   }
   function hashText(value){
     let h=2166136261;const s=String(value||'');
@@ -273,7 +273,9 @@ object AiStudioWebSessionR18LanguageGuard {
     state.lastFallbackPaths=[];state.lastModelPaths=[];
   }
   function configure(code){
-    state.targetLanguage=safeCode(code);state.enabled=true;resetCounters();
+    const safe=safeCode(code);resetCounters();
+    if(!safe){state.targetLanguage='';state.enabled=false;bridge('CONFIGURE_ERROR',{error:'TARGET_LANGUAGE_MISSING_OR_INVALID'});return {ok:false,error:'TARGET_LANGUAGE_MISSING_OR_INVALID'};}
+    state.targetLanguage=safe;state.enabled=true;
     bridge('CONFIGURE',{targetLanguageCode:state.targetLanguage});return describe();
   }
   function reset(){resetCounters();return describe();}

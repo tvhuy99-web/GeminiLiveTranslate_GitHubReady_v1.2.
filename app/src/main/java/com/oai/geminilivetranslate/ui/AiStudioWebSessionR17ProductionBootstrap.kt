@@ -12,7 +12,7 @@ package com.oai.geminilivetranslate.ui
  * No auth material, request body, cookie, token, or media payload is exported to diagnostics.
  */
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-04-web-session-r17.6-lean-live-bootstrap"
+    const val VERSION = "2026-09-04-web-session-r17.7-start-ack-retry"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val TARGET_MODEL = "function-specific"
@@ -22,7 +22,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-04-web-session-r17.6-lean-live-bootstrap';
+  const VERSION='2026-09-04-web-session-r17.7-start-ack-retry';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const state={
@@ -34,7 +34,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     stage:'boot',lastBlocker:'not-configured',lastAction:'',lastActionAt:0,lastTickAt:0,
     deepElements:0,interactiveControls:0,shadowRoots:0,frameDocuments:0,discoveryScans:0,
     streamScans:0,streamCandidates:0,streamAttempts:0,modelScans:0,modelCandidates:0,modelAttempts:0,modelSearchAttempts:0,
-    startScans:0,startCandidates:0,startAttempts:0,modelGuardInstalled:false,modelGuardRequests:0,
+    startScans:0,startCandidates:0,startAttempts:0,startAckTimeouts:0,startStableScans:0,lastStartSignature:'',modelGuardInstalled:false,modelGuardRequests:0,
     modelRewriteRequests:0,modelRewriteCount:0,routeKind:'other'
   };
   let synthetic=null,carrierGain=null,carrierContext=null,carrierOscillator=null,lastDiscoverySignature='';
@@ -91,10 +91,24 @@ object AiStudioWebSessionR17ProductionBootstrap {
   function tryStart(snapshot){
     state.startScans++;if(setupSeen()){state.setupObserved=true;state.stage='setup-complete';state.lastBlocker='none';return;}
     if(!state.streamSelected){state.lastBlocker='waiting-stream';return;}if(!state.modelSeen&&!state.modelGuardInstalled){state.lastBlocker='waiting-model';return;}
+    const now=Date.now();
+    if(state.lastAction==='start-live'&&state.lastActionAt){
+      const age=now-state.lastActionAt;
+      if(age<3000){state.stage='start-clicked';state.lastBlocker='waiting-start-ack';return;}
+      state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts});
+      state.lastAction='start-ack-timeout';state.lastActionAt=0;state.startStableScans=0;state.lastStartSignature='';
+    }
     const scored=[];for(let i=0;i<snapshot.interactive.length;i++){const score=startScore(snapshot.interactive[i]);if(score>=7)scored.push({el:snapshot.interactive[i],score:score});}
     scored.sort(function(a,b){return b.score-a.score;});state.startCandidates=scored.length;
-    if(scored.length&&state.startAttempts<8){state.startAttempts++;if(clickElement(scored[0].el,'start-live')){state.stage='start-clicked';state.lastBlocker='waiting-live-setup';buildSyntheticCarrier();return;}}
-    state.lastBlocker='start-control-not-found';
+    if(!scored.length){state.startStableScans=0;state.lastStartSignature='';state.lastBlocker='start-control-not-found';return;}
+    const best=scored[0],sig=[tag(best.el),role(best.el),label(best.el).slice(0,180)].join('|');
+    if(sig===state.lastStartSignature)state.startStableScans++;else{state.lastStartSignature=sig;state.startStableScans=1;}
+    if(state.startStableScans<2){state.lastBlocker='waiting-start-stable';return;}
+    if(state.startAttempts<6){
+      state.startAttempts++;
+      if(clickElement(best.el,'start-live')){state.stage='start-clicked';state.lastBlocker='waiting-start-ack';buildSyntheticCarrier();diag('START_ATTEMPT',{attempt:state.startAttempts,score:best.score,stableScans:state.startStableScans});return;}
+    }
+    state.lastBlocker=state.startAttempts>=6?'start-retries-exhausted':'start-control-not-found';
   }
   function patchTranslationTree(node,depth){
     const d=depth||0;if(d>12||node==null||typeof node!=='object')return {changed:0,seen:0};let changed=0,seen=0;
@@ -193,10 +207,10 @@ object AiStudioWebSessionR17ProductionBootstrap {
       carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,
       deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,
       streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,
-      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
+      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
       routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
-  function resetAutomation(){state.startAttempts=0;state.startCandidates=0;state.setupObserved=false;state.lastAction='';state.stage='discover';state.lastBlocker='waiting-start';tick();return describe();}
+  function resetAutomation(){state.startAttempts=0;state.startCandidates=0;state.startAckTimeouts=0;state.startStableScans=0;state.lastStartSignature='';state.setupObserved=false;state.lastAction='';state.lastActionAt=0;state.stage='discover';state.lastBlocker='waiting-start';tick();return describe();}
 
   installModelGuard();installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};

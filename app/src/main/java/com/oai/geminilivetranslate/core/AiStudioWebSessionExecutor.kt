@@ -346,13 +346,11 @@ class AiStudioWebSessionExecutor(
         state = State.DESTROYED
         activeAttachment?.let { it.callback(false, "DESTROYED") }
         activeAttachment = null
-        AiStudioDebugWebViewHost.detach(webView, null)
-        runCatching {
-            webView.stopLoading()
-            webView.removeJavascriptInterface(JS_BRIDGE_NAME)
-            webView.destroy()
-        }
-        events?.onStateChanged(State.DESTROYED, "destroyed")
+        runCatching { webView.stopLoading() }
+        runCatching { webView.onPause() }
+        runCatching { webView.removeJavascriptInterface(JS_BRIDGE_NAME) }
+        AiStudioDebugWebViewHost.retain(webView, null, "executor-destroy")
+        events?.onStateChanged(State.DESTROYED, "destroyed-debug-webview-retained")
     }
 
     private fun schedulePolls(requestSeq: Int) {
@@ -488,6 +486,62 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun tryLegacyProgrammaticFallback(requestSeq: Int, reason: String) {
+        tryNativeAttachmentSubmit(requestSeq, reason, 0)
+    }
+
+    private fun tryNativeAttachmentSubmit(requestSeq: Int, reason: String, attempt: Int) {
+        if (pending?.seq != requestSeq) return
+        events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1}")
+        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.nativeTargetIfAttachment() : ({ok:false,error:'native-submit-target-not-installed'}))"
+        webView.evaluateJavascript(expression) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            events?.onLog("R12_NATIVE_SUBMIT_TARGET", "attempt=${attempt + 1} ${decoded.take(10000)}")
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            if (obj?.optBoolean("ok") != true) {
+                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
+                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                } else {
+                    tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
+                }
+                return@evaluateJavascript
+            }
+            val xRatio = obj.optDouble("xRatio", Double.NaN)
+            val yRatio = obj.optDouble("yRatio", Double.NaN)
+            val baseline = obj.optInt("baselineCaptureCount", -1)
+            if (!xRatio.isFinite() || !yRatio.isFinite() || baseline < 0) {
+                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                else tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target")
+                return@evaluateJavascript
+            }
+            nativeTapController.requestNativeTap(
+                JSONObject()
+                    .put("xRatio", xRatio)
+                    .put("yRatio", yRatio)
+                    .put("tag", "VIDEO_SEND")
+                    .put("role", "composer-submit")
+                    .put("purpose", "video-generate")
+                    .toString(),
+            )
+            main.postDelayed({
+                checkGenerateCapture(requestSeq, baseline, "native-submit-${attempt + 1}") { started ->
+                    if (pending?.seq != requestSeq) return@checkGenerateCapture
+                    if (started) {
+                        events?.onLog("R12_NATIVE_SUBMIT_ACK", "seq=$requestSeq attempt=${attempt + 1} captureStarted=true")
+                        setState(State.GENERATING, "native composer tap triggered GenerateContent")
+                        readNormalized(requestSeq, "native-submit")
+                    } else if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
+                        events?.onLog("R12_NATIVE_SUBMIT_RETRY", "seq=$requestSeq attempt=${attempt + 1} reason=no-capture")
+                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                    } else {
+                        tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
+                    }
+                }
+            }, NATIVE_SUBMIT_ACK_MS)
+        }
+    }
+
+    private fun tryProgrammaticAttachmentFallback(requestSeq: Int, reason: String) {
         if (pending?.seq != requestSeq) return
         events?.onLog("R12_LEGACY_FALLBACK_START", "seq=$requestSeq reason=$reason")
         val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.submitIfAttachment() : ({ok:false,error:'submit-target-not-installed'}))"
@@ -741,7 +795,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-02-web-session-r12.1-progress-watchdog"
+        const val VERSION = "2026-09-04-web-session-r12.2-native-submit-persistent-debug"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
@@ -754,6 +808,9 @@ class AiStudioWebSessionExecutor(
         private const val WATCHDOG_TICK_MS = 2_000L
         private const val DIRECT_ENGINE_WATCHDOG_MS = 7_500L
         private const val LEGACY_FALLBACK_CHECK_MS = 900L
+        private const val NATIVE_SUBMIT_ACK_MS = 1_250L
+        private const val NATIVE_SUBMIT_RETRY_MS = 900L
+        private const val NATIVE_SUBMIT_MAX_RETRIES = 3
         private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

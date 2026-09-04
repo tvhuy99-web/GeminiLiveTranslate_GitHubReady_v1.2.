@@ -22,13 +22,13 @@ import kotlin.math.roundToInt
 
 /** Temporary device-debug support for AI Studio Live Start activation. */
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-04-r18.4-native-start-tap-debug"
+    const val VERSION = "2026-09-04-r18.7-native-action-tap-debug"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-04-r18.4-native-start-tap-debug';
+  const VERSION='2026-09-04-r18.7-native-action-tap-debug';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 
@@ -105,6 +105,7 @@ internal class AiStudioNativeTapController(
         val yRatio = parsed?.optDouble("yRatio", Double.NaN) ?: Double.NaN
         val tag = parsed?.optString("tag").orEmpty().take(32)
         val role = parsed?.optString("role").orEmpty().take(48)
+        val purpose = parsed?.optString("purpose").orEmpty().take(48).ifBlank { "start-live" }
         if (!xRatio.isFinite() || !yRatio.isFinite() || xRatio !in 0.0..1.0 || yRatio !in 0.0..1.0) {
             logger?.log(1, "AiStudioNativeTap", "START_TAP_REJECT invalidCoordinates=true")
             return
@@ -112,13 +113,13 @@ internal class AiStudioNativeTapController(
         main.post {
             val now = SystemClock.uptimeMillis()
             if (now - lastTapAt < 1200L) {
-                logger?.log(3, "AiStudioNativeTap", "START_TAP_SKIPPED debounce=true")
+                logger?.log(3, "AiStudioNativeTap", "ACTION_TAP_SKIPPED purpose=$purpose debounce=true")
                 return@post
             }
             val width = webView.width
             val height = webView.height
             if (width < 4 || height < 4 || !webView.isShown) {
-                logger?.log(1, "AiStudioNativeTap", "START_TAP_REJECT laidOut=${width >= 4 && height >= 4} shown=${webView.isShown} width=$width height=$height")
+                logger?.log(1, "AiStudioNativeTap", "ACTION_TAP_REJECT purpose=$purpose laidOut=${width >= 4 && height >= 4} shown=${webView.isShown} width=$width height=$height")
                 return@post
             }
             lastTapAt = now
@@ -130,10 +131,10 @@ internal class AiStudioNativeTapController(
             }
             val downHandled = runCatching { webView.dispatchTouchEvent(down) }.getOrDefault(false)
             down.recycle()
-            logger?.log(2, "AiStudioNativeTap", "START_TAP_DOWN x=${x.roundToInt()} y=${y.roundToInt()} width=$width height=$height handled=$downHandled tag=$tag role=$role")
+            logger?.log(2, "AiStudioNativeTap", "ACTION_TAP_DOWN purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} width=$width height=$height handled=$downHandled tag=$tag role=$role")
             main.postDelayed({
                 if (!webView.isAttachedToWindow) {
-                    logger?.log(1, "AiStudioNativeTap", "START_TAP_UP skipped=detached")
+                    logger?.log(1, "AiStudioNativeTap", "ACTION_TAP_UP purpose=$purpose skipped=detached")
                     return@postDelayed
                 }
                 val upTime = SystemClock.uptimeMillis()
@@ -142,7 +143,7 @@ internal class AiStudioNativeTapController(
                 }
                 val upHandled = runCatching { webView.dispatchTouchEvent(up) }.getOrDefault(false)
                 up.recycle()
-                logger?.log(2, "AiStudioNativeTap", "START_TAP_UP x=${x.roundToInt()} y=${y.roundToInt()} handled=$upHandled durationMs=${upTime - downTime}")
+                logger?.log(2, "AiStudioNativeTap", "ACTION_TAP_UP purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} handled=$upHandled durationMs=${upTime - downTime}")
             }, 72L)
         }
     }
@@ -179,6 +180,15 @@ internal object AiStudioDebugWebViewHost {
             logger?.log(1, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACH_FAILED reason=no-content-root")
             return
         }
+        panels.keys.toList().filter { it !== webView }.forEach { staleView ->
+            val stalePanel = panels.remove(staleView)?.get()
+            (staleView.parent as? ViewGroup)?.removeView(staleView)
+            (stalePanel?.parent as? ViewGroup)?.removeView(stalePanel)
+            runCatching { staleView.stopLoading() }
+            runCatching { staleView.loadUrl("about:blank") }
+            runCatching { staleView.destroy() }
+            logger?.log(3, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_REPLACED previous=true")
+        }
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.setBackgroundColor(Color.WHITE)
         val panel = LinearLayout(activity).apply {
@@ -200,6 +210,20 @@ internal object AiStudioDebugWebViewHost {
         content.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height, Gravity.BOTTOM))
         panels[webView] = WeakReference(panel)
         logger?.log(2, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACHED visible=true height=$height screenHeight=$screenHeight accessibilityPreserved=true")
+    }
+
+    fun retain(webView: WebView, logger: SessionLogger?, reason: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { retain(webView, logger, reason) }
+            return
+        }
+        val panel = panels[webView]?.get()
+        if (panel != null && panel.parent != null && webView.parent != null) {
+            logger?.log(2, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_RETAINED reason=$reason visible=true")
+            return
+        }
+        attach(webView, logger)
+        logger?.log(2, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_RETAIN_REQUEST reason=$reason")
     }
 
     fun detach(webView: WebView, logger: SessionLogger?) {

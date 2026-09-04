@@ -15,7 +15,7 @@ package com.oai.geminilivetranslate.ui
  * It never reads cookies, auth headers, passwords, API keys, or file bytes.
  */
 object AiStudioWebSessionR11SubmitTargetFix {
-    const val VERSION = "2026-09-02-web-session-r11.4-composer-submit-target"
+    const val VERSION = "2026-09-04-web-session-r11.5-native-composer-submit"
 
     val DOCUMENT_START: String = """
         (function(){
@@ -306,6 +306,22 @@ object AiStudioWebSessionR11SubmitTargetFix {
             return {ok:clicked,pending:true,attempted:true,baselineCaptureCount:baseline,score:best.score,label:best.label.slice(0,180),proven:provenButton===best.button};
           }
 
+          function nativeTargetIfAttachment(){
+            const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
+            if(!attachmentPresent())return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
+            const d=discover(),list=d.candidates;
+            emit('R11_NATIVE_SUBMIT_DISCOVERY',{expectedName:expectedName(),hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot,baselineCaptureCount:baseline,count:list.length,top:list.slice(0,8).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})});
+            if(!list.length)return {ok:false,error:'NO_BUTTON_CANDIDATE',baselineCaptureCount:baseline};
+            const best=list[0];
+            if(best.disabled||best.score<2500)return {ok:false,error:'NO_HIGH_CONFIDENCE_SUBMIT',score:best.score,label:best.label.slice(0,180),baselineCaptureCount:baseline};
+            try{
+              const r=best.button.getBoundingClientRect(),vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1),vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||1);
+              const cx=r.left+r.width/2,cy=r.top+r.height/2;
+              if(r.width<2||r.height<2||cx<0||cy<0||cx>vw||cy>vh)return {ok:false,error:'SUBMIT_OUT_OF_VIEW',baselineCaptureCount:baseline,score:best.score};
+              return {ok:true,native:true,xRatio:cx/vw,yRatio:cy/vh,baselineCaptureCount:baseline,score:best.score,label:best.label.slice(0,180),fingerprint:fingerprint(best.button,d.composerRoot,d.prompt,d.attachment)};
+            }catch(err){return {ok:false,error:'SUBMIT_GEOMETRY_ERROR',detail:String(err).slice(0,500),baselineCaptureCount:baseline};}
+          }
+
           function installClickTracking(){
             try{
               if(!window.EventTarget||!EventTarget.prototype)return false;
@@ -363,6 +379,7 @@ object AiStudioWebSessionR11SubmitTargetFix {
                 proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,
                 candidates:d.candidates.slice(0,10).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,listenerCount:x.listenerCount,listenerScore:x.listenerScore,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})};
             },
+            nativeTargetIfAttachment:nativeTargetIfAttachment,
             submitIfAttachment:submitIfAttachment,
             state:function(){return {ok:true,version:'$VERSION',submitAttempts:submitAttempts,proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,clickEntries:clickEntries.filter(function(e){return e.active;}).length};}
           };

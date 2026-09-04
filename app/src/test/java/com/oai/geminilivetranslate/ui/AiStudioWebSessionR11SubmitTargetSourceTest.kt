@@ -30,9 +30,9 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     }
 
     @Test
-    fun executorUsesDirectEngineBeforeLegacyUiFallbackAndContainsNoTouchSimulation() {
+    fun executorUsesDirectEngineThenNativeComposerTapBeforeLegacyFallback() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(src.contains("2026-09-02-web-session-r12.1-progress-watchdog"))
+        assertTrue(src.contains("2026-09-04-web-session-r12.2-native-submit-persistent-debug"))
         assertTrue(src.contains("AiStudioWebSessionDirectEngine.DOCUMENT_START"))
         assertTrue(src.contains("tryDirectEngineRecovery"))
         assertTrue(src.contains("R12_DIRECT_RECOVERY_START"))
@@ -40,6 +40,9 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
         assertTrue(src.contains("R12_DIRECT_SUBMIT_SUCCESS"))
         assertTrue(src.contains("R12_DIRECT_SUBMIT_FINAL"))
         assertTrue(src.contains("tryLegacyProgrammaticFallback"))
+        assertTrue(src.contains("tryNativeAttachmentSubmit"))
+        assertTrue(src.contains("nativeTapController.requestNativeTap"))
+        assertTrue(src.contains("R12_NATIVE_SUBMIT_ACK"))
         assertFalse(src.contains("dispatchTouchEvent"))
         assertFalse(src.contains("MotionEvent"))
         assertFalse(src.contains("InputDevice.SOURCE_TOUCHSCREEN"))

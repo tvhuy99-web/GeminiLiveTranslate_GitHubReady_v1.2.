@@ -91,7 +91,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(catalog.contains("fileTranscribe="))
         assertTrue(catalog.contains("subtitleTranslate="))
         assertTrue(catalog.contains("videoDescription="))
-        assertTrue(bootstrap.contains("r17.6-lean-live-bootstrap"))
+        assertTrue(bootstrap.contains("r17.7-start-ack-retry"))
         assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
         assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }
@@ -105,6 +105,8 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("startScans"))
         assertTrue(bootstrap.contains("startCandidates"))
         assertTrue(bootstrap.contains("startAttempts"))
+        assertTrue(bootstrap.contains("START_ACK_TIMEOUT"))
+        assertTrue(bootstrap.contains("waiting-start-ack"))
         assertTrue(bootstrap.contains("modelVerified"))
         assertTrue(bootstrap.contains("targetLanguageVerified"))
         assertTrue(bootstrap.contains("setupObserved"))

@@ -186,14 +186,11 @@ internal class AiStudioWebRealtimeClient(
             val current = webView
             webView = null
             if (current != null) {
-                AiStudioDebugWebViewHost.detach(current, logger)
                 runCatching { current.stopLoading() }
                 runCatching { current.onPause() }
                 runCatching { current.removeJavascriptInterface(DIAGNOSTIC_BRIDGE_NAME) }
                 runCatching { current.removeJavascriptInterface(NATIVE_TAP_BRIDGE_NAME) }
-                runCatching { current.loadUrl("about:blank") }
-                runCatching { current.clearHistory() }
-                runCatching { current.destroy() }
+                AiStudioDebugWebViewHost.retain(current, logger, "live-close-${if (setupDelivered.get()) "after-setup" else "before-setup"}")
             }
         }
         val stats = responseStats()
@@ -701,7 +698,7 @@ internal class AiStudioWebRealtimeClient(
             if (closed.get() || setupDelivered.get()) return@postDelayed
             setupDelivered.set(true)
             lastProgressAt = SystemClock.elapsedRealtime()
-            logger.log(2, "AiStudioLive", "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage carrierRequests=$carriers template=${safe(direct.optString("templateMime"), 100)} hidden=true isolatedLiveHost=true")
+            logger.log(2, "AiStudioLive", "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage carrierRequests=$carriers template=${safe(direct.optString("templateMime"), 100)} hidden=false debugVisible=true isolatedLiveHost=true")
             listener.onSetupComplete()
         }, ARM_SETTLE_MS)
     }
@@ -757,7 +754,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             0,
             "AiStudioLive",
-            "FAIL hidden=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured languageGuardConfigured=$languageGuardConfigured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} language=${safe(lastLanguageGuardState, 2200)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
+            "FAIL hidden=false debugVisible=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured languageGuardConfigured=$languageGuardConfigured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} language=${safe(lastLanguageGuardState, 2200)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
             error,
         )
         listener.onError(error)
@@ -807,7 +804,7 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-ai-studio-live-r4-native-tap-language-guard-debug"
+        const val VERSION = "2026-09-04-production-ai-studio-live-r5-start-ack-persistent-debug"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"

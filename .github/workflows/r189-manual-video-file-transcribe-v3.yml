@@ -1,0 +1,123 @@
+name: R18.9 Manual Video + File Transcribe v3
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r189-manual-video-file-transcribe-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-commit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.9 source and test patches
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/apply_r189_manual_video_file_transcribe.py')
+          s=p.read_text()
+          s=s.replace("['gemini-3.5-transcribe', 'generateAttachmentNativeOnly', 'backend=aistudio-file']", "['AppPreferences.TRANSCRIBE_FILE_MODEL', 'generateAttachmentNativeOnly', 'backend=aistudio-file']")
+          p.write_text(s)
+          PY
+          python3 tools/apply_r189_manual_video_file_transcribe.py
+          python3 tools/apply_r189_test_expectations.py
+
+      - name: Verify R18.9 invariants
+        run: |
+          set -euo pipefail
+          VIDEO=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          EXEC=app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          SERVICE=app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          FILECLIENT=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt
+          REQUESTFIX=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt
+          BOOT=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt
+          grep -q 'awaitManualAttachmentGenerate' "$VIDEO"
+          grep -q 'autoSubmit=false' "$VIDEO"
+          grep -q 'requireUploadReady = false' "$VIDEO"
+          ! grep -q 'generateAttachmentNativeOnly' "$VIDEO"
+          grep -q 'R19_MANUAL_VIDEO_READINESS' "$EXEC"
+          grep -q 'R19_MANUAL_SUBMIT_DETECTED' "$EXEC"
+          grep -q 'generateAttachmentNativeOnly' "$FILECLIENT"
+          grep -q 'AppPreferences.TRANSCRIBE_FILE_MODEL' "$FILECLIENT"
+          grep -q 'backend=aistudio-file' "$FILECLIENT"
+          grep -q 'live=false' "$FILECLIENT"
+          grep -q 'FILE_TRANSCRIBE backend=aistudio-file' "$SERVICE"
+          grep -q 'val useLiveFileTranscribe = false' "$SERVICE"
+          grep -q 'uploadObserved=uploadStarted>0' "$REQUESTFIX"
+          grep -q 'uploadSettled=uploadObserved' "$REQUESTFIX"
+          grep -q 'limit=progress.progress?8000:10000' "$BOOT"
+          python3 tools/check_embedded_js_syntax.py
+
+      - name: Test lint and build
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        id: apk
+        env:
+          EXPECTED_CERT_SHA256: 85e27156c4557de4f35b6ebe771dd426f108182894219ff3b6dbed607a230c95
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
+          ACTUAL_CERT="$(awk -F': ' '/certificate SHA-256 digest:/ {print $NF; exit}' apksigner.txt | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
+          SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          SIZE="$(stat -c%s "$APK")"
+          test "$SHA" != "aa09a305ba115818fa5feccf5e48f46a18270443c1d2df572f0568c7d48e1d71"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "R18.9 APK SHA-256: $SHA size=$SIZE"
+
+      - name: Upload R18.9 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.9-manual-video-file-transcribe
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit validated R18.9 source and tests
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt \
+            app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt \
+            app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt \
+            app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt \
+            app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt \
+            app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt \
+            app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt \
+            app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt \
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt \
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt \
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR18SourceTest.kt
+          git diff --cached --check
+          git commit -m 'R18.9: manual video readiness, correct file transcribe, fast live recovery'
+          git push origin HEAD:experiment/aistudio-r183-network-vi

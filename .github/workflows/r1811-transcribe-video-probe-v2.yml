@@ -1,0 +1,81 @@
+name: R18.11 Transcribe + Video Probe v2
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r1811-transcribe-video-probe-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply R18.11 source and test patches
+        run: |
+          set -euo pipefail
+          python3 tools/apply_r1811_transcribe_video_probe.py
+          python3 tools/apply_r1811_test_followup.py
+      - name: Verify invariants and JavaScript
+        run: |
+          set -euo pipefail
+          T=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt
+          E=app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          R=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt
+          S=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt
+          grep -q 'generateAttachmentFileOnlyNative' "$T"
+          grep -q 'prompt=false' "$T"
+          ! grep -q 'Hãy chép lời CHÍNH XÁC' "$T"
+          ! grep -q 'buildPrompt(' "$T"
+          grep -q 'file-transcribe-run' "$E"
+          grep -q 'nativeTargetIfAttachmentFileOnly' "$S"
+          grep -q 'semanticSubmitCandidates' "$S"
+          grep -q 'R21_ATTACHMENT_BLOB_READ_START' "$R"
+          grep -q 'R21_ATTACHMENT_BLOB_STREAM_PROGRESS' "$R"
+          grep -q 'R21_ATTACHMENT_FORMDATA_FILE' "$R"
+          grep -q 'R21_ATTACHMENT_RESOURCE_TIMING' "$R"
+          grep -q 'R21_ATTACHMENT_DOM_STATE' "$R"
+          python3 tools/check_embedded_js_syntax.py
+      - name: Test lint build APK
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          python3 tools/verify_github_ready.py
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
+          sha256sum "$APK" | tee apk.sha256
+          NEW_SHA="$(awk '{print $1}' apk.sha256)"
+          test "$NEW_SHA" != 'd9c2197e6c0beed9413992899c39b4a7e243ffd8bd09c5b9480501035c462068'
+      - name: Commit validated R18.11 source
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java app/src/test/java
+          git commit -m 'fix: no-prompt file transcribe and deep video upload probe'
+          git push origin HEAD:experiment/aistudio-r183-network-vi
+      - name: Upload R18.11 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.11-transcribe-video-probe
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 2

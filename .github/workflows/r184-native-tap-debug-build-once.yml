@@ -22,8 +22,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v4
-
       - name: Apply R18.4 source patch
         run: python3 tools/r184_apply_native_tap_debug.py
 

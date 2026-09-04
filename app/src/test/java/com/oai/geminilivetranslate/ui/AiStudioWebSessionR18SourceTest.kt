@@ -20,7 +20,6 @@ class AiStudioWebSessionR18SourceTest {
     fun apiSettingsExposeExactlyTheOfficialConnectionChoiceWithoutRemovingExistingSettings() {
         val activity = source("ui/ApiSettingsActivity.kt")
         val modeStore = source("core/AiConnectionModeStore.kt")
-
         assertTrue(modeStore.contains("MODE_API_KEY = \"api_key\""))
         assertTrue(modeStore.contains("MODE_AI_STUDIO = \"ai_studio\""))
         assertTrue(modeStore.contains("LABEL_API_KEY = \"API Key\""))

@@ -104,7 +104,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CONNECT hidden=true isolatedLiveHost=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION}",
+            "CONNECT hidden=false debugVisible=true isolatedLiveHost=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION}",
         )
         main.post { startOnMain() }
     }
@@ -182,9 +182,11 @@ internal class AiStudioWebRealtimeClient(
             val current = webView
             webView = null
             if (current != null) {
+                AiStudioDebugWebViewHost.detach(current, logger)
                 runCatching { current.stopLoading() }
                 runCatching { current.onPause() }
                 runCatching { current.removeJavascriptInterface(DIAGNOSTIC_BRIDGE_NAME) }
+                runCatching { current.removeJavascriptInterface(NATIVE_TAP_BRIDGE_NAME) }
                 runCatching { current.loadUrl("about:blank") }
                 runCatching { current.clearHistory() }
                 runCatching { current.destroy() }
@@ -194,7 +196,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts",
+            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts",
         )
     }
 
@@ -210,7 +212,14 @@ internal class AiStudioWebRealtimeClient(
         webView = created
         configureWebView(created)
         created.addJavascriptInterface(DiagnosticBridge(), DIAGNOSTIC_BRIDGE_NAME)
+        created.addJavascriptInterface(AiStudioNativeTapController(created, logger), NATIVE_TAP_BRIDGE_NAME)
+        AiStudioDebugWebViewHost.attach(created, logger)
 
+        WebViewCompat.addDocumentStartJavaScript(
+            created,
+            AiStudioNativeTapDocumentStart.DOCUMENT_START,
+            setOf(AI_STUDIO_ORIGIN),
+        )
         WebViewCompat.addDocumentStartJavaScript(
             created,
             AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START,
@@ -302,7 +311,7 @@ internal class AiStudioWebRealtimeClient(
         runCatching { created.onResume() }
         runCatching { created.resumeTimers() }
         val liveUrl = liveRouteUrl()
-        logger.log(2, "AiStudioLive", "RUNTIME_STARTED hidden=true isolatedLiveHost=true route=/live model=${targetLiveModel()} operation=$operationMode target=$targetLanguage")
+        logger.log(2, "AiStudioLive", "RUNTIME_STARTED hidden=false debugVisible=true isolatedLiveHost=true route=/live model=${targetLiveModel()} operation=$operationMode target=$targetLanguage")
         created.loadUrl(liveUrl)
         scheduleBootstrapRecovery(created, pageGeneration)
         main.postDelayed(healthTick, HEALTH_TICK_MS)
@@ -751,8 +760,9 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-hidden-ai-studio-live-r2-isolated-bootstrap"
+        const val VERSION = "2026-09-04-production-ai-studio-live-r3-visible-native-tap-debug"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
+        private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_LIVE = "https://aistudio.google.com/live"
         private const val HEALTH_TICK_MS = 650L

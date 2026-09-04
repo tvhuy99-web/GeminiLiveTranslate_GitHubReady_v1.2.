@@ -1,20 +1,31 @@
 package com.oai.geminilivetranslate.network
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.core.AiStudioWebLiveClient
 import com.oai.geminilivetranslate.core.AiStudioWebLiveOutputBridge
-import com.oai.geminilivetranslate.core.AiStudioWebSessionExecutor
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR14DirectLiveEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
@@ -24,7 +35,18 @@ import org.json.JSONTokener
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/** Production hidden AI Studio Live backend. */
+/**
+ * Production hidden AI Studio Live backend.
+ *
+ * This client intentionally owns a dedicated WebView instead of reusing the old R12 Chat/Lab
+ * executor. Only the three proven Live engines are installed in this WebView: R14 input carrier,
+ * R16 output bridge and R17 production model/language/Start automation.
+ *
+ * R17 installation is verified after every recovery injection. Failed injection does not count as
+ * bootstrap progress. Recovery is bounded and exports a sanitized JavaScript exception so a device
+ * log can identify the exact failing statement instead of looping indefinitely.
+ */
+@SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 internal class AiStudioWebRealtimeClient(
     private val targetLanguage: String,
     private val operationMode: GeminiLiveClient.OperationMode,
@@ -48,10 +70,11 @@ internal class AiStudioWebRealtimeClient(
     private val backpressureEvents = AtomicLong(0L)
     private val maxObservedQueuedBytes = AtomicLong(0L)
 
-    @Volatile private var executor: AiStudioWebSessionExecutor? = null
+    @Volatile private var webView: WebView? = null
     @Volatile private var inputClient: AiStudioWebLiveClient? = null
     @Volatile private var outputBridge: AiStudioWebLiveOutputBridge? = null
     @Volatile private var configured = false
+    @Volatile private var bootstrapInstalled = false
     @Volatile private var serverSetupSeen = false
     @Volatile private var connectingStartedAt = 0L
     @Volatile private var lastBootstrapProgressAt = 0L
@@ -68,6 +91,9 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastRouteRepairAt = 0L
     @Volatile private var bootstrapRecoveryAttempts = 0
     @Volatile private var bootstrapRecoveryInFlight = false
+    @Volatile private var lastBootstrapRecoveryAt = 0L
+    @Volatile private var lastBootstrapInstallError = ""
+    @Volatile private var pageGeneration = 0
 
     fun connect() {
         if (closed.get()) return
@@ -78,7 +104,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CONNECT hidden=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION}",
+            "CONNECT hidden=true isolatedLiveHost=true operation=$operationMode model=${targetLiveModel()} target=$targetLanguage bootstrap=${AiStudioWebSessionR17ProductionBootstrap.VERSION}",
         )
         main.post { startOnMain() }
     }
@@ -145,6 +171,7 @@ internal class AiStudioWebRealtimeClient(
     fun close(graceful: Boolean = true) {
         if (!closed.compareAndSet(false, true)) return
         terminalDelivered.set(true)
+        main.removeCallbacksAndMessages(null)
         main.post {
             setCarrierActive(false)
             runCatching { inputClient?.clear() }
@@ -152,69 +179,55 @@ internal class AiStudioWebRealtimeClient(
             inputClient = null
             runCatching { outputBridge?.close() }
             outputBridge = null
-            runCatching { executor?.webView?.stopLoading() }
-            runCatching { executor?.webView?.onPause() }
-            runCatching { executor?.destroy() }
-            executor = null
-            main.removeCallbacks(healthTick)
+            val current = webView
+            webView = null
+            if (current != null) {
+                runCatching { current.stopLoading() }
+                runCatching { current.onPause() }
+                runCatching { current.removeJavascriptInterface(DIAGNOSTIC_BRIDGE_NAME) }
+                runCatching { current.loadUrl("about:blank") }
+                runCatching { current.clearHistory() }
+                runCatching { current.destroy() }
+            }
         }
         val stats = responseStats()
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()}",
+            "CLOSE hidden=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts",
         )
     }
 
     private fun startOnMain() {
-        if (closed.get() || executor != null) return
+        if (closed.get() || webView != null) return
         check(Looper.myLooper() == Looper.getMainLooper())
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             fail(IllegalStateException("WebView không hỗ trợ DOCUMENT_START_SCRIPT"))
             return
         }
-        val created = AiStudioWebSessionExecutor(appContext, object : AiStudioWebSessionExecutor.Events {
-            override fun onStateChanged(state: AiStudioWebSessionExecutor.State, detail: String) {
-                if (closed.get()) return
-                logger.log(3, "AiStudioLive", "EXECUTOR state=$state detail=${safe(detail, 500)}")
-                if (state == AiStudioWebSessionExecutor.State.ERROR) {
-                    fail(IllegalStateException("AI Studio WebView: $detail"))
-                }
-            }
 
-            override fun onLog(name: String, detail: String) {
-                if (closed.get()) return
-                when {
-                    name.startsWith("JS_R17_") -> logger.log(3, "AiStudioBootstrap", "$name ${safe(detail, 2600)}")
-                    name == "JS_R14_AUDIO_TEMPLATE_CAPTURED" ||
-                        name == "JS_R14_INJECT_HTTP_2XX" ||
-                        name == "JS_R14_INJECT_HTTP_ERROR" ||
-                        name == "JS_R14_INJECT_ZERO_STATUS_END" ->
-                        logger.log(if (name.contains("ERROR")) 1 else 3, "AiStudioTransport", "$name ${safe(detail, 1800)}")
-                    name == "JS_R16_CHUNK_PARSE_ERROR" || name == "JS_R16_OUTPUT_BRIDGE_ERROR" ->
-                        logger.log(1, "AiStudioOutput", "$name ${safe(detail, 1800)}")
-                }
-            }
-        })
-        executor = created
+        val created = WebView(appContext)
+        webView = created
+        configureWebView(created)
+        created.addJavascriptInterface(DiagnosticBridge(), DIAGNOSTIC_BRIDGE_NAME)
 
         WebViewCompat.addDocumentStartJavaScript(
-            created.webView,
+            created,
             AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
         WebViewCompat.addDocumentStartJavaScript(
-            created.webView,
+            created,
             AiStudioWebSessionR16LiveOutputEngine.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
         WebViewCompat.addDocumentStartJavaScript(
-            created.webView,
+            created,
             AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
 
-        inputClient = AiStudioWebLiveClient(created.webView) { name, detail ->
+        inputClient = AiStudioWebLiveClient(created) { name, detail ->
             when (name) {
                 "R15_CLIENT_BATCH", "R15_CLIENT_ARM", "R15_CLIENT_STREAM_END", "R15_CLIENT_CLEAR", "R15_CLIENT_CLOSE" ->
                     logger.log(3, "AiStudioInput", "$name ${safe(detail, 1500)}")
@@ -222,7 +235,7 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         outputBridge = AiStudioWebLiveOutputBridge(
-            created.webView,
+            created,
             object : AiStudioWebLiveOutputBridge.Listener {
                 override fun onAudio(pcm24kMono: ByteArray, mimeType: String) {
                     if (closed.get() || !setupDelivered.get()) return
@@ -285,7 +298,34 @@ internal class AiStudioWebRealtimeClient(
             },
         ) { name, detail -> logger.log(3, "AiStudioOutputBridge", "$name ${safe(detail, 1400)}") }
 
-        created.webView.webChromeClient = object : WebChromeClient() {
+        listener.onOpen()
+        runCatching { created.onResume() }
+        runCatching { created.resumeTimers() }
+        val liveUrl = liveRouteUrl()
+        logger.log(2, "AiStudioLive", "RUNTIME_STARTED hidden=true isolatedLiveHost=true route=/live model=${targetLiveModel()} operation=$operationMode target=$targetLanguage")
+        created.loadUrl(liveUrl)
+        scheduleBootstrapRecovery(created, pageGeneration)
+        main.postDelayed(healthTick, HEALTH_TICK_MS)
+    }
+
+    private fun configureWebView(view: WebView) {
+        view.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            cacheMode = WebSettings.LOAD_DEFAULT
+            loadsImagesAutomatically = true
+            javaScriptCanOpenWindowsAutomatically = true
+            mediaPlaybackRequiresUserGesture = false
+            allowFileAccess = false
+            allowContentAccess = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        }
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(view, true)
+        }
+        view.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 val req = request ?: return
                 val resources = req.resources.orEmpty()
@@ -302,55 +342,150 @@ internal class AiStudioWebRealtimeClient(
                 }
             }
         }
-        runCatching { created.webView.onResume() }
-        runCatching { created.webView.resumeTimers() }
-        listener.onOpen()
-        val liveUrl = liveRouteUrl()
-        created.start(liveUrl)
-        scheduleBootstrapRecovery(created)
-        main.removeCallbacks(healthTick)
-        main.postDelayed(healthTick, HEALTH_TICK_MS)
-        logger.log(
-            2,
-            "AiStudioLive",
-            "RUNTIME_STARTED hidden=true route=/live model=${targetLiveModel()} operation=$operationMode target=$targetLanguage",
-        )
-    }
-
-    private fun scheduleBootstrapRecovery(current: AiStudioWebSessionExecutor) {
-        longArrayOf(900L, 2_000L, 4_000L, 7_000L).forEach { delay ->
-            main.postDelayed({ ensureBootstrapInstalled(current) }, delay)
-        }
-    }
-
-    private fun ensureBootstrapInstalled(current: AiStudioWebSessionExecutor) {
-        if (closed.get() || executor !== current || bootstrapRecoveryInFlight) return
-        val host = runCatching { Uri.parse(current.webView.url.orEmpty()).host.orEmpty() }.getOrDefault("")
-        if (host != "aistudio.google.com") return
-        bootstrapRecoveryInFlight = true
-        current.webView.evaluateJavascript(
-            "Boolean(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)",
-        ) { raw ->
-            bootstrapRecoveryInFlight = false
-            if (closed.get() || executor !== current || raw == "true") return@evaluateJavascript
-            bootstrapRecoveryAttempts += 1
-            logger.log(1, "AiStudioBootstrap", "RECOVERY inject attempt=$bootstrapRecoveryAttempts host=$host")
-            current.webView.evaluateJavascript(AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START) {
+        view.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                pageGeneration += 1
                 configured = false
-                markBootstrapProgress("bootstrap-recovery-$bootstrapRecoveryAttempts")
+                bootstrapInstalled = false
+                lastBootstrapSignature = ""
+                serverSetupSeen = false
+                lastDirectState = ""
+                lastOutputState = ""
+                logger.log(3, "AiStudioLive", "PAGE_STARTED generation=$pageGeneration host=${hostOf(url)} path=${pathOf(url)}")
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                val current = view ?: return
+                logger.log(2, "AiStudioLive", "PAGE_FINISHED generation=$pageGeneration host=${hostOf(url)} path=${pathOf(url)}")
+                if (hostOf(url) == "aistudio.google.com") {
+                    scheduleBootstrapRecovery(current, pageGeneration)
+                    main.post { ensureBootstrapInstalled(current, pageGeneration, force = true) }
+                }
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request?.isForMainFrame == true) {
+                    fail(IllegalStateException("AI Studio WebView error ${error?.errorCode}: ${safe(error?.description?.toString().orEmpty(), 240)}"))
+                }
+            }
+
+            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
+                if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
+                    fail(IllegalStateException("AI Studio HTTP ${errorResponse?.statusCode}"))
+                }
+            }
+
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                handler?.cancel()
+                fail(IllegalStateException("AI Studio SSL error ${error?.primaryError}"))
             }
         }
     }
 
+    private fun scheduleBootstrapRecovery(current: WebView, generation: Int) {
+        BOOTSTRAP_RECOVERY_DELAYS_MS.forEach { delay ->
+            main.postDelayed({ ensureBootstrapInstalled(current, generation, force = false) }, delay)
+        }
+    }
+
+    private fun ensureBootstrapInstalled(current: WebView, generation: Int, force: Boolean = false) {
+        if (closed.get() || webView !== current || generation != pageGeneration || bootstrapRecoveryInFlight) return
+        val url = current.url.orEmpty()
+        val host = hostOf(url)
+        if (host != "aistudio.google.com") return
+        if (bootstrapInstalled) return
+
+        val now = SystemClock.elapsedRealtime()
+        if (!force && lastBootstrapRecoveryAt > 0L && now - lastBootstrapRecoveryAt < BOOTSTRAP_RECOVERY_MIN_INTERVAL_MS) return
+        if (bootstrapRecoveryAttempts >= MAX_BOOTSTRAP_RECOVERY_ATTEMPTS) {
+            fail(
+                IllegalStateException(
+                    "R17_BOOTSTRAP_INSTALL_FAILED attempts=$bootstrapRecoveryAttempts last=${lastBootstrapInstallError.ifBlank { "unknown" }}",
+                ),
+            )
+            return
+        }
+
+        bootstrapRecoveryInFlight = true
+        current.evaluateJavascript(bootstrapProbeScript()) { rawProbe ->
+            if (closed.get() || webView !== current || generation != pageGeneration) {
+                bootstrapRecoveryInFlight = false
+                return@evaluateJavascript
+            }
+            val probe = parseObject(rawProbe)
+            if (probe?.optBoolean("ok") == true) {
+                bootstrapRecoveryInFlight = false
+                bootstrapInstalled = true
+                lastBootstrapInstallError = ""
+                markBootstrapProgress("bootstrap-present-${probe.optString("version")}")
+                logger.log(2, "AiStudioBootstrap", "INSTALL_PRESENT version=${safe(probe.optString("version"), 120)} attempt=$bootstrapRecoveryAttempts")
+                configureBootstrapIfNeeded()
+                return@evaluateJavascript
+            }
+
+            bootstrapRecoveryAttempts += 1
+            lastBootstrapRecoveryAt = SystemClock.elapsedRealtime()
+            logger.log(1, "AiStudioBootstrap", "RECOVERY_BEGIN attempt=$bootstrapRecoveryAttempts/$MAX_BOOTSTRAP_RECOVERY_ATTEMPTS host=$host path=${pathOf(url)}")
+            current.evaluateJavascript(bootstrapRecoveryScript()) { rawInstall ->
+                bootstrapRecoveryInFlight = false
+                if (closed.get() || webView !== current || generation != pageGeneration) return@evaluateJavascript
+                val result = parseObject(rawInstall)
+                val ok = result?.optBoolean("ok") == true
+                if (ok) {
+                    bootstrapInstalled = true
+                    configured = false
+                    lastBootstrapInstallError = ""
+                    val version = safe(result?.optString("version").orEmpty(), 120)
+                    markBootstrapProgress("bootstrap-installed-$bootstrapRecoveryAttempts-$version")
+                    logger.log(2, "AiStudioBootstrap", "RECOVERY_OK attempt=$bootstrapRecoveryAttempts version=$version")
+                    configureBootstrapIfNeeded()
+                } else {
+                    val name = safe(result?.optString("name").orEmpty(), 80).ifBlank { "UnknownError" }
+                    val message = safe(result?.optString("message").orEmpty(), 500)
+                    val stack = safe(result?.optString("stack").orEmpty(), 1200)
+                    lastBootstrapInstallError = "$name:$message"
+                    logger.log(
+                        0,
+                        "AiStudioBootstrap",
+                        "RECOVERY_FAILED attempt=$bootstrapRecoveryAttempts/$MAX_BOOTSTRAP_RECOVERY_ATTEMPTS name=$name message=$message stack=$stack",
+                    )
+                    if (bootstrapRecoveryAttempts >= MAX_BOOTSTRAP_RECOVERY_ATTEMPTS) {
+                        fail(IllegalStateException("R17_BOOTSTRAP_INSTALL_FAILED attempts=$bootstrapRecoveryAttempts last=$lastBootstrapInstallError"))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun bootstrapProbeScript(): String =
+        "(function(){try{var r=window.__AIS_R17_PRODUCTION__;return JSON.stringify({ok:!!(r&&r.version),version:r&&String(r.version)||''});}catch(e){return JSON.stringify({ok:false,name:String(e&&e.name||'Error'),message:String(e&&e.message||'')});}})()"
+
+    private fun bootstrapRecoveryScript(): String = """
+        (function(){
+          try{
+            ${AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START}
+            var r=window.__AIS_R17_PRODUCTION__;
+            return JSON.stringify({ok:!!(r&&r.version),version:r&&String(r.version)||'',type:typeof r});
+          }catch(e){
+            return JSON.stringify({
+              ok:false,
+              name:String(e&&e.name||'Error'),
+              message:String(e&&e.message||''),
+              stack:String(e&&e.stack||'').slice(0,1400)
+            });
+          }
+        })()
+    """.trimIndent()
+
     private val healthTick = object : Runnable {
         override fun run() {
             if (closed.get()) return
-            val current = executor ?: return
+            val current = webView ?: return
             val now = SystemClock.elapsedRealtime()
-            val currentUri = runCatching { Uri.parse(current.webView.url.orEmpty()) }.getOrNull()
+            val currentUri = runCatching { Uri.parse(current.url.orEmpty()) }.getOrNull()
             val host = currentUri?.host.orEmpty()
-            if (host.contains("accounts.google.") || host == "accounts.google.com") {
-                logger.log(0, "AiStudioAuth", "AUTH_REQUIRED host=$host action=open_settings_account_manager")
+
+            if (host.contains("accounts.google.")) {
                 fail(IllegalStateException("AI_STUDIO_AUTH_REQUIRED"))
                 return
             }
@@ -358,10 +493,12 @@ internal class AiStudioWebRealtimeClient(
                 main.postDelayed(this, HEALTH_TICK_MS)
                 return
             }
-            ensureBootstrapInstalled(current)
+
+            ensureBootstrapInstalled(current, pageGeneration, force = false)
             configureBootstrapIfNeeded()
             requestStates()
             maybeSilenceCarrier(force = false)
+
             if (!setupDelivered.get()) {
                 val stalledFor = now - lastBootstrapProgressAt.coerceAtLeast(connectingStartedAt)
                 val totalFor = now - connectingStartedAt
@@ -371,7 +508,7 @@ internal class AiStudioWebRealtimeClient(
                     } else {
                         "AI_STUDIO_LIVE_SETUP_STALLED"
                     }
-                    fail(IllegalStateException(reason))
+                    fail(IllegalStateException("$reason bootstrapInstalled=$bootstrapInstalled configured=$configured recoveryAttempts=$bootstrapRecoveryAttempts lastInstall=$lastBootstrapInstallError"))
                     return
                 }
             }
@@ -383,11 +520,7 @@ internal class AiStudioWebRealtimeClient(
         }
     }
 
-    private fun repairLiveRouteIfNeeded(
-        current: AiStudioWebSessionExecutor,
-        currentUri: Uri?,
-        now: Long,
-    ): Boolean {
+    private fun repairLiveRouteIfNeeded(current: WebView, currentUri: Uri?, now: Long): Boolean {
         val host = currentUri?.host.orEmpty()
         if (host != "aistudio.google.com") return false
         val path = currentUri?.path.orEmpty().lowercase()
@@ -399,24 +532,24 @@ internal class AiStudioWebRealtimeClient(
         routeRepairAttempts += 1
         lastRouteRepairAt = now
         configured = false
+        bootstrapInstalled = false
+        bootstrapRecoveryAttempts = 0
+        lastBootstrapRecoveryAt = 0L
+        lastBootstrapInstallError = ""
         lastBootstrapState = ""
         lastBootstrapSignature = ""
         markBootstrapProgress("route-repair-$routeRepairAttempts")
-        logger.log(
-            1,
-            "AiStudioLive",
-            "ROUTE_REPAIR attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}",
-        )
-        current.start(liveRouteUrl())
+        logger.log(1, "AiStudioLive", "ROUTE_REPAIR attempt=$routeRepairAttempts from=${path.take(100)} to=/live model=${targetLiveModel()}")
+        current.loadUrl(liveRouteUrl())
         return true
     }
 
     private fun configureBootstrapIfNeeded() {
-        if (configured || closed.get()) return
-        val current = executor ?: return
+        if (configured || !bootstrapInstalled || closed.get()) return
+        val current = webView ?: return
         val language = JSONObject.quote(targetLanguage)
         val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
-        current.webView.evaluateJavascript(
+        current.evaluateJavascript(
             "JSON.stringify(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,${if (transcribe) "true" else "false"}):({ok:false,error:'r17-not-installed'}))",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
@@ -427,18 +560,19 @@ internal class AiStudioWebRealtimeClient(
                 updateBootstrapProgress(obj)
                 logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe model=${targetLiveModel()}")
             } else if (decoded.isNotBlank()) {
-                logger.log(3, "AiStudioBootstrap", "CONFIG_PENDING ${safe(decoded, 900)}")
+                logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING ${safe(decoded, 900)}")
             }
         }
     }
 
     private fun requestStates() {
-        val current = executor ?: return
+        val current = webView ?: return
         val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
-        current.webView.evaluateJavascript(js) { raw ->
+        current.evaluateJavascript(js) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return@evaluateJavascript
             root.optJSONObject("bootstrap")?.let { bootstrap ->
+                bootstrapInstalled = true
                 lastBootstrapState = bootstrap.toString()
                 updateBootstrapProgress(bootstrap)
             }
@@ -448,12 +582,9 @@ internal class AiStudioWebRealtimeClient(
                 if (requests > lastCarrierRequests) {
                     lastCarrierRequests = requests
                     lastProgressAt = SystemClock.elapsedRealtime()
+                    markBootstrapProgress("carrier-request-$requests")
                     if (requests == 1L || requests % 25L == 0L) {
-                        logger.log(
-                            3,
-                            "AiStudioTransport",
-                            "CARRIER requests=$requests frames=${direct.optLong("carrierFrames", 0L)} replaced=${direct.optLong("replacedFrames", 0L)} template=${direct.optBoolean("templateObserved", false)} queue=${direct.optInt("queueDepth", 0)}",
-                        )
+                        logger.log(3, "AiStudioTransport", "CARRIER requests=$requests frames=${direct.optLong("carrierFrames", 0L)} replaced=${direct.optLong("replacedFrames", 0L)} template=${direct.optBoolean("templateObserved", false)} queue=${direct.optInt("queueDepth", 0)}")
                     }
                 }
             }
@@ -495,12 +626,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioStage",
-            "stage=${bootstrap.optString("stage", "?")} blocker=${bootstrap.optString("lastBlocker", "?")} route=${bootstrap.optString("routeKind", "?")} " +
-                "model=${bootstrap.optString("targetModel", targetLiveModel())} modelSeen=${bootstrap.optBoolean("modelSeen", false)} modelVerified=${bootstrap.optBoolean("modelVerified", false)} " +
-                "language=$targetLanguage languageUi=${bootstrap.optBoolean("languageUiSelected", false)} languageVerified=${bootstrap.optBoolean("targetLanguageVerified", false)} " +
-                "startScans=${bootstrap.optInt("startScans", 0)} startCandidates=${bootstrap.optInt("startCandidates", 0)} startAttempts=${bootstrap.optInt("startAttempts", 0)} " +
-                "setup=${bootstrap.optBoolean("setupObserved", false)} carrier=${bootstrap.optBoolean("carrierActive", false)} syntheticCarrier=${bootstrap.optBoolean("syntheticCarrier", false)} " +
-                "lastAction=${safe(bootstrap.optString("lastAction", ""), 100)}",
+            "stage=${bootstrap.optString("stage", "?")} blocker=${bootstrap.optString("lastBlocker", "?")} route=${bootstrap.optString("routeKind", "?")} model=${bootstrap.optString("targetModel", targetLiveModel())} modelSeen=${bootstrap.optBoolean("modelSeen", false)} modelVerified=${bootstrap.optBoolean("modelVerified", false)} language=$targetLanguage languageUi=${bootstrap.optBoolean("languageUiSelected", false)} languageVerified=${bootstrap.optBoolean("targetLanguageVerified", false)} startScans=${bootstrap.optInt("startScans", 0)} startCandidates=${bootstrap.optInt("startCandidates", 0)} startAttempts=${bootstrap.optInt("startAttempts", 0)} setup=${bootstrap.optBoolean("setupObserved", false)} carrier=${bootstrap.optBoolean("carrierActive", false)} syntheticCarrier=${bootstrap.optBoolean("syntheticCarrier", false)} lastAction=${safe(bootstrap.optString("lastAction", ""), 100)}",
         )
     }
 
@@ -520,11 +646,7 @@ internal class AiStudioWebRealtimeClient(
             if (closed.get() || setupDelivered.get()) return@postDelayed
             setupDelivered.set(true)
             lastProgressAt = SystemClock.elapsedRealtime()
-            logger.log(
-                2,
-                "AiStudioLive",
-                "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage carrierRequests=$carriers template=${safe(direct.optString("templateMime"), 100)} hidden=true",
-            )
+            logger.log(2, "AiStudioLive", "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage carrierRequests=$carriers template=${safe(direct.optString("templateMime"), 100)} hidden=true isolatedLiveHost=true")
             listener.onSetupComplete()
         }, ARM_SETTLE_MS)
     }
@@ -533,10 +655,10 @@ internal class AiStudioWebRealtimeClient(
         if (closed.get() || carrierEnabled == enabled) return
         carrierEnabled = enabled
         logger.log(3, "AiStudioTransport", "CARRIER_ACTIVE enabled=$enabled")
-        val current = executor ?: return
-        current.webView.post {
+        val current = webView ?: return
+        current.post {
             if (closed.get()) return@post
-            current.webView.evaluateJavascript(
+            current.evaluateJavascript(
                 "JSON.stringify(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.setCarrierActive(${if (enabled) "true" else "false"}):({ok:false}))",
                 null,
             )
@@ -563,7 +685,9 @@ internal class AiStudioWebRealtimeClient(
 
     private fun updateHighWater(value: Long) {
         var previous = maxObservedQueuedBytes.get()
-        while (value > previous && !maxObservedQueuedBytes.compareAndSet(previous, value)) previous = maxObservedQueuedBytes.get()
+        while (value > previous && !maxObservedQueuedBytes.compareAndSet(previous, value)) {
+            previous = maxObservedQueuedBytes.get()
+        }
     }
 
     private fun targetLiveModel(): String = when (operationMode) {
@@ -578,11 +702,34 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             0,
             "AiStudioLive",
-            "FAIL hidden=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapRecoveries=$bootstrapRecoveryAttempts bootstrap=${safe(lastBootstrapState, 2400)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
+            "FAIL hidden=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
             error,
         )
         listener.onError(error)
     }
+
+    private inner class DiagnosticBridge {
+        @JavascriptInterface
+        fun onJsEvent(json: String?) {
+            if (closed.get()) return
+            val text = json.orEmpty()
+            val parsed = runCatching { JSONObject(text) }.getOrNull()
+            val kind = parsed?.optString("kind").orEmpty()
+            when {
+                kind.startsWith("R17_") -> logger.log(3, "AiStudioBootstrap", "JS_$kind ${safe(text, 2800)}")
+                kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||
+                    kind == "R14_INJECT_HTTP_2XX" ||
+                    kind == "R14_INJECT_HTTP_ERROR" ||
+                    kind == "R14_INJECT_ZERO_STATUS_END" ->
+                    logger.log(if (kind.contains("ERROR")) 1 else 3, "AiStudioTransport", "JS_$kind ${safe(text, 1800)}")
+                kind == "R16_CHUNK_PARSE_ERROR" || kind == "R16_OUTPUT_BRIDGE_ERROR" ->
+                    logger.log(1, "AiStudioOutput", "JS_$kind ${safe(text, 1800)}")
+            }
+        }
+    }
+
+    private fun parseObject(raw: String?): JSONObject? =
+        runCatching { JSONObject(decodeEvalValue(raw)) }.getOrNull()
 
     private fun decodeEvalValue(raw: String?): String {
         if (raw.isNullOrBlank() || raw == "null") return ""
@@ -594,10 +741,18 @@ internal class AiStudioWebRealtimeClient(
         }.getOrElse { raw }
     }
 
-    private fun safe(value: String, max: Int): String = value.replace('\u0000', ' ').replace('\n', ' ').take(max)
+    private fun hostOf(url: String?): String =
+        runCatching { Uri.parse(url.orEmpty()).host.orEmpty().lowercase() }.getOrDefault("")
+
+    private fun pathOf(url: String?): String =
+        runCatching { Uri.parse(url.orEmpty()).path.orEmpty() }.getOrDefault("")
+
+    private fun safe(value: String, max: Int): String =
+        value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-04-production-hidden-ai-studio-live"
+        const val VERSION = "2026-09-04-production-hidden-ai-studio-live-r2-isolated-bootstrap"
+        private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_LIVE = "https://aistudio.google.com/live"
         private const val HEALTH_TICK_MS = 650L
@@ -610,5 +765,8 @@ internal class AiStudioWebRealtimeClient(
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
         private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2
+        private const val BOOTSTRAP_RECOVERY_MIN_INTERVAL_MS = 1_250L
+        private const val MAX_BOOTSTRAP_RECOVERY_ATTEMPTS = 5
+        private val BOOTSTRAP_RECOVERY_DELAYS_MS = longArrayOf(900L, 2_200L, 4_500L, 7_500L, 11_500L)
     }
 }

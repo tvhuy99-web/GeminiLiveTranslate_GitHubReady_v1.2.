@@ -22,19 +22,18 @@ if missing:
     raise SystemExit('R18.10 request patch incomplete: ' + ', '.join(missing))
 
 exe = EXEC.read_text()
-old_ready = 'events?.onLog("R18_ATTACHMENT_UPLOAD_READY", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt}")'
-new_ready = 'events?.onLog("R20_ATTACHMENT_PREPARED", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt} localReadReady=${obj?.optBoolean(\\"localReadReady\\", false)} serverPayloadObserved=${obj?.optBoolean(\\"serverPayloadObserved\\", false)} serverPayloadSettled=${obj?.optBoolean(\\"serverPayloadSettled\\", false)}")'
+old_ready = '''events?.onLog("R18_ATTACHMENT_UPLOAD_READY", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt}")'''
+new_ready = '''events?.onLog("R20_ATTACHMENT_PREPARED", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt} localReadReady=${obj?.optBoolean("localReadReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)}")'''
 if old_ready in exe:
     exe = exe.replace(old_ready, new_ready, 1)
 elif 'R20_ATTACHMENT_PREPARED' not in exe:
     raise SystemExit('executor ready log anchor missing')
 
-old_wait = 'events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean(\\"busy\\", false)} uploadObserved=${obj?.optBoolean(\\"uploadObserved\\", false)} uploadSettled=${obj?.optBoolean(\\"uploadSettled\\", false)} submitReady=${obj?.optBoolean(\\"submitReady\\", false)} activeUploads=${obj?.optInt(\\"activeUploads\\", 0)} started=${obj?.optInt(\\"uploadStarted\\", 0)} completed=${obj?.optInt(\\"uploadCompleted\\", 0)} failed=${obj?.optInt(\\"uploadFailed\\", 0)}")'
-new_wait = 'events?.onLog("R20_ATTACHMENT_WAIT_PREPARED", "token=$token busy=${obj?.optBoolean(\\"busy\\", false)} present=$present localReadReady=${obj?.optBoolean(\\"localReadReady\\", false)} attachmentPrepared=${obj?.optBoolean(\\"attachmentPrepared\\", false)} submitReady=${obj?.optBoolean(\\"submitReady\\", false)} serverPayloadObserved=${obj?.optBoolean(\\"serverPayloadObserved\\", false)} serverPayloadSettled=${obj?.optBoolean(\\"serverPayloadSettled\\", false)} payloadActive=${obj?.optInt(\\"payloadActive\\", 0)} payloadStarted=${obj?.optInt(\\"payloadStarted\\", 0)} payloadCompleted=${obj?.optInt(\\"payloadCompleted\\", 0)} payloadFailed=${obj?.optInt(\\"payloadFailed\\", 0)}")'
+old_wait = '''events?.onLog("R18_ATTACHMENT_WAIT_UPLOAD", "token=$token busy=${obj?.optBoolean("busy", false)} uploadObserved=${obj?.optBoolean("uploadObserved", false)} uploadSettled=${obj?.optBoolean("uploadSettled", false)} submitReady=${obj?.optBoolean("submitReady", false)} activeUploads=${obj?.optInt("activeUploads", 0)} started=${obj?.optInt("uploadStarted", 0)} completed=${obj?.optInt("uploadCompleted", 0)} failed=${obj?.optInt("uploadFailed", 0)}")'''
+new_wait = '''events?.onLog("R20_ATTACHMENT_WAIT_PREPARED", "token=$token busy=${obj?.optBoolean("busy", false)} present=$present localReadReady=${obj?.optBoolean("localReadReady", false)} attachmentPrepared=${obj?.optBoolean("attachmentPrepared", false)} submitReady=${obj?.optBoolean("submitReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)} payloadActive=${obj?.optInt("payloadActive", 0)} payloadStarted=${obj?.optInt("payloadStarted", 0)} payloadCompleted=${obj?.optInt("payloadCompleted", 0)} payloadFailed=${obj?.optInt("payloadFailed", 0)}")'''
 if old_wait in exe:
     exe = exe.replace(old_wait, new_wait, 1)
 elif 'R20_ATTACHMENT_WAIT_PREPARED' not in exe:
-    # Fallback for source formatting variations: preserve detail, change event name.
     if 'R18_ATTACHMENT_WAIT_UPLOAD' in exe:
         exe = exe.replace('R18_ATTACHMENT_WAIT_UPLOAD', 'R20_ATTACHMENT_WAIT_PREPARED', 1)
     else:

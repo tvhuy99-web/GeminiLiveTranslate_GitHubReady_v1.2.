@@ -28,6 +28,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
 
       - name: Apply R18.10 source patch
         run: python3 tools/apply_r1810_upload_rpc_trace.py

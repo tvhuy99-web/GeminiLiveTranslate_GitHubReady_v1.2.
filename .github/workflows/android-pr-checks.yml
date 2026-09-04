@@ -35,6 +35,34 @@ jobs:
             fetch --depth=1 origin "$HEAD_SHA"
           git checkout --detach "$HEAD_SHA"
 
+          # R18.6 was prepared as a one-shot patch workflow. The previous PR build
+          # never executed that patch, so extract and execute its embedded Python
+          # before validation. Once the source is committed this becomes a no-op.
+          if ! grep -q 'liveFileTranscribe=true' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt; then
+            python3 - <<'R186EXTRACT'
+          from pathlib import Path
+          import textwrap
+          workflow = Path('.github/workflows/r186-ai-studio-all-modes.yml').read_text()
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          start = workflow.find(start_marker)
+          if start < 0:
+              raise SystemExit('R18.6 patch start marker not found')
+          start += len(start_marker)
+          end = workflow.find(end_marker, start)
+          if end < 0:
+              raise SystemExit('R18.6 patch end marker not found')
+          script = textwrap.dedent(workflow[start:end])
+          Path('/tmp/r186_apply.py').write_text(script)
+          print(f'Extracted R18.6 patch: {len(script)} chars')
+          R186EXTRACT
+            python3 /tmp/r186_apply.py
+          fi
+
+          grep -q '!aiStudioMode && apiKey.isNullOrBlank()' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'liveFileTranscribe=true' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          test -s app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+
           JAVA17="$(find /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk -mindepth 1 -maxdepth 1 -type d -name '17*' | sort -V | tail -n 1)"
           if [[ -n "$JAVA17" ]]; then
             export JAVA_HOME="$JAVA17/x64"
@@ -59,11 +87,14 @@ jobs:
           grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
           ACTUAL_CERT="$(awk -F': ' '/certificate SHA-256 digest:/ {print $NF; exit}' apksigner.txt | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
+          ACTUAL_APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          test "$ACTUAL_APK_SHA" != "a3b78e9c3370b5986e7d93a5728b933b722e0f2bb8964d45c574101d780a6d71"
+          echo "R18.6 APK SHA-256: $ACTUAL_APK_SHA"
 
       - name: Upload PR debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: GeminiLiveTranslate-PR32-debug
+          name: GeminiLiveTranslate-R18.6-real-debug
           path: source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 1

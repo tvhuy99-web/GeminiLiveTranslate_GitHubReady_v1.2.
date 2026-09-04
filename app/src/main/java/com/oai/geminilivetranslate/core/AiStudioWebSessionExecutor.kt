@@ -340,6 +340,25 @@ class AiStudioWebSessionExecutor(
         return true
     }
 
+    fun generateAttachmentFileOnlyNative(
+        callback: (Result) -> Unit,
+    ): Boolean {
+        if (destroyed || !pageFinished || state != State.READY || pending != null) {
+            callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
+            return false
+        }
+        val request = beginPreparedAttachmentRequest("", callback, "attachment-file-only-native")
+        events?.onLog("R21_FILE_TRANSCRIBE_ARMED", "seq=${request.seq} prompt=false modelInput=file-only")
+        tryNativeAttachmentSubmit(
+            request.seq,
+            "file-transcribe-primary",
+            0,
+            allowProgrammaticFallback = false,
+            fileOnly = true,
+        )
+        return true
+    }
+
     fun awaitManualAttachmentGenerate(
         prompt: String,
         callback: (Result) -> Unit,
@@ -362,7 +381,7 @@ class AiStudioWebSessionExecutor(
 
     private fun monitorManualAttachmentReadiness(requestSeq: Int, baseline: Int, prompt: String) {
         if (pending?.seq != requestSeq || destroyed) return
-        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,uploadObserved:!!a.uploadObserved,uploadSettled:!!a.uploadSettled,submitReady:!!a.submitReady,activeUploads:Number(a.activeUploads||0),uploadStarted:Number(a.uploadStarted||0),uploadCompleted:Number(a.uploadCompleted||0),uploadFailed:Number(a.uploadFailed||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
+        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,uploadObserved:!!a.uploadObserved,uploadSettled:!!a.uploadSettled,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,blobReadReady:!!a.blobReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domBusySeen:!!a.domBusySeen,domReadyAfterBusy:!!a.domReadyAfterBusy,domErrorSeen:!!a.domErrorSeen,domProgress:Number(a.domProgress||-1),activeUploads:Number(a.activeUploads||0),uploadStarted:Number(a.uploadStarted||0),uploadCompleted:Number(a.uploadCompleted||0),uploadFailed:Number(a.uploadFailed||0),blobReadStarted:Number(a.blobReadStarted||0),blobReadCompleted:Number(a.blobReadCompleted||0),blobReadFailed:Number(a.blobReadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
         webView.evaluateJavascript(script) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
@@ -610,10 +629,17 @@ class AiStudioWebSessionExecutor(
         tryNativeAttachmentSubmit(requestSeq, reason, 0)
     }
 
-    private fun tryNativeAttachmentSubmit(requestSeq: Int, reason: String, attempt: Int, allowProgrammaticFallback: Boolean = true) {
+    private fun tryNativeAttachmentSubmit(
+        requestSeq: Int,
+        reason: String,
+        attempt: Int,
+        allowProgrammaticFallback: Boolean = true,
+        fileOnly: Boolean = false,
+    ) {
         if (pending?.seq != requestSeq) return
-        events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1}")
-        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.nativeTargetIfAttachment() : ({ok:false,error:'native-submit-target-not-installed'}))"
+        events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1} fileOnly=$fileOnly")
+        val targetFunction = if (fileOnly) "nativeTargetIfAttachmentFileOnly" else "nativeTargetIfAttachment"
+        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__[${JSONObject.quote(targetFunction)}]() : ({ok:false,error:'native-submit-target-not-installed'}))"
         webView.evaluateJavascript(expression) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
@@ -621,7 +647,7 @@ class AiStudioWebSessionExecutor(
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             if (obj?.optBoolean("ok") != true) {
                 if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
-                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
+                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
                 } else {
                     if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
                     else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_TARGET_UNAVAILABLE"))
@@ -632,7 +658,7 @@ class AiStudioWebSessionExecutor(
             val yRatio = obj.optDouble("yRatio", Double.NaN)
             val baseline = obj.optInt("baselineCaptureCount", -1)
             if (!xRatio.isFinite() || !yRatio.isFinite() || baseline < 0) {
-                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
+                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
                 else if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target") else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_INVALID_TARGET"))
                 return@evaluateJavascript
             }
@@ -640,9 +666,9 @@ class AiStudioWebSessionExecutor(
                 JSONObject()
                     .put("xRatio", xRatio)
                     .put("yRatio", yRatio)
-                    .put("tag", "VIDEO_SEND")
+                    .put("tag", if (fileOnly) "FILE_TRANSCRIBE_RUN" else "VIDEO_SEND")
                     .put("role", "composer-submit")
-                    .put("purpose", "video-generate")
+                    .put("purpose", if (fileOnly) "file-transcribe-run" else "video-generate")
                     .toString(),
             )
             main.postDelayed({
@@ -654,7 +680,7 @@ class AiStudioWebSessionExecutor(
                         readNormalized(requestSeq, "native-submit")
                     } else if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
                         events?.onLog("R12_NATIVE_SUBMIT_RETRY", "seq=$requestSeq attempt=${attempt + 1} reason=no-capture")
-                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1, allowProgrammaticFallback) }, NATIVE_SUBMIT_RETRY_MS)
+                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
                     } else {
                         if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
                         else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_NO_CAPTURE"))
@@ -918,7 +944,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-05-web-session-r12.4-manual-video-native-file"
+        const val VERSION = "2026-09-05-web-session-r12.5-file-only-transcribe-video-probe"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"

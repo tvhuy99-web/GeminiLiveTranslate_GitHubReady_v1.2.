@@ -10,7 +10,6 @@ import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.core.AiStudioWebSessionExecutor
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
-import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -44,10 +43,10 @@ class AiStudioFileTranscribeClient(
         selectModel(exec)
         onProgress("Đang đưa tệp vào AI Studio và chờ trang đọc xong...", 8)
         attachAndWait(exec, uri, displayName, mimeType, size)
-        val prompt = buildPrompt(speakerDiarization)
-        onProgress("Tệp đã sẵn sàng; đang chép lời bằng model tệp...", 55)
-        val result = generateNative(exec, prompt)
-        val parsed = parse(result.modelText)
+        logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-web-file-only")
+        onProgress("Tệp đã sẵn sàng; đang chép lời bằng model tệp, không dùng lời nhắc...", 55)
+        val result = generateFileOnlyNative(exec)
+        val parsed = parsePlainTranscript(result.modelText)
         logger.log(2, TAG, "DONE backend=aistudio-file model=$model chars=${parsed.text.length} words=${parsed.words.size} elapsedMs=${SystemClock.elapsedRealtime()-startedAt}")
         onProgress("Đang tạo kết quả...", 98)
         return parsed
@@ -76,7 +75,7 @@ class AiStudioFileTranscribeClient(
                     }
                 }
                 override fun onLog(name: String, detail: String) {
-                    val level = if (name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
+                    val level = if (name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
                     logger.log(level, TAG, "$name ${detail.take(5000)}")
                 }
             })
@@ -108,11 +107,15 @@ class AiStudioFileTranscribeClient(
         logger.log(2, TAG, "ATTACHMENT_PREPARED model=$model name=$name")
     }
 
-    private fun generateNative(exec: AiStudioWebSessionExecutor, prompt: String): AiStudioWebSessionExecutor.Result {
-        val latch = CountDownLatch(1); val ref = AtomicReference<AiStudioWebSessionExecutor.Result?>()
+    private fun generateFileOnlyNative(exec: AiStudioWebSessionExecutor): AiStudioWebSessionExecutor.Result {
+        val latch = CountDownLatch(1)
+        val ref = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.generateAttachmentNativeOnly(prompt) { r -> ref.set(r); latch.countDown() }
-            if (!accepted && ref.get() == null) { ref.set(AiStudioWebSessionExecutor.Result(ok=false,error="NATIVE_FILE_GENERATE_NOT_ARMED")); latch.countDown() }
+            val accepted = exec.generateAttachmentFileOnlyNative { r -> ref.set(r); latch.countDown() }
+            if (!accepted && ref.get() == null) {
+                ref.set(AiStudioWebSessionExecutor.Result(ok = false, error = "NATIVE_FILE_ONLY_TRANSCRIBE_NOT_ARMED"))
+                latch.countDown()
+            }
         }
         if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio chép lời tệp")
         val r = ref.get() ?: error("Không nhận được trạng thái chép lời tệp")
@@ -120,31 +123,14 @@ class AiStudioFileTranscribeClient(
         return r
     }
 
-    private fun buildPrompt(diarization: Boolean): String = """
-Hãy chép lời CHÍNH XÁC toàn bộ lời nói trong tệp đính kèm bằng model chuyên chép lời tệp.
-Không dịch, không tóm tắt, không thêm nội dung không nghe thấy.
-${if (diarization) "Phân biệt người nói khi có thể." else "Không cần phân biệt người nói."}
-Chỉ trả về một JSON object hợp lệ, không markdown:
-{"text":"toàn bộ bản chép lời","words":[{"text":"từ hoặc cụm từ","start_seconds":0.0,"end_seconds":0.5,"speaker":""}]}
-Nếu không thể cung cấp timestamp từng từ, vẫn phải trả text đầy đủ và có thể để words là mảng rỗng.
-""".trimIndent()
-
-    private fun parse(raw: String): GeminiFileTranscribeClient.Result {
-        val clean = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-        val a = clean.indexOf('{'); val b = clean.lastIndexOf('}')
-        val root = if (a >= 0 && b > a) JSONObject(clean.substring(a, b + 1)) else JSONObject().put("text", clean)
-        val text = root.optString("text").trim()
-        val words = ArrayList<GeminiFileTranscribeClient.WordInfo>()
-        val arr = root.optJSONArray("words")
-        if (arr != null) for (i in 0 until arr.length()) {
-            val w = arr.optJSONObject(i) ?: continue
-            val body = w.optString("text").trim(); if (body.isBlank()) continue
-            val start = (w.optDouble("start_seconds", 0.0) * 1000.0).toLong().coerceAtLeast(0L)
-            val end = (w.optDouble("end_seconds", start / 1000.0) * 1000.0).toLong().coerceAtLeast(start)
-            words += GeminiFileTranscribeClient.WordInfo(body, w.optString("speaker").takeIf(String::isNotBlank), start, end)
-        }
-        if (text.isBlank() && words.isEmpty()) error("AI Studio trả bản chép lời rỗng")
-        return GeminiFileTranscribeClient.Result(text.ifBlank { words.joinToString(" ") { it.text } }, words)
+    private fun parsePlainTranscript(raw: String): GeminiFileTranscribeClient.Result {
+        val clean = raw.trim()
+            .removePrefix("```text")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        if (clean.isBlank()) error("AI Studio trả bản chép lời rỗng")
+        return GeminiFileTranscribeClient.Result(clean, emptyList())
     }
 
     private companion object { const val TAG = "AiStudioFileTranscribe" }

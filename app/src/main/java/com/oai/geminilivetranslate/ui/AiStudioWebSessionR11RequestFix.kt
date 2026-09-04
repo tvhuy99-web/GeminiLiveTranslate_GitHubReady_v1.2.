@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.8-upload-rpc-trace"
+    const val VERSION = "2026-09-05-web-session-r11.9-blob-stream-dom-trace"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -34,6 +34,8 @@ object AiStudioWebSessionR11RequestFix {
             clickTrackingInstalled: false,
             adaptiveFallbackInstalled: false,
             fileReadObserverInstalled: false,
+            deepAttachmentObserverInstalled: false,
+            performanceObserverInstalled: false,
             fileArmToken: 0,
             fileArmed: false,
             trustedActivationCount: 0,
@@ -54,6 +56,19 @@ object AiStudioWebSessionR11RequestFix {
             attachmentFileReadFailed: 0,
             attachmentFileReadBytes: -1,
             attachmentFileReadResultChars: -1,
+            attachmentBlobReadStarted: 0,
+            attachmentBlobReadCompleted: 0,
+            attachmentBlobReadFailed: 0,
+            attachmentBlobReadBytes: 0,
+            attachmentFormDataSeen: 0,
+            attachmentPerformanceCount: 0,
+            attachmentLastPerformance: null,
+            attachmentDomState: 'unknown',
+            attachmentDomBusySeen: false,
+            attachmentDomReadyAfterBusy: false,
+            attachmentDomErrorSeen: false,
+            attachmentDomProgress: -1,
+            attachmentDomTransitionCount: 0,
             attachmentPayloadStarted: 0,
             attachmentPayloadCompleted: 0,
             attachmentPayloadFailed: 0,
@@ -158,6 +173,19 @@ object AiStudioWebSessionR11RequestFix {
             fix.attachmentFileReadFailed = 0;
             fix.attachmentFileReadBytes = -1;
             fix.attachmentFileReadResultChars = -1;
+            fix.attachmentBlobReadStarted = 0;
+            fix.attachmentBlobReadCompleted = 0;
+            fix.attachmentBlobReadFailed = 0;
+            fix.attachmentBlobReadBytes = 0;
+            fix.attachmentFormDataSeen = 0;
+            fix.attachmentPerformanceCount = 0;
+            fix.attachmentLastPerformance = null;
+            fix.attachmentDomState = 'unknown';
+            fix.attachmentDomBusySeen = false;
+            fix.attachmentDomReadyAfterBusy = false;
+            fix.attachmentDomErrorSeen = false;
+            fix.attachmentDomProgress = -1;
+            fix.attachmentDomTransitionCount = 0;
             fix.attachmentPayloadStarted = 0;
             fix.attachmentPayloadCompleted = 0;
             fix.attachmentPayloadFailed = 0;
@@ -544,6 +572,190 @@ object AiStudioWebSessionR11RequestFix {
             }
           }
 
+          const trackedAttachmentStreams = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+          let nextBlobReadId = 1;
+
+          function expectedBlob(blob) {
+            try {
+              if (!attachmentWindowActive() || !blob) return false;
+              const name = String(blob.name || '');
+              const size = Number(blob.size || -1);
+              return (name && name === fix.attachmentExpectedName) || (size > 0 && size === Number(fix.attachmentExpectedSize || -1));
+            } catch (_) { return false; }
+          }
+
+          function beginBlobRead(method, blob) {
+            if (!expectedBlob(blob)) return null;
+            const token = {id:nextBlobReadId++,method:String(method||''),size:Number(blob&&blob.size||-1),startedAt:Date.now(),bytes:0,lastBucket:-1,done:false};
+            fix.attachmentBlobReadStarted += 1;
+            emit('R21_ATTACHMENT_BLOB_READ_START',{id:token.id,method:token.method,size:token.size,started:fix.attachmentBlobReadStarted});
+            return token;
+          }
+
+          function finishBlobRead(token, ok, bytes, reason) {
+            if (!token || token.done) return;
+            token.done = true;
+            const n = Math.max(0,Number(bytes||0));
+            if (ok) { fix.attachmentBlobReadCompleted += 1; fix.attachmentBlobReadBytes = Math.max(fix.attachmentBlobReadBytes,n); }
+            else fix.attachmentBlobReadFailed += 1;
+            emit(ok?'R21_ATTACHMENT_BLOB_READ_DONE':'R21_ATTACHMENT_BLOB_READ_ERROR',{
+              id:token.id,method:token.method,size:token.size,bytes:n,reason:String(reason||''),elapsedMs:Date.now()-token.startedAt,
+              completed:fix.attachmentBlobReadCompleted,failed:fix.attachmentBlobReadFailed
+            });
+          }
+
+          function installDeepAttachmentObserver() {
+            if (fix.deepAttachmentObserverInstalled) return true;
+            try {
+              if (window.Blob && Blob.prototype) {
+                ['arrayBuffer','text'].forEach(function(name){
+                  const current=Blob.prototype[name];
+                  if(!current||current.__aisR21DeepAttachment)return;
+                  const wrapped=function(){
+                    const token=beginBlobRead('blob.'+name,this);
+                    let result;
+                    try{result=current.apply(this,arguments);}catch(err){finishBlobRead(token,false,0,'throw');throw err;}
+                    if(token&&result&&typeof result.then==='function'){
+                      result.then(function(value){
+                        let bytes=token.size;
+                        try{if(value&&typeof value.byteLength==='number')bytes=Number(value.byteLength);else if(typeof value==='string')bytes=value.length;}catch(_){}
+                        finishBlobRead(token,true,bytes,'promise');
+                      }).catch(function(){finishBlobRead(token,false,0,'promise-reject');});
+                    }
+                    return result;
+                  };
+                  wrapped.__aisR21DeepAttachment=true;Blob.prototype[name]=wrapped;
+                });
+                const currentStream=Blob.prototype.stream;
+                if(currentStream&&currentStream.__aisR21DeepAttachment!==true){
+                  const wrappedStream=function(){
+                    const token=beginBlobRead('blob.stream',this);
+                    const stream=currentStream.apply(this,arguments);
+                    try{if(token&&trackedAttachmentStreams&&stream)trackedAttachmentStreams.set(stream,token);}catch(_){}
+                    return stream;
+                  };
+                  wrappedStream.__aisR21DeepAttachment=true;Blob.prototype.stream=wrappedStream;
+                }
+                const currentSlice=Blob.prototype.slice;
+                if(currentSlice&&currentSlice.__aisR21DeepAttachment!==true){
+                  const wrappedSlice=function(){
+                    try{if(expectedBlob(this))emit('R21_ATTACHMENT_BLOB_SLICE',{size:Number(this&&this.size||-1),start:Number(arguments[0]||0),end:arguments.length>1?Number(arguments[1]||0):-1});}catch(_){}
+                    return currentSlice.apply(this,arguments);
+                  };
+                  wrappedSlice.__aisR21DeepAttachment=true;Blob.prototype.slice=wrappedSlice;
+                }
+              }
+              if (window.ReadableStream && ReadableStream.prototype && ReadableStream.prototype.getReader && trackedAttachmentStreams) {
+                const currentGetReader=ReadableStream.prototype.getReader;
+                if(currentGetReader.__aisR21DeepAttachment!==true){
+                  const wrappedGetReader=function(){
+                    const reader=currentGetReader.apply(this,arguments);
+                    const token=trackedAttachmentStreams.get(this);
+                    if(token&&reader&&typeof reader.read==='function'&&reader.read.__aisR21DeepAttachment!==true){
+                      const originalRead=reader.read.bind(reader);
+                      const wrappedRead=function(){
+                        const p=originalRead();
+                        if(!p||typeof p.then!=='function')return p;
+                        return p.then(function(result){
+                          if(result&&result.done){finishBlobRead(token,true,token.bytes,'stream-done');return result;}
+                          try{
+                            const value=result&&result.value;
+                            const n=value&&typeof value.byteLength==='number'?Number(value.byteLength):0;
+                            token.bytes+=Math.max(0,n);
+                            if(token.size>0){
+                              const bucket=Math.floor(Math.min(1,token.bytes/token.size)*4);
+                              if(bucket>token.lastBucket){token.lastBucket=bucket;emit('R21_ATTACHMENT_BLOB_STREAM_PROGRESS',{id:token.id,bytes:token.bytes,total:token.size,percent:Math.min(100,bucket*25)});}
+                            }
+                          }catch(_){}
+                          return result;
+                        },function(err){finishBlobRead(token,false,token.bytes,'stream-reject');throw err;});
+                      };
+                      wrappedRead.__aisR21DeepAttachment=true;reader.read=wrappedRead;
+                    }
+                    return reader;
+                  };
+                  wrappedGetReader.__aisR21DeepAttachment=true;ReadableStream.prototype.getReader=wrappedGetReader;
+                }
+              }
+              if(window.FormData&&FormData.prototype){
+                ['append','set'].forEach(function(name){
+                  const current=FormData.prototype[name];if(!current||current.__aisR21DeepAttachment)return;
+                  const wrapped=function(key,value){
+                    try{if(expectedBlob(value)){fix.attachmentFormDataSeen+=1;emit('R21_ATTACHMENT_FORMDATA_FILE',{method:name,key:String(key||'').slice(0,120),size:Number(value&&value.size||-1),seen:fix.attachmentFormDataSeen});}}catch(_){}
+                    return current.apply(this,arguments);
+                  };
+                  wrapped.__aisR21DeepAttachment=true;FormData.prototype[name]=wrapped;
+                });
+              }
+              if(!fix.performanceObserverInstalled&&window.PerformanceObserver){
+                try{
+                  const po=new PerformanceObserver(function(list){
+                    if(!attachmentWindowActive())return;
+                    const entries=list.getEntries();
+                    for(let i=0;i<entries.length;i++){
+                      const e=entries[i];if(!e)continue;
+                      const type=String(e.initiatorType||'');
+                      if(!/(fetch|xmlhttprequest|other|beacon)/i.test(type))continue;
+                      const hp=hostPath(e.name||'');
+                      fix.attachmentPerformanceCount+=1;
+                      fix.attachmentLastPerformance={host:hp.host,path:hp.path,initiatorType:type,duration:Math.round(Number(e.duration||0)),transferSize:Number(e.transferSize||0),encodedBodySize:Number(e.encodedBodySize||0),decodedBodySize:Number(e.decodedBodySize||0),responseStatus:Number(e.responseStatus||0)};
+                      emit('R21_ATTACHMENT_RESOURCE_TIMING',Object.assign({count:fix.attachmentPerformanceCount},fix.attachmentLastPerformance));
+                    }
+                  });
+                  po.observe({entryTypes:['resource']});
+                  fix.performanceObserverInstalled=true;
+                }catch(err){emit('R21_ATTACHMENT_RESOURCE_TIMING_ERROR',{error:String(err).slice(0,500)});}
+              }
+              fix.deepAttachmentObserverInstalled=true;
+              emit('R21_ATTACHMENT_DEEP_OBSERVER_INSTALLED',{version:fix.version});
+              return true;
+            } catch (err) {
+              emit('R21_ATTACHMENT_DEEP_OBSERVER_ERROR',{error:String(err).slice(0,800)});
+              return false;
+            }
+          }
+
+          function attachmentDomEvidence() {
+            let state='unknown',busy=false,error=false,progress=-1,readyAfterBusy=false,surfaceFound=false;
+            try {
+              const name=String(fix.attachmentExpectedName||'');
+              if(!name)return {state:state,busy:busy,error:error,progress:progress,readyAfterBusy:false,surfaceFound:false};
+              const nodes=document.querySelectorAll('span,div,p,[aria-label],[title]');
+              let surface=null,bestChars=100000000;
+              for(let i=0;i<nodes.length&&i<6000;i++){
+                const n=nodes[i];if(!visible(n))continue;
+                const text=[n.textContent||'',n.getAttribute&&n.getAttribute('aria-label')||'',n.getAttribute&&n.getAttribute('title')||''].join(' ');
+                if(text.indexOf(name)<0)continue;
+                if(text.length<bestChars){surface=n;bestChars=text.length;}
+              }
+              if(surface){
+                surfaceFound=true;
+                let root=surface;
+                for(let i=0;i<7&&root&&root.parentElement;i++)root=root.parentElement;
+                const text=[root&&root.textContent||'',root&&root.getAttribute&&root.getAttribute('aria-label')||'',root&&root.className||''].join(' ').replace(/\s+/g,' ').slice(0,5000);
+                const busyNode=root&&root.querySelector&&root.querySelector('[aria-busy="true"],progress,[role="progressbar"],[class*="spinner"],[class*="loading"],[class*="progress"]');
+                busy=!!busyNode||/(uploading|processing|loading|preparing|tải\s*(lên|tệp)|đang\s*(tải|xử lý|chuẩn bị))/i.test(text);
+                error=/(upload\s*failed|failed\s*to\s*upload|error\s*upload|tải\s*(lên|tệp).*thất\s*bại|lỗi.*tải)/i.test(text);
+                const bar=root&&root.querySelector&&root.querySelector('[role="progressbar"],[aria-valuenow],progress');
+                if(bar){
+                  const v=Number(bar.getAttribute&&bar.getAttribute('aria-valuenow')||bar.value||-1);
+                  if(Number.isFinite(v))progress=v;
+                }
+              }
+              if(busy)fix.attachmentDomBusySeen=true;
+              if(error)fix.attachmentDomErrorSeen=true;
+              if(fix.attachmentDomBusySeen&&!busy&&surfaceFound&&!error){fix.attachmentDomReadyAfterBusy=true;readyAfterBusy=true;}
+              else readyAfterBusy=fix.attachmentDomReadyAfterBusy;
+              state=error?'error':busy?'busy':readyAfterBusy?'ready-after-busy':surfaceFound?'attached':'missing';
+              fix.attachmentDomProgress=progress;
+              if(state!==fix.attachmentDomState){
+                const previous=fix.attachmentDomState;fix.attachmentDomState=state;fix.attachmentDomTransitionCount+=1;
+                emit('R21_ATTACHMENT_DOM_STATE',{previous:previous,state:state,busy:busy,error:error,progress:progress,busySeen:fix.attachmentDomBusySeen,readyAfterBusy:readyAfterBusy,transitions:fix.attachmentDomTransitionCount});
+              }
+            }catch(err){emit('R21_ATTACHMENT_DOM_PROBE_ERROR',{error:String(err).slice(0,500)});}
+            return {state:state,busy:busy,error:error,progress:progress,readyAfterBusy:readyAfterBusy,surfaceFound:surfaceFound};
+          }
+
           function installFileChangeObserver() {
             try {
               if (document.__aisR11FileChangeObserver === true) return true;
@@ -852,13 +1064,18 @@ object AiStudioWebSessionR11RequestFix {
                 const localReadReady=fix.attachmentFileReadCompleted>0&&fix.attachmentFileReadFailed===0;
                 const serverPayloadObserved=fix.attachmentPayloadStarted>0;
                 const serverPayloadSettled=serverPayloadObserved&&fix.attachmentPayloadActive===0&&fix.attachmentPayloadFailed===0&&fix.attachmentPayloadCompleted>=fix.attachmentPayloadStarted;
-                const busy=!!support.busy,submitReady=!!submit.ready;
-                const attachmentPrepared=present&&!busy&&localReadReady&&submitReady;
-                const ready=attachmentPrepared;
+                const dom=attachmentDomEvidence();
+                const blobReadReady=fix.attachmentBlobReadCompleted>0&&fix.attachmentBlobReadFailed===0;
+                const busy=!!support.busy||!!dom.busy,submitReady=!!submit.ready;
+                const attachmentPrepared=present&&!busy&&submitReady&&(localReadReady||blobReadReady||!!dom.readyAfterBusy||serverPayloadSettled);
+                const ready=attachmentPrepared&&!dom.error;
                 return {
                   ok:true,version:fix.version,windowActive:attachmentWindowActive(),present:present,ready:ready,nameVisible:attachmentNameVisible(),busy:busy,submitReady:submitReady,
                   submitScore:Number(submit.score||-1),submitDisabled:!!submit.disabled,submitLabel:String(submit.label||'').slice(0,180),
-                  attachmentPrepared:attachmentPrepared,localReadReady:localReadReady,
+                  attachmentPrepared:attachmentPrepared,localReadReady:localReadReady,blobReadReady:blobReadReady,
+                  blobReadStarted:fix.attachmentBlobReadStarted,blobReadCompleted:fix.attachmentBlobReadCompleted,blobReadFailed:fix.attachmentBlobReadFailed,blobReadBytes:fix.attachmentBlobReadBytes,
+                  formDataSeen:fix.attachmentFormDataSeen,performanceCount:fix.attachmentPerformanceCount,lastPerformance:fix.attachmentLastPerformance,
+                  domState:String(dom.state||''),domBusy:!!dom.busy,domBusySeen:fix.attachmentDomBusySeen,domReadyAfterBusy:!!dom.readyAfterBusy,domErrorSeen:fix.attachmentDomErrorSeen,domProgress:Number(dom.progress||-1),domTransitions:fix.attachmentDomTransitionCount,
                   serverPayloadObserved:serverPayloadObserved,serverPayloadSettled:serverPayloadSettled,
                   payloadActive:fix.attachmentPayloadActive,payloadStarted:fix.attachmentPayloadStarted,payloadCompleted:fix.attachmentPayloadCompleted,payloadFailed:fix.attachmentPayloadFailed,
                   lastPayload:fix.attachmentLastPayload,
@@ -973,11 +1190,12 @@ object AiStudioWebSessionR11RequestFix {
             const clickOk = installClickTracking();
             const fileChangeOk = installFileChangeObserver();
             const fileReadOk = installFileReadObserver();
+            const deepOk = installDeepAttachmentObserver();
             const apiOk = installApiPatch();
             const xhrOk = installXhrRewrite();
             const fetchOk = installFetchObserver();
             const adaptiveOk = installAdaptiveFallback();
-            return clickOk && fileChangeOk && fileReadOk && apiOk && xhrOk && fetchOk && adaptiveOk;
+            return clickOk && fileChangeOk && fileReadOk && deepOk && apiOk && xhrOk && fetchOk && adaptiveOk;
           }
 
           window.__AIS_R11_REQUEST_FIX__ = {

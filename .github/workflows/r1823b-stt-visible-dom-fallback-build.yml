@@ -36,6 +36,7 @@ jobs:
           grep -q streamingTextForUi app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
           grep -q '2026-09-05-web-session-r12.7-video-partial-stream' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
           grep -q '2026-09-05-web-session-r12.7-video-partial-stream' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt
+          # Keep every legacy source invariant; R18.26 changes only the executor version expectation.
 
       - name: Repository verification
         run: |

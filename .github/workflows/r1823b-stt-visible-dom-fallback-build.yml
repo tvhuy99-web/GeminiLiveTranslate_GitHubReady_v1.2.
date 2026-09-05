@@ -27,11 +27,15 @@ jobs:
       - name: Apply R18.26 video partial streaming patch
         run: |
           python3 tools/r1826_apply.py
+          sed -i 's/2026-09-05-web-session-r12.6-direct-stt-page/2026-09-05-web-session-r12.7-video-partial-stream/g' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
+          sed -i 's/2026-09-05-web-session-r12.6-direct-stt-page/2026-09-05-web-session-r12.7-video-partial-stream/g' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt
           git diff --check
           grep -q R35_VIDEO_PARTIAL_RAW app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           grep -q R35_VIDEO_PARTIAL_UI app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
           grep -q ATTACHMENT_PARTIAL_POLL_MS app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           grep -q streamingTextForUi app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
+          grep -q '2026-09-05-web-session-r12.7-video-partial-stream' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
+          grep -q '2026-09-05-web-session-r12.7-video-partial-stream' app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt
 
       - name: Repository verification
         run: |
@@ -58,6 +62,8 @@ jobs:
           git add app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
           git add app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt
           git commit -m 'R18.26: stream AI Studio video description partials'
           git push origin HEAD:experiment/aistudio-r183-network-vi
 

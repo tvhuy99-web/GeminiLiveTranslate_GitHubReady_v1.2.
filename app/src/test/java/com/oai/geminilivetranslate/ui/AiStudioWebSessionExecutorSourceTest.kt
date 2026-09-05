@@ -12,7 +12,7 @@ class AiStudioWebSessionExecutorSourceTest {
     @Test
     fun executorContainsOnlyCurrentVideoAndDedicatedSttGenerationPaths() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-05-web-session-r12.8-cleanup"))
+        assertTrue(executor.contains("2026-09-06-web-session-r12.9-json-completion-guard"))
         assertTrue(executor.contains("startFileTranscribe"))
         assertTrue(executor.contains("attachSttFile"))
         assertTrue(executor.contains("generateSttFileNative"))

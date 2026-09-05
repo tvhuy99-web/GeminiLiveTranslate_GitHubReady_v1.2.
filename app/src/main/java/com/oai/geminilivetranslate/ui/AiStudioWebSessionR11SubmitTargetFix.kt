@@ -1,21 +1,8 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R11.4 attachment-composer submit target.
- *
- * Device evidence proved that a video attachment is valid and AI Studio can GenerateContent when
- * the real composer Send control is pressed manually, while the generic text Enter route and a
- * broad Send/Run search can miss the correct control. This document-start runtime therefore:
- * 1) scopes submit candidates to the composer that contains BOTH the prompt and attachment chip;
- * 2) scores structural/geometry/listener evidence instead of label text alone;
- * 3) learns a proven submit control when a trusted manual click is followed by GenerateContent;
- * 4) exposes submitIfAttachment() so Android can use the learned/composer-scoped control before
- *    declaring NO_HANDLER_TRIGGERED_REQUEST.
- *
- * It never reads cookies, auth headers, passwords, API keys, or file bytes.
- */
+
 object AiStudioWebSessionR11SubmitTargetFix {
-    const val VERSION = "2026-09-05-web-session-r11.10-file-only-hit-test"
+    const val VERSION = "2026-09-05-web-session-r11.11-video-submit"
 
     val DOCUMENT_START: String = """
         (function(){
@@ -439,22 +426,6 @@ object AiStudioWebSessionR11SubmitTargetFix {
           }
 
 
-          function nativeTargetIfAttachmentFileOnly(){
-            const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
-            if(!attachmentPresent())return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
-            const d=discover(),list=semanticSubmitCandidates(d);
-            emit('R21_FILE_ONLY_TARGET_DISCOVERY',{expectedName:expectedName(),hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot,baselineCaptureCount:baseline,count:list.length,top:list.slice(0,8).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})});
-            if(!list.length)return {ok:false,error:'NO_SEMANTIC_SUBMIT',baselineCaptureCount:baseline};
-            const best=list[0];
-            if(best.disabled||best.score<900)return {ok:false,error:'NO_HIGH_CONFIDENCE_FILE_SUBMIT',score:best.score,label:best.label.slice(0,180),baselineCaptureCount:baseline};
-            try{
-              const point=safeNativePoint(best.button);
-              emit('R24_FILE_ONLY_NATIVE_HIT_TEST',{ok:!!point.ok,error:String(point.error||''),score:Number(best.score||-1),label:String(best.label||'').slice(0,180),point:point.ok?{x:point.x,y:point.y,sample:point.sample,hit:point.hit}:null,cover:point.cover||null,rect:point.rect||null});
-              if(!point.ok)return {ok:false,error:String(point.error||'FILE_ONLY_HIT_TEST_FAILED'),baselineCaptureCount:baseline,score:best.score,cover:point.cover||null,rect:point.rect||null};
-              return {ok:true,native:true,fileOnly:true,hitTest:true,xRatio:point.xRatio,yRatio:point.yRatio,baselineCaptureCount:baseline,score:best.score,label:best.label.slice(0,180),fingerprint:fingerprint(best.button,d.composerRoot,d.prompt,d.attachment)};
-            }catch(err){return {ok:false,error:'FILE_ONLY_TARGET_ERROR',detail:String(err).slice(0,500),baselineCaptureCount:baseline};}
-          }
-
           function installClickTracking(){
             try{
               if(!window.EventTarget||!EventTarget.prototype)return false;
@@ -515,7 +486,6 @@ object AiStudioWebSessionR11SubmitTargetFix {
             submissionReadinessIfAttachment:submissionReadinessIfAttachment,
             preparePromptIfAttachment:preparePromptIfAttachment,
             nativeTargetIfAttachment:nativeTargetIfAttachment,
-            nativeTargetIfAttachmentFileOnly:nativeTargetIfAttachmentFileOnly,
             submitIfAttachment:submitIfAttachment,
             state:function(){return {ok:true,version:'$VERSION',submitAttempts:submitAttempts,proven:!!(provenButton&&provenButton.isConnected),provenFingerprint:provenFingerprint,clickEntries:clickEntries.filter(function(e){return e.active;}).length};}
           };

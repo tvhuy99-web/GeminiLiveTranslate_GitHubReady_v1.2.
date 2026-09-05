@@ -21,7 +21,7 @@ import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
-/** Temporary device-debug support for AI Studio Live Start activation. */
+
 internal object AiStudioNativeTapDocumentStart {
     const val VERSION = "2026-09-04-r18.7-native-action-tap-debug"
 
@@ -238,8 +238,8 @@ internal object AiStudioDebugWebViewHost {
     ) {
         val screenHeight = panel.resources.displayMetrics.heightPixels
         val panelHeight = (panel.layoutParams?.height ?: panel.height).coerceAtLeast(1)
-        // Keep the WebView VISIBLE and fully laid out so JS/native dispatch still works. Hidden mode
-        // moves the entire debug panel outside the screen instead of using GONE/INVISIBLE.
+
+
         panel.translationY = if (visible) 0f else (screenHeight + panelHeight).toFloat()
         val accessibility = if (visible) {
             android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO

@@ -13,17 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * R15 Android-side realtime input client for the authenticated AI Studio Web Session.
- *
- * It intentionally does not own authentication and does not recreate Google WebChannel. The caller
- * keeps an AI Studio Live page running; R14 owns the page-local carrier replacement. This class
- * turns the application's existing PCM16 mono 16 kHz chunks into the proven 1,280-byte (~40 ms)
- * frames, applies bounded Android-side backpressure, batches Base64 frames onto the WebView main
- * thread, and exposes transport counters suitable for TranslationService-style health reporting.
- *
- * No cookies, auth headers, access tokens or WebChannel request bodies leave the WebView.
- */
+
 class AiStudioWebLiveClient(
     private val webView: WebView,
     private val logger: (name: String, detail: String) -> Unit = { _, _ -> },
@@ -108,7 +98,7 @@ class AiStudioWebLiveClient(
         return if (backpressured) SendResult.BACKPRESSURED else SendResult.QUEUED
     }
 
-    /** Flushes the final partial PCM frame with zero padding. AI Studio still owns Live lifecycle. */
+
     fun sendAudioStreamEnd(): SendResult {
         if (closed.get()) return SendResult.CLOSED
         if (!armed.get()) return SendResult.NOT_ARMED

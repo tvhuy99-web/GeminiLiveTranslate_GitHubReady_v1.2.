@@ -315,7 +315,7 @@ class TranslationService : LifecycleService() {
         } else {
             apiKey.orEmpty()
         }
-        val useLiveFileTranscribe = false // FILE uses gemini-3.5-transcribe, never the Live model.
+        val useLiveFileTranscribe = false
         logger.log(
             2,
             "BackendRoute",

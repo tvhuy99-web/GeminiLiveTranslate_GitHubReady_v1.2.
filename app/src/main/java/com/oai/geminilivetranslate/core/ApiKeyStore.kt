@@ -49,12 +49,7 @@ class ApiKeyStore(context: Context) {
         return save(current.copy(keys = normalized, selected = selected))
     }
 
-    /**
-     * Credential for the operation currently selected in the main UI.
-     * AI Studio is an official Gemini Live connection mode only, so the local sentinel is returned
-     * only for Live translate or Live transcribe. File transcription, subtitle translation and
-     * Gemini video description always require a real app-owned API key.
-     */
+
     @Synchronized
     fun currentGeminiKey(): String? {
         val real = realGeminiKey(load())
@@ -68,7 +63,7 @@ class ApiKeyStore(context: Context) {
         }
     }
 
-    /** Explicit Live-only resolver for callers that already know they are opening Gemini Live. */
+
     @Synchronized
     fun currentLiveCredential(): String? {
         val real = realGeminiKey(load())

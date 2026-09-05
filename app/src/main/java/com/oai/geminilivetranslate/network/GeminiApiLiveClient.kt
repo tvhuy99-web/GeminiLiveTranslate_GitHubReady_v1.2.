@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/** Existing API-key WebSocket backend preserved behind the R17 GeminiLiveClient facade. */
+
 internal class GeminiApiLiveClient(
     private val apiKey: String,
     private val model: String,

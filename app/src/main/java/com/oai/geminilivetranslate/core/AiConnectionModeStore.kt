@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.core
 
 import android.content.Context
 
-/** Official user-selectable AI connection mode. */
+
 class AiConnectionModeStore(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

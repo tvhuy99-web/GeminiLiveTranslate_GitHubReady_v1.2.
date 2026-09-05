@@ -15,7 +15,6 @@ object AiStudioWebSessionLabScripts {
             : null;
           const state = {
             version: '$VERSION',
-            expectedMarker: '',
             captureCount: 0,
             lastResult: null,
             lastProgress: null,
@@ -77,8 +76,6 @@ object AiStudioWebSessionLabScripts {
 
           function resultPayload(source,status,ok,text,responseType,contentType,phase,partial) {
             const raw = String(text || '');
-            const marker = state.expectedMarker;
-            const markerFound = !!marker && raw.indexOf(marker) >= 0;
             return {
               source:source,
               status:Number(status),
@@ -88,8 +85,6 @@ object AiStudioWebSessionLabScripts {
               contentType:String(contentType||''),
               phase:String(phase||''),
               partial:!!partial,
-              marker:marker,
-              markerFound:markerFound,
               responseText:raw.slice(0,16000),
               at:Date.now()
             };
@@ -110,7 +105,6 @@ object AiStudioWebSessionLabScripts {
               responseType:payload.responseType,
               contentType:payload.contentType,
               phase:payload.phase,
-              markerFound:payload.markerFound,
               at:payload.at
             });
             return payload;
@@ -267,10 +261,6 @@ object AiStudioWebSessionLabScripts {
                   m.bestContentType = xhrContentType(xhr);
                   m.progressCount += 1;
                   const progress = recordProgress('xhr',status,text,snapshot.type,m.bestContentType,eventName+'-rs3');
-                  if (progress.markerFound) {
-                    m.resultRecorded = true;
-                    recordResult('xhr',status,true,text,snapshot.type,m.bestContentType,'stream-marker',false);
-                  }
                 };
 
                 const finish = function(eventName) {
@@ -336,77 +326,6 @@ object AiStudioWebSessionLabScripts {
             };
           }
 
-          function visible(el) {
-            try { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>2&&r.height>2&&s.display!=='none'&&s.visibility!=='hidden'; }
-            catch (_) { return false; }
-          }
-
-          function promptCandidates() {
-            return Array.from(document.querySelectorAll('textarea,input,[contenteditable="true"],[role="textbox"]')).map((el) => {
-              const hay=((el.getAttribute('aria-label')||'')+' '+(el.getAttribute('placeholder')||'')+' '+(el.getAttribute('role')||'')).toLowerCase();
-              let score=0;
-              if(el.tagName==='TEXTAREA') score+=130;
-              if(el.isContentEditable) score+=100;
-              if(hay.includes('prompt')) score+=100;
-              if(visible(el)) score+=100;
-              return {el:el,score:score};
-            }).sort((a,b)=>b.score-a.score);
-          }
-
-          function setPrompt(el,text) {
-            el.focus();
-            try {
-              const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:(el.tagName==='INPUT'?HTMLInputElement.prototype:null);
-              const desc=proto&&Object.getOwnPropertyDescriptor(proto,'value');
-              if(desc&&desc.set) desc.set.call(el,text); else if('value' in el) el.value=text; else el.textContent=text;
-            } catch (_) { if('value' in el) el.value=text; else el.textContent=text; }
-            try { el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text})); }
-            catch (_) { el.dispatchEvent(new Event('input',{bubbles:true})); }
-            el.dispatchEvent(new Event('change',{bubbles:true}));
-          }
-
-          function runCandidates() {
-            return Array.from(document.querySelectorAll('button,[role="button"],input[type="submit"]')).map((el)=>{
-              const r=el.getBoundingClientRect();
-              const hay=((el.innerText||el.textContent||'')+' '+(el.getAttribute('aria-label')||'')+' '+(el.getAttribute('type')||'')+' '+String(el.className||'')).toLowerCase();
-              let score=0;
-              if(hay.includes('run')) score+=180;
-              if(hay.includes('send')) score+=180;
-              if((el.getAttribute('type')||'').toLowerCase()==='submit') score+=100;
-              if(visible(el)) score+=80;
-              if(el.disabled) score-=400;
-              return {el:el,score:score,rect:r,label:String(el.innerText||el.getAttribute('aria-label')||'').slice(0,100)};
-            }).sort((a,b)=>b.score-a.score);
-          }
-
-          state.prepareTrustedSend = function(prompt,marker) {
-            state.expectedMarker=String(marker||'');
-            state.lastResult=null;
-            state.lastProgress=null;
-            state.lastXhrLifecycle=null;
-            const prompts=promptCandidates();
-            if(!prompts.length) return {ok:false,error:'prompt-not-found'};
-            setPrompt(prompts[0].el,String(prompt||''));
-            const runs=runCandidates();
-            if(!runs.length||runs[0].score<100) return {ok:false,error:'run-not-found'};
-            const r=runs[0].rect;
-            emit('TRUSTED_SEND_READY',{runLabel:runs[0].label,runScore:runs[0].score,marker:state.expectedMarker});
-            return {ok:true,x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height,runLabel:runs[0].label,runScore:runs[0].score};
-          };
-
-          state.inspect = function() {
-            return {
-              version:state.version,
-              href:location.href,
-              readyState:document.readyState,
-              captureCount:state.captureCount,
-              lastResult:state.lastResult,
-              lastProgress:state.lastProgress,
-              lastCallStack:state.lastCallStack,
-              lastXhrLifecycle:state.lastXhrLifecycle
-            };
-          };
-
           state.getLastSafeResponse = function() {
             return state.lastResult || state.lastProgress || {ok:false,error:'no-result',lastXhrLifecycle:state.lastXhrLifecycle};
           };
@@ -415,15 +334,4 @@ object AiStudioWebSessionLabScripts {
         })();
     """.trimIndent()
 
-    fun call(expression: String): String = """
-        (function(){
-          try {
-            if (!window.__AIS_WEB_SESSION__) return JSON.stringify({ok:false,error:'probe-not-installed'});
-            const value = ($expression);
-            return JSON.stringify({ok:true,value:value});
-          } catch(e) {
-            return JSON.stringify({ok:false,error:String(e),stack:String(e&&e.stack||'')});
-          }
-        })();
-    """.trimIndent()
 }

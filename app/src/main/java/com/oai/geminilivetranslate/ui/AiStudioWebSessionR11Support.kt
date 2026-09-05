@@ -1,16 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R11 document-start support for the production-shaped AI Studio Web Session experiment.
- *
- * Goals:
- * 1) expose a privacy-safe authentication/session probe;
- * 2) discover model identifiers from AI Studio network/bootstrap/DOM data and select one;
- * 3) trigger AI Studio's own file chooser/upload path while Android supplies the selected Uri.
- *
- * This layer intentionally does not read cookies, Authorization headers, passwords, or API-key
- * values. Network logging is reduced to host/path, model ids, body size, and upload lifecycle.
- */
+
 object AiStudioWebSessionR11Support {
     const val VERSION = "2026-09-02-web-session-r11.0-auth-model-file"
 

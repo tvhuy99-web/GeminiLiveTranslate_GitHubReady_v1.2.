@@ -1,12 +1,6 @@
 package com.oai.geminilivetranslate.network
 
-/**
- * Backend-neutral realtime session contract prepared in R17.
- *
- * GeminiLiveClient is the compatibility facade currently used by TranslationService. This contract
- * lets the next UI-only milestone expose backend selection without changing the audio/service
- * semantics again.
- */
+
 interface RealtimeSessionClient {
     fun connect()
     fun sendAudio(pcm16kMono: ByteArray): GeminiLiveClient.SendResult

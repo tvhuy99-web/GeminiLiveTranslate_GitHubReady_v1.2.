@@ -11,7 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Stable Live facade used by TranslationService for both official connection modes. */
+
 class GeminiLiveClient(
     private val apiKey: String,
     private val model: String,

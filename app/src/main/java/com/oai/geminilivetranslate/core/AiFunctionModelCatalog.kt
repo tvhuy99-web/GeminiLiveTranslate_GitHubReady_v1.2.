@@ -1,10 +1,6 @@
 package com.oai.geminilivetranslate.core
 
-/**
- * Single diagnostic view of the existing function-specific model defaults.
- * This does not change model selection; it prevents future backend work from collapsing
- * unrelated features onto one model.
- */
+
 object AiFunctionModelCatalog {
     fun summary(videoDescriptionModel: String = AppPreferences.VIDEO_DESCRIPTION_MODEL): String {
         val videoModel = videoDescriptionModel.trim().removePrefix("models/")

@@ -21,9 +21,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.oai.geminilivetranslate.ui.AiStudioGoogleAccountBootstrap
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
-import com.oai.geminilivetranslate.ui.AiStudioWebSessionDirectEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11RequestFix
@@ -36,23 +34,7 @@ import com.oai.geminilivetranslate.network.AiStudioNativeTapController
 import org.json.JSONObject
 import org.json.JSONTokener
 
-/**
- * R12.5 production-shaped executor for an authenticated AI Studio web session.
- *
- * R12 Direct Engine remains unchanged: the proven R9 adaptive path is first for text, and if it
- * reaches R9_HANDLER_FINAL the executor calls AI Studio's own page-local handlers directly rather
- * than synthesizing a physical tap.
- *
- * R12.1 fixes the response lifetime bug observed on real video generation. A terminal HTTP 2xx
- * GENERATE_RESULT with model text is accepted even when ResponseCore still labels the protobuf
- * payload partial. Long-running requests use a progress-aware watchdog: five minutes for first
- * streamed data, sixty seconds of true idle time after progress begins, and a fifteen-minute hard
- * ceiling. Any growth in responseChars, including the English thinking stream exposed by AI Studio,
- * refreshes the idle watchdog.
- *
- * Auth headers/cookies/API-key values never leave the page. A selected Android Google account may
- * be used only as a one-shot web login hint; no Android auth token is requested.
- */
+
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 class AiStudioWebSessionExecutor(
     context: Context,
@@ -64,7 +46,6 @@ class AiStudioWebSessionExecutor(
         val ok: Boolean,
         val status: Int = -1,
         val modelText: String = "",
-        val markerFound: Boolean = false,
         val complete: Boolean = false,
         val phase: String = "",
         val error: String = "",
@@ -75,7 +56,6 @@ class AiStudioWebSessionExecutor(
         fun onLog(name: String, detail: String) {}
     }
 
-    private val appContext = context.applicationContext
     val webView: WebView = WebView(context)
 
     private val main = Handler(Looper.getMainLooper())
@@ -84,7 +64,6 @@ class AiStudioWebSessionExecutor(
     private var pageFinished = false
     private var seq = 0
     private var pending: Pending? = null
-    private var directRecoverySeq = -1
     private var attachmentSeq = 0
     private var activeAttachment: PendingAttachment? = null
     private var sttModeModel: String? = null
@@ -107,11 +86,8 @@ class AiStudioWebSessionExecutor(
 
     private data class Pending(
         val seq: Int,
-        val prompt: String,
-        val marker: String,
         val callback: (Result) -> Unit,
         val startedAt: Long,
-        val progressAware: Boolean,
         var firstProgressAt: Long = 0L,
         var lastProgressAt: Long = 0L,
         var lastResponseChars: Int = 0,
@@ -133,13 +109,8 @@ class AiStudioWebSessionExecutor(
 
     fun start(url: String? = null) {
         if (destroyed) return
-        val bootstrapUrl = if (url == null) AiStudioGoogleAccountBootstrap.consumeStartUrl(appContext) else null
-        val resolvedUrl = url ?: bootstrapUrl ?: NEW_CHAT_URL
-        val source = when {
-            url != null -> "explicit"
-            bootstrapUrl != null -> "google-account-hint"
-            else -> "new-chat"
-        }
+        val resolvedUrl = url ?: NEW_CHAT_URL
+        val source = if (url != null) "explicit" else "new-chat"
         events?.onLog("R12_START_URL", "source=$source host=${runCatching { android.net.Uri.parse(resolvedUrl).host }.getOrNull().orEmpty()}")
         setState(State.LOADING, "loading AI Studio source=$source")
         pageFinished = false
@@ -295,8 +266,8 @@ class AiStudioWebSessionExecutor(
                     main.postDelayed({ pollAttachment(token) }, 350L)
                 }, 120L)
             } else {
-                // If the file input is lazily created, ask the page's own attachment control to expose it,
-                // then arm the trusted click again. The actual URI is still supplied only by WebChromeClient.
+
+
                 val expose = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachFile?window.__AIS_R11_SUPPORT__.attachFile():({ok:false,error:'r11-attach-not-installed'}))"
                 webView.evaluateJavascript(expose) { exposed ->
                     events?.onLog("R18_ATTACHMENT_EXPOSE", decodeEvalValue(exposed).take(5000))
@@ -367,21 +338,16 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun beginPreparedAttachmentRequest(
-        prompt: String,
         callback: (Result) -> Unit,
         mode: String,
     ): Pending {
         seq += 1
         val request = Pending(
             seq = seq,
-            prompt = prompt,
-            marker = "",
             callback = callback,
             startedAt = SystemClock.uptimeMillis(),
-            progressAware = true,
         )
         pending = request
-        directRecoverySeq = -1
         setState(State.GENERATING, "request=${request.seq} mode=$mode")
         schedulePolls(request.seq)
         scheduleProgressWatchdog(request.seq)
@@ -405,17 +371,17 @@ class AiStudioWebSessionExecutor(
                 callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
                 return@prepareAttachmentPrompt
             }
-            val request = beginPreparedAttachmentRequest(prompt, callback, "attachment-native-only")
+            val request = beginPreparedAttachmentRequest(callback, "attachment-native-only")
             events?.onLog("R19_NATIVE_FILE_SUBMIT_ARMED", "seq=${request.seq} promptChars=${prompt.length}")
             events?.onLog("R23_VIDEO_AUTO_SUBMIT_POLICY", "seq=${request.seq} nativeHitTest=true cachedPreparedTarget=true programmaticFallback=true")
-            tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0, allowProgrammaticFallback = true)
+            tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0)
         }
         return true
     }
 
     fun generateSttFileNative(callback: (Result) -> Unit): Boolean {
         if (destroyed || !pageFinished || state != State.READY || pending != null || sttModeModel == null) { callback(Result(ok=false,error="NOT_READY_OR_BUSY")); return false }
-        val request=beginPreparedAttachmentRequest("",callback,"stt-direct-page-file")
+        val request=beginPreparedAttachmentRequest(callback,"stt-direct-page-file")
         events?.onLog("R28_STT_AUTO_RUN_ARMED", "seq=${request.seq} model=${sttModeModel} prompt=false")
         trySttRunSubmit(request.seq,0)
         return true
@@ -451,190 +417,9 @@ class AiStudioWebSessionExecutor(
         }
     }
 
-    fun generateAttachmentFileOnlyNative(
-        callback: (Result) -> Unit,
-    ): Boolean {
-        if (destroyed || !pageFinished || state != State.READY || pending != null) {
-            callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
-            return false
-        }
-        val request = beginPreparedAttachmentRequest("", callback, "attachment-file-only-native")
-        events?.onLog("R21_FILE_TRANSCRIBE_ARMED", "seq=${request.seq} prompt=false modelInput=file-only")
-        events?.onLog("R24_FILE_TRANSCRIBE_AUTO_SUBMIT_POLICY", "seq=${request.seq} autoSubmit=true prompt=false fileOnly=true nativeHitTest=true programmaticFallback=false")
-        tryNativeAttachmentSubmit(
-            request.seq,
-            "file-transcribe-primary",
-            0,
-            allowProgrammaticFallback = false,
-            fileOnly = true,
-        )
-        return true
-    }
-
-    fun awaitManualAttachmentFileOnlyGenerate(
-        callback: (Result) -> Unit,
-    ): Boolean {
-        if (destroyed || !pageFinished || state != State.READY || pending != null) {
-            callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
-            return false
-        }
-        val baselineScript = "JSON.stringify((function(){var n=window.__AIS_WEB_SESSION__;var s=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.selectionState?window.__AIS_R11_SUPPORT__.selectionState():{};return {ok:true,captureCount:Number(n&&n.captureCount||0),selectedModel:String(s&&s.selectedModel||''),requestedModel:String(s&&s.requestedModel||'')};})())"
-        webView.evaluateJavascript(baselineScript) { raw ->
-            if (destroyed || pending != null) {
-                callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
-                return@evaluateJavascript
-            }
-            val decoded = decodeEvalValue(raw)
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            val baseline = obj?.optInt("captureCount", -1) ?: -1
-            if (baseline < 0) {
-                callback(Result(ok = false, error = "CAPTURE_BASELINE_UNAVAILABLE", phase = decoded.take(500)))
-                return@evaluateJavascript
-            }
-            val request = beginPreparedAttachmentRequest("", callback, "manual-file-transcribe")
-            events?.onLog(
-                "R22_FILE_TRANSCRIBE_MANUAL_ARMED",
-                "seq=${request.seq} baseline=$baseline prompt=false modelInput=file-only selectedModel=${obj?.optString("selectedModel").orEmpty()} autoSubmit=false",
-            )
-            monitorManualFileOnlyGenerate(request.seq, baseline)
-        }
-        return true
-    }
-
-    private fun monitorManualFileOnlyGenerate(requestSeq: Int, baseline: Int) {
-        if (pending?.seq != requestSeq || destroyed) return
-        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var s=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.selectionState?window.__AIS_R11_SUPPORT__.selectionState():{};var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domReadyAfterBusy:!!a.domReadyAfterBusy,selectedModel:String(s&&s.selectedModel||''),requestedModel:String(s&&s.requestedModel||''),payloadStarted:Number(a.payloadStarted||0),payloadCompleted:Number(a.payloadCompleted||0),payloadFailed:Number(a.payloadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
-        webView.evaluateJavascript(script) { raw ->
-            if (pending?.seq != requestSeq) return@evaluateJavascript
-            val decoded = decodeEvalValue(raw)
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            events?.onLog("R22_FILE_TRANSCRIBE_MANUAL_STATE", decoded.take(8000))
-            if (obj?.optBoolean("manualSubmitSeen") == true) {
-                events?.onLog(
-                    "R22_FILE_TRANSCRIBE_MANUAL_SUBMIT_DETECTED",
-                    "seq=$requestSeq captureCount=${obj.optInt("captureCount", -1)} baseline=$baseline selectedModel=${obj.optString("selectedModel")}",
-                )
-                readNormalized(requestSeq, "manual-file-transcribe-submit")
-                return@evaluateJavascript
-            }
-            main.postDelayed({ monitorManualFileOnlyGenerate(requestSeq, baseline) }, MANUAL_READINESS_POLL_MS)
-        }
-    }
-
-    fun awaitManualAttachmentGenerate(
-        prompt: String,
-        callback: (Result) -> Unit,
-    ): Boolean {
-        if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
-            callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
-            return false
-        }
-        prepareAttachmentPrompt(prompt) { ok, detail, baseline ->
-            if (!ok) {
-                callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
-                return@prepareAttachmentPrompt
-            }
-            val request = beginPreparedAttachmentRequest(prompt, callback, "manual-video-submit")
-            events?.onLog("R19_MANUAL_VIDEO_ARMED", "seq=${request.seq} baseline=$baseline promptChars=${prompt.length} autoSubmit=false")
-            monitorManualAttachmentReadiness(request.seq, baseline, prompt)
-        }
-        return true
-    }
-
-    private fun monitorManualAttachmentReadiness(requestSeq: Int, baseline: Int, prompt: String) {
-        if (pending?.seq != requestSeq || destroyed) return
-        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,uploadObserved:!!a.uploadObserved,uploadSettled:!!a.uploadSettled,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,blobReadReady:!!a.blobReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domBusySeen:!!a.domBusySeen,domReadyAfterBusy:!!a.domReadyAfterBusy,domErrorSeen:!!a.domErrorSeen,domProgress:Number(a.domProgress||-1),activeUploads:Number(a.activeUploads||0),uploadStarted:Number(a.uploadStarted||0),uploadCompleted:Number(a.uploadCompleted||0),uploadFailed:Number(a.uploadFailed||0),blobReadStarted:Number(a.blobReadStarted||0),blobReadCompleted:Number(a.blobReadCompleted||0),blobReadFailed:Number(a.blobReadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
-        webView.evaluateJavascript(script) { raw ->
-            if (pending?.seq != requestSeq) return@evaluateJavascript
-            val decoded = decodeEvalValue(raw)
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            events?.onLog("R19_MANUAL_VIDEO_READINESS", decoded.take(8000))
-            if (obj?.optBoolean("manualSubmitSeen") == true) {
-                events?.onLog("R19_MANUAL_SUBMIT_DETECTED", "seq=$requestSeq captureCount=${obj.optInt("captureCount", -1)} baseline=$baseline")
-                readNormalized(requestSeq, "manual-submit-detected")
-                return@evaluateJavascript
-            }
-            val promptCheck = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__&&window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment?window.__AIS_R11_SUBMIT_TARGET__.preparePromptIfAttachment(${JSONObject.quote(prompt)}):({ok:false,error:'manual-prompt-preparer-not-installed'}))"
-            webView.evaluateJavascript(promptCheck) { prepared ->
-                if (pending?.seq == requestSeq) events?.onLog("R19_MANUAL_PROMPT_REFRESH", decodeEvalValue(prepared).take(3000))
-            }
-            main.postDelayed({ monitorManualAttachmentReadiness(requestSeq, baseline, prompt) }, MANUAL_READINESS_POLL_MS)
-        }
-    }
-
-    fun generate(
-        prompt: String,
-        marker: String = "",
-        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-        callback: (Result) -> Unit,
-    ): Boolean {
-        if (destroyed) {
-            callback(Result(ok = false, error = "DESTROYED"))
-            return false
-        }
-        if (pending != null) {
-            callback(Result(ok = false, error = "BUSY"))
-            return false
-        }
-        if (!pageFinished || state != State.READY) {
-            callback(Result(ok = false, error = "NOT_READY"))
-            refreshDiscovery()
-            return false
-        }
-        if (prompt.isBlank()) {
-            callback(Result(ok = false, error = "EMPTY_PROMPT"))
-            return false
-        }
-
-        seq += 1
-        val progressAware = marker.isBlank()
-        val request = Pending(
-            seq = seq,
-            prompt = prompt,
-            marker = marker,
-            callback = callback,
-            startedAt = SystemClock.uptimeMillis(),
-            progressAware = progressAware,
-        )
-        pending = request
-        directRecoverySeq = -1
-        setState(State.GENERATING, "request=${request.seq} progressAware=$progressAware")
-        events?.onLog(
-            "R12_TIMEOUT_POLICY",
-            if (progressAware) {
-                "seq=${request.seq} firstProgressMs=$FIRST_PROGRESS_TIMEOUT_MS idleMs=$PROGRESS_IDLE_TIMEOUT_MS hardMs=$PROGRESS_HARD_TIMEOUT_MS"
-            } else {
-                "seq=${request.seq} fixedMs=${timeoutMs.coerceIn(2_000L, FIXED_TIMEOUT_MAX_MS)} markerRequired=true"
-            },
-        )
-
-        val expression = "window.__AIS_ADAPTIVE_RUNTIME__ ? window.__AIS_ADAPTIVE_RUNTIME__.generate(${JSONObject.quote(prompt)},${JSONObject.quote(marker)}) : ({ok:false,error:'runtime-not-installed'})"
-        webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
-            if (pending?.seq != request.seq) return@evaluateJavascript
-            val decoded = decodeEvalValue(raw)
-            events?.onLog("R10_DISPATCH", decoded.take(8000))
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            if (obj?.optBoolean("ok") != true) {
-                tryDirectEngineRecovery(request.seq, "R9_DISPATCH_FAILED")
-            } else {
-                schedulePolls(request.seq)
-            }
-        }
-
-        if (progressAware) {
-            scheduleProgressWatchdog(request.seq)
-        } else {
-            main.postDelayed({
-                if (pending?.seq == request.seq) timeoutRequest(request.seq, "FIXED_TIMEOUT")
-            }, timeoutMs.coerceIn(2_000L, FIXED_TIMEOUT_MAX_MS))
-        }
-        return true
-    }
-
     fun cancelCurrent(): Boolean {
         val p = pending ?: return false
         pending = null
-        directRecoverySeq = -1
         clearAttachmentPartial()
         runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
         p.callback(Result(ok = false, error = "CANCELLED"))
@@ -674,7 +459,7 @@ class AiStudioWebSessionExecutor(
         main.postDelayed(object : Runnable {
             override fun run() {
                 val p = pending ?: return
-                if (p.seq != requestSeq || !p.progressAware) return
+                if (p.seq != requestSeq) return
                 val now = SystemClock.uptimeMillis()
                 val total = now - p.startedAt
                 val noProgressYet = p.firstProgressAt == 0L
@@ -706,7 +491,7 @@ class AiStudioWebSessionExecutor(
 
     private fun recordProgress(requestSeq: Int, responseChars: Int, source: String) {
         val p = pending ?: return
-        if (p.seq != requestSeq || !p.progressAware) return
+        if (p.seq != requestSeq) return
         if (responseChars <= p.lastResponseChars) return
         val now = SystemClock.uptimeMillis()
         val previous = p.lastResponseChars
@@ -772,54 +557,20 @@ class AiStudioWebSessionExecutor(
             finish(requestSeq, result.copy(error = httpErrorName(result.status), complete = true))
             return
         }
-        val markerSatisfied = p.marker.isBlank() || result.markerFound
         if (sttModeModel != null && result.ok && result.complete && result.modelText.isBlank()) {
             events?.onLog("R28_STT_NETWORK_COMPLETE_EMPTY", "seq=$requestSeq status=${result.status} phase=${result.phase}; waiting for dedicated STT DOM result")
             return
         }
-        if (result.ok && result.complete && markerSatisfied) finish(requestSeq, result)
+        if (result.ok && result.complete) finish(requestSeq, result)
     }
 
     private fun finish(requestSeq: Int, result: Result) {
         val p = pending ?: return
         if (p.seq != requestSeq) return
         pending = null
-        directRecoverySeq = -1
         clearAttachmentPartial()
         p.callback(result)
         if (!destroyed) setState(if (pageFinished) State.READY else State.LOADING, if (result.ok) "completed" else "failed:${result.error}")
-    }
-
-    private fun tryDirectEngineRecovery(requestSeq: Int, reason: String) {
-        val p = pending ?: return
-        if (p.seq != requestSeq || directRecoverySeq == requestSeq) return
-        directRecoverySeq = requestSeq
-        events?.onLog("R12_DIRECT_RECOVERY_START", "seq=$requestSeq reason=$reason promptChars=${p.prompt.length} markerChars=${p.marker.length}")
-        val expression = "window.__AIS_DIRECT_ENGINE__ ? window.__AIS_DIRECT_ENGINE__.invokeDirect(${JSONObject.quote(p.prompt)},${JSONObject.quote(p.marker)}) : ({ok:false,error:'direct-engine-not-installed'})"
-        webView.evaluateJavascript("JSON.stringify($expression)") { raw ->
-            if (pending?.seq != requestSeq) return@evaluateJavascript
-            val decoded = decodeEvalValue(raw)
-            events?.onLog("R12_DIRECT_DISPATCH", decoded.take(12000))
-            val obj = runCatching { JSONObject(decoded) }.getOrNull()
-            if (obj?.optBoolean("ok") != true) {
-                directRecoverySeq = -1
-                tryLegacyProgrammaticFallback(requestSeq, "DIRECT_DISPATCH_FAILED")
-            } else {
-                setState(State.GENERATING, "R12 Direct Engine invoking AI Studio handlers")
-                main.postDelayed({
-                    if (pending?.seq == requestSeq && directRecoverySeq == requestSeq) {
-                        checkGenerateCapture(requestSeq, obj.optInt("baselineCaptureCount", -1), "r12-watchdog") { started ->
-                            if (pending?.seq != requestSeq) return@checkGenerateCapture
-                            if (started) {
-                                directRecoverySeq = -1
-                                setState(State.GENERATING, "R12 Direct Engine triggered GenerateContent")
-                                readNormalized(requestSeq, "r12-direct-watchdog")
-                            }
-                        }
-                    }
-                }, DIRECT_ENGINE_WATCHDOG_MS)
-            }
-        }
     }
 
     private fun tryLegacyProgrammaticFallback(requestSeq: Int, reason: String) {
@@ -830,13 +581,10 @@ class AiStudioWebSessionExecutor(
         requestSeq: Int,
         reason: String,
         attempt: Int,
-        allowProgrammaticFallback: Boolean = true,
-        fileOnly: Boolean = false,
     ) {
         if (pending?.seq != requestSeq) return
-        events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1} fileOnly=$fileOnly")
-        val targetFunction = if (fileOnly) "nativeTargetIfAttachmentFileOnly" else "nativeTargetIfAttachment"
-        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__[${JSONObject.quote(targetFunction)}]() : ({ok:false,error:'native-submit-target-not-installed'}))"
+        events?.onLog("R12_NATIVE_SUBMIT_START", "seq=$requestSeq reason=$reason attempt=${attempt + 1}")
+        val expression = "JSON.stringify(window.__AIS_R11_SUBMIT_TARGET__ ? window.__AIS_R11_SUBMIT_TARGET__.nativeTargetIfAttachment() : ({ok:false,error:'native-submit-target-not-installed'}))"
         webView.evaluateJavascript(expression) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)
@@ -844,10 +592,9 @@ class AiStudioWebSessionExecutor(
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             if (obj?.optBoolean("ok") != true) {
                 if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
-                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
+                    main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "target-rescan", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
                 } else {
-                    if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
-                    else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_TARGET_UNAVAILABLE"))
+                    tryProgrammaticAttachmentFallback(requestSeq, "native-target-unavailable")
                 }
                 return@evaluateJavascript
             }
@@ -855,17 +602,17 @@ class AiStudioWebSessionExecutor(
             val yRatio = obj.optDouble("yRatio", Double.NaN)
             val baseline = obj.optInt("baselineCaptureCount", -1)
             if (!xRatio.isFinite() || !yRatio.isFinite() || baseline < 0) {
-                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
-                else if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target") else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_INVALID_TARGET"))
+                if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "invalid-native-target", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
+                else tryProgrammaticAttachmentFallback(requestSeq, "invalid-native-target")
                 return@evaluateJavascript
             }
             nativeTapController.requestNativeTap(
                 JSONObject()
                     .put("xRatio", xRatio)
                     .put("yRatio", yRatio)
-                    .put("tag", if (fileOnly) "FILE_TRANSCRIBE_RUN" else "VIDEO_SEND")
+                    .put("tag", "VIDEO_SEND")
                     .put("role", "composer-submit")
-                    .put("purpose", if (fileOnly) "file-transcribe-run" else "video-generate")
+                    .put("purpose", "video-generate")
                     .toString(),
             )
             main.postDelayed({
@@ -877,10 +624,9 @@ class AiStudioWebSessionExecutor(
                         readNormalized(requestSeq, "native-submit")
                     } else if (attempt < NATIVE_SUBMIT_MAX_RETRIES - 1) {
                         events?.onLog("R12_NATIVE_SUBMIT_RETRY", "seq=$requestSeq attempt=${attempt + 1} reason=no-capture")
-                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1, allowProgrammaticFallback, fileOnly) }, NATIVE_SUBMIT_RETRY_MS)
+                        main.postDelayed({ tryNativeAttachmentSubmit(requestSeq, "no-capture", attempt + 1) }, NATIVE_SUBMIT_RETRY_MS)
                     } else {
-                        if (allowProgrammaticFallback) tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
-                        else finish(requestSeq, Result(ok = false, error = "NATIVE_SUBMIT_NO_CAPTURE"))
+                        tryProgrammaticAttachmentFallback(requestSeq, "native-no-capture")
                     }
                 }
             }, NATIVE_SUBMIT_ACK_MS)
@@ -947,7 +693,6 @@ class AiStudioWebSessionExecutor(
             ok = ok,
             status = status,
             modelText = modelText,
-            markerFound = obj.optBoolean("markerFound"),
             complete = obj.optBoolean("complete") || terminalHttpSuccess || (!ok && status >= 400),
             phase = phase,
             error = explicitError.ifBlank { if (!ok && status >= 400) httpErrorName(status) else "" },
@@ -987,7 +732,7 @@ class AiStudioWebSessionExecutor(
                         val result = if (terminal2xx) parsedResult.copy(complete = true) else parsedResult
                         events?.onLog(
                             "R12_TERMINAL_RESULT",
-                            "seq=${p.seq} ok=${result.ok} status=${result.status} complete=${result.complete} modelChars=${result.modelText.length} markerFound=${result.markerFound} phase=${result.phase}",
+                            "seq=${p.seq} ok=${result.ok} status=${result.status} complete=${result.complete} modelChars=${result.modelText.length} phase=${result.phase}",
                         )
                         maybeFinish(p.seq, result)
                     }
@@ -1006,26 +751,6 @@ class AiStudioWebSessionExecutor(
                                 error = httpErrorName(status),
                             ),
                         )
-                    }
-                }
-                "R9_HANDLER_FINAL" -> main.post {
-                    val p = pending ?: return@post
-                    tryDirectEngineRecovery(p.seq, "R9_HANDLER_FINAL")
-                }
-                "R9_HANDLER_SUCCESS" -> main.post {
-                    if (pending != null) setState(State.GENERATING, "R9 page handler triggered GenerateContent")
-                }
-                "R12_DIRECT_SUBMIT_SUCCESS" -> main.post {
-                    val p = pending ?: return@post
-                    directRecoverySeq = -1
-                    setState(State.GENERATING, "R12 Direct Engine triggered GenerateContent")
-                    readNormalized(p.seq, "r12-direct-success")
-                }
-                "R12_DIRECT_SUBMIT_FINAL" -> main.post {
-                    val p = pending ?: return@post
-                    if (directRecoverySeq == p.seq) {
-                        directRecoverySeq = -1
-                        tryLegacyProgrammaticFallback(p.seq, "R12_DIRECT_SUBMIT_FINAL")
                     }
                 }
             }
@@ -1079,12 +804,10 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionHttpStatusGuard.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionResponseCore.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
-            WebViewCompat.addDocumentStartJavaScript(webView, R11_BROAD_FALLBACK_GUARD, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11Support.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioSttPageBridge.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11RequestFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
-            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionDirectEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
         } else {
             setState(State.ERROR, "DOCUMENT_START_SCRIPT unsupported")
         }
@@ -1100,7 +823,6 @@ class AiStudioWebSessionExecutor(
                 pageFinished = true
                 setState(State.WAITING_FOR_CONTROLLER, "page finished")
                 listOf(350L, 800L, 1_500L, 2_500L).forEach { main.postDelayed({ refreshDiscovery() }, it) }
-                main.postDelayed({ inspectDirectEngine("page-finished") }, 1_100L)
             }
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -1140,35 +862,22 @@ class AiStudioWebSessionExecutor(
         }
     }
 
-    private fun inspectDirectEngine(source: String) {
-        if (destroyed || !pageFinished) return
-        val script = "JSON.stringify(window.__AIS_DIRECT_ENGINE__ ? window.__AIS_DIRECT_ENGINE__.describe() : ({ok:false,error:'direct-engine-not-installed'}))"
-        webView.evaluateJavascript(script) { raw ->
-            events?.onLog("R12_DIRECT_ENGINE_STATE", "source=$source ${decodeEvalValue(raw).take(12000)}")
-        }
-    }
-
     companion object {
-        const val VERSION = "2026-09-05-web-session-r12.7-video-partial-stream"
+        const val VERSION = "2026-09-05-web-session-r12.8-cleanup"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
-        private const val DEFAULT_TIMEOUT_MS = 20_000L
         private const val ATTACHMENT_TIMEOUT_MS = 300_000L
         private const val ATTACHMENT_READY_SETTLE_MS = 1_200L
         private const val ATTACHMENT_READY_STABLE_SCANS = 3
-        private const val FIXED_TIMEOUT_MAX_MS = 300_000L
         private const val FIRST_PROGRESS_TIMEOUT_MS = 300_000L
         private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L
         private const val PROGRESS_HARD_TIMEOUT_MS = 900_000L
         private const val WATCHDOG_TICK_MS = 2_000L
         private const val ATTACHMENT_PARTIAL_POLL_MS = 850L
-        private const val DIRECT_ENGINE_WATCHDOG_MS = 7_500L
         private const val LEGACY_FALLBACK_CHECK_MS = 900L
         private const val NATIVE_SUBMIT_ACK_MS = 1_250L
         private const val NATIVE_SUBMIT_RETRY_MS = 900L
         private const val NATIVE_SUBMIT_MAX_RETRIES = 3
-        private const val MANUAL_READINESS_POLL_MS = 1_000L
-        private const val R11_BROAD_FALLBACK_GUARD = "(function(){try{var r=window.__AIS_ADAPTIVE_RUNTIME__;if(r&&typeof r.generate==='function'){r.generate.__aisR11AttachmentFallback=true;}}catch(_){}})();"
     }
 }

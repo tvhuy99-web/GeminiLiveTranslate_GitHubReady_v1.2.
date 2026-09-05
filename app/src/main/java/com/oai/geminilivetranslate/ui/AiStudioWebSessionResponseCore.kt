@@ -1,12 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R7.1 response normalization layer.
- *
- * Runs next to the proven network probe and normalizes AI Studio's application/json+protobuf
- * stream into modelText. It joins model text fragments before marker detection, so a marker split
- * across XHR chunks is still recognized. It never reads or exports credential values.
- */
+
 object AiStudioWebSessionResponseCore {
     const val VERSION = "2026-09-02-web-session-r7.1-response-core"
 
@@ -49,16 +43,11 @@ object AiStudioWebSessionResponseCore {
           function normalize(value) {
             const input=value && typeof value === 'object' ? value : {ok:false,error:'no-result'};
             const raw=String(input.responseText||'');
-            const marker=String(input.marker||'');
             const modelText=extractModelText(raw);
-            const rawMarkerFound=!!input.markerFound;
-            const markerFound=rawMarkerFound || (!!marker && modelText.indexOf(marker)>=0);
             const terminal=terminalSignal(raw);
-            const complete=!!input.ok && (markerFound || terminal || input.partial === false);
+            const complete=!!input.ok && (terminal || input.partial === false);
             const out={};
             Object.keys(input).forEach(function(k){out[k]=input[k];});
-            out.rawMarkerFound=rawMarkerFound;
-            out.markerFound=markerFound;
             out.modelText=modelText;
             out.modelTextChars=modelText.length;
             out.terminalSignal=terminal;
@@ -114,7 +103,7 @@ object AiStudioWebSessionResponseCore {
             const source=net.lastResult || net.lastProgress;
             if (!source) return;
             const normalized=normalize(source);
-            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.markerFound,normalized.modelTextChars].join('|');
+            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.modelTextChars].join('|');
             if (fp===state.lastFingerprint) return;
             state.lastFingerprint=fp;
             emit('NORMALIZED_GENERATE_RESULT',normalized);

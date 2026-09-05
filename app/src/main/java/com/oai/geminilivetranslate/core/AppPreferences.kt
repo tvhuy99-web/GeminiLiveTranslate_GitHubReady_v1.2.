@@ -137,7 +137,7 @@ class AppPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_SPEAKER_DIARIZATION, enabled).apply()
     }
 
-    /** Debug-only AI Studio WebView presentation. Hidden by default. */
+
     fun loadAiStudioWebViewVisible(): Boolean = prefs.getBoolean(KEY_AI_STUDIO_WEBVIEW_VISIBLE, false)
 
     fun setAiStudioWebViewVisible(visible: Boolean) {

@@ -1,12 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * Captures non-2xx GenerateContent XHR responses before AI Studio resets the XHR object.
- *
- * This is deliberately layered after the proven R3 network probe. It never exports cookies,
- * Authorization values, API-key values, or request headers. It only preserves response status/body
- * for the user's own GenerateContent request so R10 can report HTTP errors instead of TIMEOUT.
- */
+
 object AiStudioWebSessionHttpStatusGuard {
     const val VERSION = "2026-09-02-web-session-http-status-guard-r1"
 
@@ -62,8 +56,8 @@ object AiStudioWebSessionHttpStatusGuard {
             const text=String(snap.text||'');
             if(text.length>=String(meta.bestText||'').length){meta.bestText=text;meta.bestType=snap.type;meta.bestContentType=contentType(xhr);}
             meta.bestStatus=status;
-            // At readyState 3 the status is already authoritative. Preserve it immediately because
-            // AI Studio may reset the XHR to status=0 before readyState 4/loadend is observable.
+
+
             if(rs===3||rs===4||phase==='error'||phase==='load'||phase==='loadend'){
               meta.recorded=true;
               const net=window.__AIS_WEB_SESSION__;

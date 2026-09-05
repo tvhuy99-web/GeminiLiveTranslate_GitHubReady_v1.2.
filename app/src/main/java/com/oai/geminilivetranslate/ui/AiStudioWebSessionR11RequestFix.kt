@@ -1,20 +1,8 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R11 request hardening layer.
- *
- * R11.1 moved model selection to the authenticated request layer and solved WebView file chooser
- * activation. R11.3 adds the device-found missing piece for attachments: AI Studio can keep the
- * prompt controller READY and expose an enabled Send/Run button while the old text-only Enter
- * handler no longer starts GenerateContent. This layer therefore observes the real file-change /
- * file-read / network lifecycle and adds an attachment-only programmatic Send/Run fallback.
- *
- * The fallback never runs for ordinary text generation. It is armed only after Android has served
- * a file URI and the attachment is still visible/observed in the current AI Studio composer.
- * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
- */
+
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.14-transcribe-no-search-envelope"
+    const val VERSION = "2026-09-05-web-session-r11.15-video-attachment"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -31,8 +19,6 @@ object AiStudioWebSessionR11RequestFix {
             modelPatchInstalled: false,
             xhrRewriteInstalled: false,
             fetchObserverInstalled: false,
-            clickTrackingInstalled: false,
-            adaptiveFallbackInstalled: false,
             fileReadObserverInstalled: false,
             deepAttachmentObserverInstalled: false,
             performanceObserverInstalled: false,
@@ -77,16 +63,9 @@ object AiStudioWebSessionR11RequestFix {
             attachmentNetworkStarted: 0,
             attachmentNetworkCompleted: 0,
             attachmentNetworkFailed: 0,
-            attachmentSubmitFallbacks: 0,
-            attachmentSubmitButtonClicks: 0,
-            attachmentSubmitListenerInvokes: 0,
-            attachmentLastSubmitLabel: '',
-            attachmentLastSubmitPath: '',
             attachmentLastNet: null
           };
 
-          const clickEntries = [];
-          let nextClickId = 1;
           let attachmentDataProbe = null;
           let nextPayloadId = 1;
 
@@ -322,11 +301,6 @@ object AiStudioWebSessionR11RequestFix {
             fix.attachmentNetworkStarted = 0;
             fix.attachmentNetworkCompleted = 0;
             fix.attachmentNetworkFailed = 0;
-            fix.attachmentSubmitFallbacks = 0;
-            fix.attachmentSubmitButtonClicks = 0;
-            fix.attachmentSubmitListenerInvokes = 0;
-            fix.attachmentLastSubmitLabel = '';
-            fix.attachmentLastSubmitPath = '';
             fix.attachmentLastNet = null;
             emit('R11_ATTACHMENT_OBSERVATION_START',{
               name:fix.attachmentExpectedName,
@@ -475,108 +449,6 @@ object AiStudioWebSessionR11RequestFix {
             }
           }
 
-          function stripUnsupportedTranscribeThinking(body, source) {
-            if (typeof body !== 'string' || normalizeModel(fix.selectedModel) !== 'gemini-3.5-transcribe') return body;
-            try {
-              const root = JSON.parse(body);
-              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
-              if (model !== 'gemini-3.5-transcribe') return body;
-              const generation = Array.isArray(root[3]) ? root[3] : null;
-              const thinking = generation && generation.length > 16 ? generation[16] : null;
-              const observedSignature = Array.isArray(thinking) && thinking.length === 4 && thinking[0] === 1 && thinking[1] == null && thinking[2] == null && Number.isFinite(Number(thinking[3]));
-              if (!observedSignature) {
-                emit('R25_TRANSCRIBE_THINKING_GUARD_NOOP',{source:String(source||''),model:model,generationLength:generation?generation.length:-1,thinkingKind:Array.isArray(thinking)?'array':typeof thinking});
-                return body;
-              }
-              const previousLevel = Number(thinking[3]);
-              generation[16] = null;
-              const rewritten = JSON.stringify(root);
-              emit('R25_TRANSCRIBE_THINKING_STRIPPED',{source:String(source||''),model:model,path:'$[3][16]',previousLevel:previousLevel,bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length});
-              return rewritten;
-            } catch (err) {
-              emit('R25_TRANSCRIBE_THINKING_GUARD_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
-              return body;
-            }
-          }
-
-
-          function stripUnsupportedTranscribeTools(body, source) {
-            if (typeof body !== 'string' || normalizeModel(fix.selectedModel) !== 'gemini-3.5-transcribe') return body;
-            try {
-              const root = JSON.parse(body);
-              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
-              if (model !== 'gemini-3.5-transcribe') return body;
-              if (!Array.isArray(root) || root.length < 4 || !Array.isArray(root[1]) || !Array.isArray(root[3])) {
-                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'RPC_SHAPE_MISMATCH',topLength:Array.isArray(root)?root.length:-1});
-                return body;
-              }
-              const tools = root[2];
-              if (!Array.isArray(tools)) {
-                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'TOOL_SLOT_NOT_ARRAY',toolKind:tools===null?'null':typeof tools});
-                return body;
-              }
-              if (tools.length === 0) {
-                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'NO_TOOLS',toolCount:0});
-                return body;
-              }
-              const signatures = tools.slice(0,16).map(function(entry){
-                if(!Array.isArray(entry))return {kind:entry===null?'null':typeof entry};
-                const nums=[];
-                for(let i=0;i<entry.length&&i<24;i++)if(typeof entry[i]==='number'&&Number.isFinite(entry[i]))nums.push({i:i,v:entry[i]});
-                return {kind:'array',length:entry.length,numbers:nums.slice(0,12)};
-              });
-              const previousCount = tools.length;
-              root[2] = [];
-              const rewritten = JSON.stringify(root);
-              emit('R26_TRANSCRIBE_TOOLS_STRIPPED',{
-                source:String(source||''),model:model,path:'$[2]',previousCount:previousCount,signatures:signatures,
-                bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length
-              });
-              return rewritten;
-            } catch (err) {
-              emit('R26_TRANSCRIBE_TOOLS_GUARD_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
-              return body;
-            }
-          }
-
-          function stripUnsupportedTranscribeSearchEnvelope(body, source) {
-            try {
-              if (typeof body !== 'string') return body;
-              const root = JSON.parse(body);
-              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
-              if (model !== 'gemini-3.5-transcribe') return body;
-              if (!Array.isArray(root) || root.length < 7) {
-                emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_NOOP',{source:String(source||''),model:model,reason:'RPC_SHAPE_MISMATCH',topLength:Array.isArray(root)?root.length:-1});
-                return body;
-              }
-              const slot = root[6];
-              const matchesKnownSearchEnvelope = Array.isArray(slot) && slot.length === 1 &&
-                Array.isArray(slot[0]) && slot[0].length === 4 &&
-                slot[0][0] === null && slot[0][1] === null && slot[0][2] === null &&
-                Array.isArray(slot[0][3]) && slot[0][3].length === 2 &&
-                slot[0][3][0] === null && Array.isArray(slot[0][3][1]) &&
-                slot[0][3][1].length === 1 && Array.isArray(slot[0][3][1][0]) &&
-                slot[0][3][1][0].length === 0;
-              if (!matchesKnownSearchEnvelope) {
-                emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_NOOP',{
-                  source:String(source||''),model:model,reason:'FINGERPRINT_MISMATCH',
-                  slotKind:Array.isArray(slot)?'array':(slot===null?'null':typeof slot),
-                  slotCount:Array.isArray(slot)?slot.length:-1
-                });
-                return body;
-              }
-              root[6] = [];
-              const rewritten = JSON.stringify(root);
-              emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_STRIPPED',{
-                source:String(source||''),model:model,path:'$[6]',fingerprint:'[[null,null,null,[null,[[]]]]]',
-                bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length
-              });
-              return rewritten;
-            } catch (err) {
-              emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
-              return body;
-            }
-          }
 
           function rewriteBody(url, body, source) {
             if (typeof body !== 'string' || !isGenerateUrl(url)) return body;
@@ -594,9 +466,6 @@ object AiStudioWebSessionR11RequestFix {
             } else if (!original) {
               emit('R11_MODEL_REWRITE_SKIPPED',{reason:'MODEL_NOT_FOUND_IN_BODY',target:fix.selectedModel,source:source,bodyChars:body.length});
             }
-            rewritten = stripUnsupportedTranscribeThinking(rewritten, source);
-            rewritten = stripUnsupportedTranscribeTools(rewritten, source);
-            rewritten = stripUnsupportedTranscribeSearchEnvelope(rewritten, source);
             emitGenerateRequestShape(source,url,rewritten,'post-rewrite');
             return rewritten;
           }
@@ -1049,206 +918,6 @@ object AiStudioWebSessionR11RequestFix {
             } catch (_) { return false; }
           }
 
-          function installClickTracking() {
-            if (fix.clickTrackingInstalled) return true;
-            try {
-              if (!window.EventTarget || !EventTarget.prototype) return false;
-              const proto = EventTarget.prototype;
-              const currentAdd = proto.addEventListener;
-              const currentRemove = proto.removeEventListener;
-              if (currentAdd && currentAdd.__aisR11ClickTracking === true) { fix.clickTrackingInstalled=true; return true; }
-
-              const addWrapped = function(type, listener, options) {
-                try {
-                  if (String(type||'') === 'click' && listener && clickEntries.length < 2400) {
-                    clickEntries.push({id:nextClickId++,target:this,listener:listener,options:options,active:true,at:Date.now()});
-                  }
-                } catch (_) {}
-                return currentAdd.apply(this,arguments);
-              };
-              addWrapped.__aisR11ClickTracking = true;
-              proto.addEventListener = addWrapped;
-
-              if (currentRemove) {
-                const removeWrapped = function(type, listener, options) {
-                  try {
-                    if (String(type||'') === 'click' && listener) {
-                      for (let i=clickEntries.length-1;i>=0;i--) {
-                        const e=clickEntries[i];
-                        if (e.active && e.target===this && e.listener===listener) { e.active=false; break; }
-                      }
-                    }
-                  } catch (_) {}
-                  return currentRemove.apply(this,arguments);
-                };
-                removeWrapped.__aisR11ClickTracking = true;
-                proto.removeEventListener = removeWrapped;
-              }
-              fix.clickTrackingInstalled = true;
-              emit('R11_ATTACHMENT_CLICK_TRACKING_INSTALLED',{version:fix.version});
-              return true;
-            } catch (err) {
-              emit('R11_ATTACHMENT_CLICK_TRACKING_ERROR',{error:String(err).slice(0,800)});
-              return false;
-            }
-          }
-
-          function clickRelationScore(entry, button) {
-            if (!entry || !entry.active) return -100000;
-            try {
-              if (entry.target === button) return 1800;
-              if (entry.target === button.parentElement) return 1100;
-              if (entry.target && typeof entry.target.contains === 'function' && entry.target.contains(button)) return 900;
-              if (entry.target === document.body) return 450;
-              if (entry.target === document) return 400;
-              if (entry.target === window) return 350;
-            } catch (_) {}
-            return -100000;
-          }
-
-          function sendButtonCandidates() {
-            const out=[];
-            try {
-              const nodes=document.querySelectorAll('button,[role="button"]');
-              for(let i=0;i<nodes.length&&i<1800;i++){
-                const b=nodes[i];if(!visible(b))continue;
-                const label=labelOf(b);if(!/(^|\b)(send|run|submit|gửi|chạy)(\b|$)/i.test(label))continue;
-                const disabled=!!b.disabled||String(b.getAttribute&&b.getAttribute('aria-disabled')||'').toLowerCase()==='true';
-                let score=disabled?-2000:1000;
-                if(String(b.tagName||'')==='BUTTON')score+=180;
-                if(String(b.getAttribute&&b.getAttribute('type')||'').toLowerCase()==='submit')score+=260;
-                if(/(^|\b)(send|gửi)(\b|$)/i.test(label))score+=420;
-                if(/(^|\b)(run|chạy)(\b|$)/i.test(label))score+=300;
-                let listenerScore=-100000,listenerCount=0;
-                for(let j=0;j<clickEntries.length;j++){
-                  const s=clickRelationScore(clickEntries[j],b);
-                  if(s>-100000){listenerCount+=1;if(s>listenerScore)listenerScore=s;}
-                }
-                if(listenerScore>-100000)score+=Math.min(900,listenerScore/2);
-                out.push({button:b,label:label,disabled:disabled,score:score,listenerCount:listenerCount,listenerScore:listenerScore});
-              }
-            } catch (_) {}
-            out.sort(function(a,b){return b.score-a.score;});
-            return out;
-          }
-
-          function invokeClickListener(entry, button) {
-            try {
-              let ev = new MouseEvent('click',{bubbles:true,cancelable:true,composed:true,view:window});
-              try {
-                ev = new Proxy(ev,{get:function(obj,prop){
-                  if(prop==='target'||prop==='srcElement')return button;
-                  if(prop==='currentTarget')return entry.target;
-                  if(prop==='composedPath')return function(){
-                    const path=[];let n=button;while(n){path.push(n);n=n.parentNode||n.host||null;}path.push(document);path.push(window);return path;
-                  };
-                  const v=Reflect.get(obj,prop,obj);return typeof v==='function'?v.bind(obj):v;
-                }});
-              } catch (_) {}
-              if(typeof entry.listener==='function')entry.listener.call(entry.target,ev);
-              else if(entry.listener&&typeof entry.listener.handleEvent==='function')entry.listener.handleEvent.call(entry.listener,ev);
-              else return false;
-              fix.attachmentSubmitListenerInvokes += 1;
-              return true;
-            } catch (err) {
-              emit('R11_ATTACHMENT_CLICK_LISTENER_ERROR',{entryId:Number(entry&&entry.id||-1),error:String(err).slice(0,800)});
-              return false;
-            }
-          }
-
-          function submitAttachmentViaButton(reason) {
-            const net=window.__AIS_WEB_SESSION__;
-            const baseline=Number(net&&net.captureCount||0);
-            const candidates=sendButtonCandidates();
-            emit('R11_ATTACHMENT_SEND_CANDIDATES',{
-              reason:String(reason||''),baselineCaptureCount:baseline,count:candidates.length,
-              top:candidates.slice(0,6).map(function(x){return {label:x.label.slice(0,180),disabled:x.disabled,score:x.score,listenerCount:x.listenerCount,listenerScore:x.listenerScore};})
-            });
-            if(!candidates.length)return {ok:false,error:'SEND_BUTTON_NOT_FOUND',baselineCaptureCount:baseline};
-            const best=candidates[0];
-            if(best.disabled)return {ok:false,error:'SEND_BUTTON_DISABLED',label:best.label.slice(0,180),baselineCaptureCount:baseline};
-            fix.attachmentSubmitFallbacks += 1;
-            fix.attachmentLastSubmitLabel = best.label.slice(0,260);
-
-            let clicked=false,error='';
-            try {
-              if(window.HTMLElement&&HTMLElement.prototype&&HTMLElement.prototype.click)HTMLElement.prototype.click.call(best.button);
-              else best.button.click();
-              clicked=true;
-              fix.attachmentSubmitButtonClicks += 1;
-              fix.attachmentLastSubmitPath='programmatic-button-click';
-            } catch(err){error=String(err).slice(0,800);}
-            emit('R11_ATTACHMENT_SEND_CLICK',{
-              ok:clicked,reason:String(reason||''),label:best.label.slice(0,180),score:best.score,
-              listenerCount:best.listenerCount,baselineCaptureCount:baseline,error:error
-            });
-
-            setTimeout(function(){
-              const now=Number(net&&net.captureCount||0);
-              if(now>baseline){
-                emit('R11_ATTACHMENT_SEND_RESULT',{ok:true,path:'programmatic-button-click',baselineCaptureCount:baseline,captureCount:now,label:best.label.slice(0,180)});
-                return;
-              }
-              const supports=clickEntries.map(function(e){return {entry:e,score:clickRelationScore(e,best.button)};})
-                .filter(function(x){return x.entry.active&&x.score>=350;}).sort(function(a,b){return b.score-a.score;}).slice(0,10);
-              let invoked=0;
-              for(let i=0;i<supports.length;i++)if(invokeClickListener(supports[i].entry,best.button))invoked+=1;
-              if(invoked>0)fix.attachmentLastSubmitPath='direct-click-listener';
-              emit('R11_ATTACHMENT_SEND_LISTENER_FALLBACK',{
-                invoked:invoked,label:best.label.slice(0,180),baselineCaptureCount:baseline,captureCount:Number(net&&net.captureCount||0),
-                support:supports.map(function(x){return {entryId:x.entry.id,score:x.score};})
-              });
-              setTimeout(function(){
-                const finalCount=Number(net&&net.captureCount||0);
-                emit('R11_ATTACHMENT_SEND_RESULT',{
-                  ok:finalCount>baseline,path:fix.attachmentLastSubmitPath,baselineCaptureCount:baseline,captureCount:finalCount,
-                  label:best.label.slice(0,180),listenerInvokes:invoked
-                });
-              },280);
-            },320);
-            return {ok:clicked,pending:true,label:best.label.slice(0,180),score:best.score,baselineCaptureCount:baseline};
-          }
-
-          function installAdaptiveFallback() {
-            try {
-              const runtime=window.__AIS_ADAPTIVE_RUNTIME__;
-              if(!runtime||typeof runtime.generate!=='function')return false;
-              if(runtime.generate.__aisR11AttachmentFallback===true){fix.adaptiveFallbackInstalled=true;return true;}
-              const original=runtime.generate;
-              const wrapped=function(prompt,marker){
-                const net=window.__AIS_WEB_SESSION__;
-                const baseline=Number(net&&net.captureCount||0);
-                const result=original.apply(this,arguments);
-                if(result&&result.ok&&attachmentPresent()){
-                  emit('R11_ATTACHMENT_GENERATE_ARMED',{
-                    baselineCaptureCount:baseline,expectedName:fix.attachmentExpectedName,
-                    fileChangeMatched:fix.attachmentFileChangeMatched,nameVisible:attachmentNameVisible()
-                  });
-                  setTimeout(function(){
-                    const now=Number(net&&net.captureCount||0);
-                    if(now>baseline){
-                      emit('R11_ATTACHMENT_GENERATE_FALLBACK_SKIP',{reason:'REQUEST_ALREADY_STARTED',baselineCaptureCount:baseline,captureCount:now});
-                      return;
-                    }
-                    emit('R11_ATTACHMENT_GENERATE_FALLBACK_START',{
-                      baselineCaptureCount:baseline,fileChangeMatched:fix.attachmentFileChangeMatched,
-                      fileReadCount:fix.attachmentFileReadCount,networkStarted:fix.attachmentNetworkStarted
-                    });
-                    submitAttachmentViaButton('adaptive-generate-no-request');
-                  },850);
-                }
-                return result;
-              };
-              wrapped.__aisR11AttachmentFallback=true;
-              runtime.generate=wrapped;
-              fix.adaptiveFallbackInstalled=true;
-              emit('R11_ATTACHMENT_ADAPTIVE_FALLBACK_INSTALLED',{version:fix.version});
-              return true;
-            }catch(err){
-              emit('R11_ATTACHMENT_ADAPTIVE_FALLBACK_ERROR',{error:String(err).slice(0,800)});
-              return false;
-            }
-          }
 
           function installApiPatch() {
             try {
@@ -1345,13 +1014,9 @@ object AiStudioWebSessionR11RequestFix {
                   fileReadStarted:fix.attachmentFileReadStarted,fileReadCompleted:fix.attachmentFileReadCompleted,fileReadFailed:fix.attachmentFileReadFailed,
                   fileReadBytes:fix.attachmentFileReadBytes,fileReadResultChars:fix.attachmentFileReadResultChars,
                   networkStarted:fix.attachmentNetworkStarted,networkCompleted:fix.attachmentNetworkCompleted,networkFailed:fix.attachmentNetworkFailed,
-                  submitFallbacks:fix.attachmentSubmitFallbacks,buttonClicks:fix.attachmentSubmitButtonClicks,
-                  listenerInvokes:fix.attachmentSubmitListenerInvokes,lastSubmitLabel:fix.attachmentLastSubmitLabel,lastSubmitPath:fix.attachmentLastSubmitPath,
-                  clickEntryCount:clickEntries.filter(function(e){return e.active;}).length,lastNet:fix.attachmentLastNet
                 };
               };
 
-              api.submitAttachmentViaButton = function(reason) { return submitAttachmentViaButton(reason||'api'); };
 
               api.armTrustedFileChooser = function() {
                 let input = null;
@@ -1427,7 +1092,6 @@ object AiStudioWebSessionR11RequestFix {
                   requestedModel:fix.requestedModel,selectedModel:fix.selectedModel,
                   rewriteCount:fix.rewriteCount,lastOriginalModel:fix.lastOriginalModel,lastAppliedModel:fix.lastAppliedModel,
                   xhrRewriteInstalled:fix.xhrRewriteInstalled,fetchObserverInstalled:fix.fetchObserverInstalled,
-                  clickTrackingInstalled:fix.clickTrackingInstalled,adaptiveFallbackInstalled:fix.adaptiveFallbackInstalled,
                   fileArmed:fix.fileArmed,trustedActivationCount:fix.trustedActivationCount,lastTrustedActivationAt:fix.lastTrustedActivationAt,
                   attachment:this.attachmentEvidence()
                 };
@@ -1445,26 +1109,23 @@ object AiStudioWebSessionR11RequestFix {
           }
 
           function ensureInstalled() {
-            const clickOk = installClickTracking();
             const fileChangeOk = installFileChangeObserver();
             const fileReadOk = installFileReadObserver();
             const deepOk = installDeepAttachmentObserver();
             const apiOk = installApiPatch();
             const xhrOk = installXhrRewrite();
             const fetchOk = installFetchObserver();
-            const adaptiveOk = installAdaptiveFallback();
-            return clickOk && fileChangeOk && fileReadOk && deepOk && apiOk && xhrOk && fetchOk && adaptiveOk;
+            return fileChangeOk && fileReadOk && deepOk && apiOk && xhrOk && fetchOk;
           }
 
           window.__AIS_R11_REQUEST_FIX__ = {
             version:fix.version,
             ensureInstalled:ensureInstalled,
-            state:function(){return Object.assign({ok:true},fix,{activeClickEntries:clickEntries.filter(function(e){return e.active;}).length});},
+            state:function(){return Object.assign({ok:true},fix);},
             attachmentEvidence:function(){
               try { return window.__AIS_R11_SUPPORT__ && window.__AIS_R11_SUPPORT__.attachmentEvidence ? window.__AIS_R11_SUPPORT__.attachmentEvidence() : {ok:false,error:'support-not-patched'}; }
               catch(err){return {ok:false,error:String(err).slice(0,800)};}
-            },
-            submitAttachmentViaButton:function(reason){return submitAttachmentViaButton(reason||'direct-api');}
+            }
           };
 
           let tries = 0;

@@ -19,10 +19,7 @@ import com.oai.geminilivetranslate.core.AiConnectionModeStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
 
-/**
- * Production account manager for the WebView-owned AI Studio session.
- * Cookies, tokens and page contents never cross into logs or app-owned storage.
- */
+
 class AiStudioAccountActivity : AppCompatActivity() {
     private lateinit var logger: SessionLogger
     private lateinit var statusView: TextView

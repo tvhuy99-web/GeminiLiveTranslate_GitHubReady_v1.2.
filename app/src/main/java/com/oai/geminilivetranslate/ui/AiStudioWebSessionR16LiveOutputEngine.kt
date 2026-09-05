@@ -1,22 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R16.1 page-local receive engine for AI Studio Live.
- *
- * R16.0 proved that the BrowserChannel framing can be decoded and that Gemini audio/pcm reaches
- * Android with zero decode errors. R16.1 keeps that proven audio path and additionally understands
- * the jspb array representation used by AI Studio for BidiGenerateContentServerMessage.
- *
- * Field mapping follows google.ai.generativelanguage.v1beta:
- * ServerMessage: setup_complete=2, server_content=3, go_away=6, session_resumption_update=7.
- * ServerContent: model_turn=1, turn_complete=2, interrupted=3, generation_complete=5,
- * input_transcription=6, output_transcription=7, waiting_for_input=10.
- * Content: parts=1. Part: text=2, inline_data=3. Transcription: text=1.
- *
- * Security: raw BrowserChannel payloads, Base64 audio, cookies, auth headers, access tokens and
- * session-resumption handles are never emitted through the diagnostic bridge. Resumption handles
- * remain page-local.
- */
+
 object AiStudioWebSessionR16LiveOutputEngine {
     const val VERSION = "2026-09-03-web-session-r16.1-jspb-live-output"
 
@@ -151,12 +135,12 @@ object AiStudioWebSessionR16LiveOutputEngine {
     if(sc)handleJspbServerContent(sc);
     if(ga){
       state.goAwayEvents++;
-      // Duration is non-secret. Export only a coarse presence marker in this milestone.
+
       bridgeSignal('goAway','present');
     }
     if(resume){
       state.sessionResumptionEvents++;
-      // Field 1 is new_handle and intentionally remains page-local. Only field 2 crosses Android.
+
       bridgeSignal('sessionResumption',String(asTrue(resume[1])));
     }
     return true;
@@ -201,7 +185,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
       const resume=obj.sessionResumptionUpdate||obj.session_resumption_update;
       if(resume&&typeof resume==='object'){
         state.sessionResumptionEvents++;
-        // Never export newHandle. Only the non-secret resumable state crosses the bridge.
+
         bridgeSignal('sessionResumption',String(resume.resumable===true));
       }
       const ga=obj.goAway||obj.go_away;

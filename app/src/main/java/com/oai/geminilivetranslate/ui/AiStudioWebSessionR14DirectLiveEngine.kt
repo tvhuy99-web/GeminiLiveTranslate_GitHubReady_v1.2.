@@ -1,22 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R14 page-local Direct Live Engine PoC.
- *
- * R13.2 proved that AI Studio Live sends audio/pcm through Google WebChannel form envelopes at
- * /v1/bidiGenerateContent. R14 deliberately does NOT recreate WebChannel and does NOT export auth.
- * It piggybacks on an already-live AI Studio session: when the page is about to send a normal audio
- * carrier frame, a queued Android PCM frame can replace only the Base64 audio payload while all
- * session/channel state remains owned by AI Studio.
- *
- * R14.2 keeps the proven payload-replacement behavior and fixes success accounting for Google
- * WebChannel, which often aborts/recycles POST XHRs after a valid HTTP 2xx response has already
- * appeared. Success is therefore latched as soon as readyState >= 2 exposes a 2xx status instead of
- * waiting only for loadend.
- *
- * Security: PCM payload values, request bodies, cookies, Authorization values and access tokens are
- * never emitted through the Android bridge. Diagnostics contain counts, lengths and structural state.
- */
+
 object AiStudioWebSessionR14DirectLiveEngine {
     const val VERSION = "2026-09-03-web-session-r14.2-progress-2xx"
     const val FRAME_BYTES = 1_280

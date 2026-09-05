@@ -36,18 +36,7 @@ import org.json.JSONTokener
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Production hidden AI Studio Live backend.
- *
- * This client intentionally owns a dedicated WebView instead of reusing the old R12 Chat/Lab
- * executor. Production now installs R14 input carrier, R16 output bridge, R18 request-level target
- * language guard and R17 route/model/Start automation. R18 is required for Translate because current
- * AI Studio Live can encode the target language positionally instead of exposing translationConfig.
- *
- * R17 installation is verified after every recovery injection. Failed injection does not count as
- * bootstrap progress. Recovery is bounded and exports a sanitized JavaScript exception so a device
- * log can identify the exact failing statement instead of looping indefinitely.
- */
+
 @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
 internal class AiStudioWebRealtimeClient(
     private val targetLanguage: String,

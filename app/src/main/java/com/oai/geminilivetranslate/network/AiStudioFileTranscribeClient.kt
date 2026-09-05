@@ -14,7 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-/** Authenticated AI Studio FILE transcription. This is intentionally not Gemini Live. */
+
 class AiStudioFileTranscribeClient(
     context: Context,
     private val logger: SessionLogger,
@@ -58,9 +58,9 @@ class AiStudioFileTranscribeClient(
         executor = null
         main.post {
             current?.destroy()
-            // File Transcribe is intentionally inspectable after every outcome. destroy() retains the
-            // real session WebView; force it back on-screen even if the general debug visibility
-            // preference is off so success/failure never erases the user's inspection surface.
+
+
+
             AiStudioDebugWebViewHost.setVisibleForActive(true, logger)
             logger.log(2, TAG, "R28_STT_WEBVIEW_FORCE_VISIBLE stage=retained-after-close")
         }
@@ -89,8 +89,8 @@ class AiStudioFileTranscribeClient(
             holder.set(created)
             executor = created
             created.startFileTranscribe(model)
-            // Unlike the generic hidden debug mode, dedicated File Transcribe always shows the exact
-            // AI Studio page being automated, from initial load through its retained final state.
+
+
             AiStudioDebugWebViewHost.setVisibleForActive(true, logger)
             logger.log(2, TAG, "R28_STT_WEBVIEW_FORCE_VISIBLE stage=start")
         }

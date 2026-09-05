@@ -1,14 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R18.3A language experiment for AI Studio Live Translate.
- *
- * Goal: prove that the target language can be applied in the Live setup request itself, without
- * opening or selecting AI Studio's target-language UI. This script only inspects setup-shaped
- * bidiGenerateContent request parameters that contain the Live Translate model. Audio/PCM carrier
- * frames are skipped. Diagnostics expose only counters, strategy names, hashes, language codes and
- * bounded JSON structural paths, never request values, media, auth data or full request bodies.
- */
+
 object AiStudioWebSessionR18LanguageGuard {
     const val VERSION = "2026-09-03-r18.3a-network-language-guard"
     const val TARGET_MODEL = "gemini-3.5-live-translate-preview"

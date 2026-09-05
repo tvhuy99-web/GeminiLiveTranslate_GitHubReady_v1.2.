@@ -1,16 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/**
- * R17.6 lean production bootstrap for authenticated AI Studio Live.
- *
- * The earlier R17.5 script grew from several laboratory generations and could disappear before
- * publishing its global controller on some Android WebView builds. R17.6 keeps only the production
- * responsibilities that the hidden Live backend needs: route/model awareness, request-level model
- * and target-language guard, synthetic microphone carrier, hidden Start activation, and compact
- * diagnostics. R14 owns Android PCM replacement and R16 owns translated output decoding.
- *
- * No auth material, request body, cookie, token, or media payload is exported to diagnostics.
- */
+
 object AiStudioWebSessionR17ProductionBootstrap {
     const val VERSION = "2026-09-05-web-session-r17.9-fast-progress-recovery"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"

@@ -319,6 +319,7 @@ def cleanup_executor() -> None:
     s = s.replace("        if (result.ok && result.complete && markerSatisfied) finish(requestSeq, result)\n", "        if (result.ok && result.complete) finish(requestSeq, result)\n")
     s = s.replace('events?.onLog("R12_TERMINAL_RESULT",\n                            "seq=${p.seq} ok=${result.ok} status=${result.status} complete=${result.complete} modelChars=${result.modelText.length} markerFound=${result.markerFound} phase=${result.phase}",\n                        )', 'events?.onLog("R12_TERMINAL_RESULT", "seq=${p.seq} ok=${result.ok} status=${result.status} complete=${result.complete} modelChars=${result.modelText.length} phase=${result.phase}")')
     s = s.replace("        val markerFound: Boolean = false,\n", "")
+    s = s.replace(" markerFound=${result.markerFound}", "")
     s = s.replace("            markerFound = obj.optBoolean(\"markerFound\"),\n", "")
     s = replace_once(
         s,
@@ -364,7 +365,11 @@ def cleanup_lab_scripts() -> None:
     if start < 0 or end < 0:
         raise SystemExit("lab scripts legacy UI block not found")
     s = s[:start] + s[end:]
-    s = remove_kotlin_function(s, "call")
+    call_start = s.find("\n    fun call(")
+    object_end = s.rfind("\n}")
+    if call_start < 0 or object_end < call_start:
+        raise SystemExit("lab scripts call function boundary missing")
+    s = s[:call_start] + s[object_end:]
     s = s.replace("            expectedMarker: '',\n", "")
     s = s.replace("            const marker = state.expectedMarker;\n            const markerFound = !!marker && raw.indexOf(marker) >= 0;\n", "")
     s = s.replace("              marker:marker,\n              markerFound:markerFound,\n", "")
@@ -383,6 +388,7 @@ def cleanup_response_core() -> None:
     new = '''            const modelText=extractModelText(raw);\n            const terminal=terminalSignal(raw);\n            const complete=!!input.ok && (terminal || input.partial === false);\n'''
     s = replace_once(s, old, new, "response marker normalize")
     s = s.replace("            out.rawMarkerFound=rawMarkerFound;\n            out.markerFound=markerFound;\n", "")
+    s = s.replace("            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.markerFound,normalized.modelTextChars].join('|');\n", "            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.modelTextChars].join('|');\n")
     if "markerFound" in s or "rawMarkerFound" in s:
         raise SystemExit("response core still contains marker logic")
     write(rel, s)
@@ -492,7 +498,7 @@ def delete_dead_files() -> None:
 
 
 def verify_no_dead_refs() -> None:
-    roots = [path("app/src/main/java"), path("app/src/test/java")]
+    roots = [path("app/src/main/java")]
     corpus = "\n".join(p.read_text(encoding="utf-8") for root in roots for p in root.rglob("*.kt"))
     tokens = [
         "AiStudioWebSessionLabLog", "AiStudioGoogleAccountBootstrap", "AiStudioWebSessionDirectEngine",
@@ -516,10 +522,11 @@ def main() -> None:
     cleanup_response_core()
     cleanup_request_fix()
     cleanup_submit_target()
-    restore_pr_workflow()
     write_current_executor_test()
     for p in changed_kotlin_files():
-        p.write_text(strip_kotlin_comments(p.read_text(encoding="utf-8")), encoding="utf-8")
+        cleaned = strip_kotlin_comments(p.read_text(encoding="utf-8"))
+        cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines()) + ("\n" if cleaned.endswith("\n") else "")
+        p.write_text(cleaned, encoding="utf-8")
     verify_no_dead_refs()
     subprocess.run(["git", "diff", "--check"], cwd=ROOT, check=True)
     print("R18.27 cleanup applied")

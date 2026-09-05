@@ -8,13 +8,7 @@ import android.webkit.WebView
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Dedicated non-diagnostic bridge for R16 Live output.
- *
- * Actual model audio/transcription crosses this bridge to the Android client, while the existing
- * AIStudioWebSessionLab bridge continues to receive metadata-only diagnostics. Payload contents are
- * never forwarded to the logger by this class.
- */
+
 @SuppressLint("AddJavascriptInterface")
 class AiStudioWebLiveOutputBridge(
     private val webView: WebView,

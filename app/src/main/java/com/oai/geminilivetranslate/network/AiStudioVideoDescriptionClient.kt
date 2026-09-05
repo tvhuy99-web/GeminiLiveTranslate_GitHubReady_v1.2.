@@ -16,7 +16,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-/** Video description through the user's authenticated AI Studio web session. No API key is used. */
+
 class AiStudioVideoDescriptionClient(
     context: Context,
     private val logger: SessionLogger,

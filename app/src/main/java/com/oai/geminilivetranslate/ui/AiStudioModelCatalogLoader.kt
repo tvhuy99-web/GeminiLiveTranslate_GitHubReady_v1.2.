@@ -21,11 +21,7 @@ import com.oai.geminilivetranslate.core.SessionLogger
 import org.json.JSONObject
 import org.json.JSONTokener
 
-/**
- * Reads model ids from the authenticated AI Studio page using the existing R11 model discovery
- * bridge. This WebView is off-screen and hidden from accessibility so it never steals screen-reader
- * focus from Settings. It does not copy cookies, auth headers, tokens, or page text into app storage.
- */
+
 internal class AiStudioModelCatalogLoader(
     private val activity: AppCompatActivity,
     private val logger: SessionLogger,

@@ -1,6 +1,6 @@
 package com.oai.geminilivetranslate.ui
 
-/** Dedicated bridge for AI Studio's Speech-to-Text surface opened with the transcribe model URL. */
+
 object AiStudioSttPageBridge {
     const val VERSION = "2026-09-05-stt-page-r7-post-2xx-delta-gate"
 

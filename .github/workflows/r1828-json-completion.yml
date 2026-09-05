@@ -1,0 +1,82 @@
+name: R18.28 JSON Completion Guard
+
+on:
+  push:
+    branches:
+      - work/r1828-json-completion
+    paths:
+      - '.github/workflows/r1828-json-completion.yml'
+      - 'tools/r1828_json_completion_patch.py'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: work/r1828-json-completion
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.28 patch
+        run: python3 tools/r1828_json_completion_patch.py
+
+      - name: Verify R18.28 source markers
+        run: |
+          grep -q 'completionValidator' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q 'R36_VIDEO_COMPLETION_DEFERRED' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q 'isCompleteJsonObject' app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          grep -q 'timelineCompletionRejectsUnterminatedArray' app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
+
+      - name: Repository checks
+        run: |
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+
+      - name: Test assemble lint
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        run: |
+          python3 tools/verify_apk.py app/build/outputs/apk/debug/app-debug.apk
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | sort -V | tail -1)/apksigner verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Package artifact metadata
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk GeminiLiveTranslate-R18.28-json-completion-guard.apk
+          sha256sum GeminiLiveTranslate-R18.28-json-completion-guard.apk > sha256.txt
+
+      - name: Commit verified source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
+          if ! git diff --cached --quiet; then
+            git commit -m 'R18.28: wait for complete video timeline JSON'
+            git push origin HEAD:work/r1828-json-completion
+          fi
+          git rev-parse HEAD > source_commit.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.28-json-completion-guard
+          path: |
+            GeminiLiveTranslate-R18.28-json-completion-guard.apk
+            sha256.txt
+            source_commit.txt
+          if-no-files-found: error

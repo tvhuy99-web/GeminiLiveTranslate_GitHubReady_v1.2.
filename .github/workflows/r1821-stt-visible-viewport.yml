@@ -1,0 +1,125 @@
+name: R18.21 STT Visible Viewport Fix
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+      - app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt
+      - .github/workflows/r1821-stt-visible-viewport.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 1
+
+      - name: Verify STT viewport hit-test and always-visible policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          bridge=Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt').read_text()
+          marker='val DOCUMENT_START: String = """'
+          a=bridge.index(marker)+len(marker)
+          b=bridge.index('""".trimIndent()',a)
+          js=bridge[a:b].replace('$VERSION','2026-09-05-stt-page-r4-viewport-hit-test')
+          Path('/tmp/stt-r4.js').write_text(js)
+          client=Path('app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt').read_text()
+          assert 'R28_STT_WEBVIEW_FORCE_VISIBLE stage=start' in client
+          assert 'R28_STT_WEBVIEW_FORCE_VISIBLE stage=retained-after-close' in client
+          assert client.count('AiStudioDebugWebViewHost.setVisibleForActive(true, logger)') >= 2
+          assert "scrollIntoView({block:'center'" in js
+          assert "TARGET_OUT_OF_VIEW" in js
+          PY
+          node --check /tmp/stt-r4.js
+          node - <<'JS'
+          let wasScrolled=false;
+          const root={tagName:'MS-STT-WORKSPACE',className:'stt-workspace',id:'',parentElement:null,getAttribute:()=>null};
+          const start={
+            tagName:'BUTTON',textContent:'Transcribe',className:'stt-transcribe-button ms-button-primary',id:'',parentElement:root,isConnected:true,disabled:false,
+            getAttribute:(k)=>k==='aria-disabled'?'false':null,
+            getBoundingClientRect:()=>wasScrolled?({left:100,top:300,right:300,bottom:348,width:200,height:48}):({left:100,top:805,right:300,bottom:853,width:200,height:48}),
+            scrollIntoView:()=>{wasScrolled=true;},
+            contains:(n)=>n===start
+          };
+          const body={tagName:'DIV',textContent:'Selected files sample.m4a Transcribe',className:'',id:'',parentElement:null,isConnected:true,getAttribute:()=>null};
+          global.window={AIStudioWebSessionLab:{onJsEvent:()=>{}},__AIS_WEB_SESSION__:{captureCount:0}};
+          global.location={href:'https://aistudio.google.com/u/0/prompts/new_chat?model=gemini-3.5-transcribe',pathname:'/u/0/prompts/new_chat'};
+          global.document={
+            documentElement:{clientWidth:1000,clientHeight:800},
+            querySelector:(s)=>s==='ms-stt-zero-state'?{}:null,
+            querySelectorAll:()=>[start],
+            body:{innerText:'Turn speech to transcriptions\nsample.m4a\nTranscribe'},
+            elementFromPoint:(x,y)=>wasScrolled&&x>=100&&x<=300&&y>=300&&y<=348?start:body
+          };
+          global.URL=URL;
+          global.getComputedStyle=()=>({display:'block',visibility:'visible'});
+          global.innerWidth=1000; global.innerHeight=800;
+          require('/tmp/stt-r4.js');
+          window.__AIS_STT_PAGE__.markFileChooserServed('sample.m4a','audio/mp4',1234);
+          const target=window.__AIS_STT_PAGE__.runTarget();
+          if(!target.ok || !target.scrolled || target.error) throw new Error(JSON.stringify(target));
+          if(!(target.yRatio>0.35 && target.yRatio<0.45)) throw new Error('unexpected yRatio '+JSON.stringify(target));
+          console.log('STT viewport hit-test PASS',JSON.stringify(target));
+          JS
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
+
+      - name: Full Android verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/badging.txt
+          sha256sum "$APK" | tee /tmp/apk.sha256
+          git rev-parse HEAD | tee /tmp/source_commit.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" /tmp/badging.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/apksigner.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/apksigner.txt
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-R18.21-stt-visible-viewport.apk
+          cp /tmp/apksigner.txt out/apksigner.txt
+          cp /tmp/badging.txt out/badging.txt
+          cp /tmp/apk.sha256 out/apk.sha256
+          cp /tmp/source_commit.txt out/source_commit.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.21-stt-visible-viewport
+          path: out/
+          if-no-files-found: error
+          retention-days: 30

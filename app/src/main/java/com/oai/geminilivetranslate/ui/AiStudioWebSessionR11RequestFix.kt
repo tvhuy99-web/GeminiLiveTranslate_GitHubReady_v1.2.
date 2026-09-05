@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.12-transcribe-no-thinking"
+    const val VERSION = "2026-09-05-web-session-r11.13-transcribe-no-tools"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -127,10 +127,23 @@ object AiStudioWebSessionR11RequestFix {
           }
 
           function summarizeGenerateBody(body) {
-            const out={parsed:false,topType:'',topLength:-1,numericVectors:[],literalStrings:[],opaqueStrings:[]};
+            const out={parsed:false,topType:'',topLength:-1,toolSlot:{kind:'unknown',count:-1,entries:[]},numericVectors:[],literalStrings:[],opaqueStrings:[]};
             try {
               if(typeof body!=='string')return out;
               const root=JSON.parse(body);out.parsed=true;out.topType=Array.isArray(root)?'array':typeof root;out.topLength=Array.isArray(root)?root.length:-1;
+              if(Array.isArray(root)){
+                const tools=root.length>2?root[2]:null;
+                out.toolSlot.kind=Array.isArray(tools)?'array':(tools===null?'null':typeof tools);
+                out.toolSlot.count=Array.isArray(tools)?tools.length:-1;
+                if(Array.isArray(tools)){
+                  out.toolSlot.entries=tools.slice(0,16).map(function(entry){
+                    if(!Array.isArray(entry))return {kind:entry===null?'null':typeof entry};
+                    const nums=[];
+                    for(let j=0;j<entry.length&&j<24;j++)if(typeof entry[j]==='number'&&Number.isFinite(entry[j]))nums.push({i:j,v:entry[j]});
+                    return {kind:'array',length:entry.length,numbers:nums.slice(0,12)};
+                  });
+                }
+              }
               const walk=function(v,path,depth){
                 if(depth>7)return;
                 if(Array.isArray(v)){
@@ -476,6 +489,46 @@ object AiStudioWebSessionR11RequestFix {
             }
           }
 
+
+          function stripUnsupportedTranscribeTools(body, source) {
+            if (typeof body !== 'string' || normalizeModel(fix.selectedModel) !== 'gemini-3.5-transcribe') return body;
+            try {
+              const root = JSON.parse(body);
+              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
+              if (model !== 'gemini-3.5-transcribe') return body;
+              if (!Array.isArray(root) || root.length < 4 || !Array.isArray(root[1]) || !Array.isArray(root[3])) {
+                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'RPC_SHAPE_MISMATCH',topLength:Array.isArray(root)?root.length:-1});
+                return body;
+              }
+              const tools = root[2];
+              if (!Array.isArray(tools)) {
+                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'TOOL_SLOT_NOT_ARRAY',toolKind:tools===null?'null':typeof tools});
+                return body;
+              }
+              if (tools.length === 0) {
+                emit('R26_TRANSCRIBE_TOOLS_GUARD_NOOP',{source:String(source||''),model:model,reason:'NO_TOOLS',toolCount:0});
+                return body;
+              }
+              const signatures = tools.slice(0,16).map(function(entry){
+                if(!Array.isArray(entry))return {kind:entry===null?'null':typeof entry};
+                const nums=[];
+                for(let i=0;i<entry.length&&i<24;i++)if(typeof entry[i]==='number'&&Number.isFinite(entry[i]))nums.push({i:i,v:entry[i]});
+                return {kind:'array',length:entry.length,numbers:nums.slice(0,12)};
+              });
+              const previousCount = tools.length;
+              root[2] = [];
+              const rewritten = JSON.stringify(root);
+              emit('R26_TRANSCRIBE_TOOLS_STRIPPED',{
+                source:String(source||''),model:model,path:'$[2]',previousCount:previousCount,signatures:signatures,
+                bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length
+              });
+              return rewritten;
+            } catch (err) {
+              emit('R26_TRANSCRIBE_TOOLS_GUARD_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
+              return body;
+            }
+          }
+
           function rewriteBody(url, body, source) {
             if (typeof body !== 'string' || !isGenerateUrl(url)) return body;
             const original = firstModel(body);
@@ -493,6 +546,7 @@ object AiStudioWebSessionR11RequestFix {
               emit('R11_MODEL_REWRITE_SKIPPED',{reason:'MODEL_NOT_FOUND_IN_BODY',target:fix.selectedModel,source:source,bodyChars:body.length});
             }
             rewritten = stripUnsupportedTranscribeThinking(rewritten, source);
+            rewritten = stripUnsupportedTranscribeTools(rewritten, source);
             emitGenerateRequestShape(source,url,rewritten,'post-rewrite');
             return rewritten;
           }

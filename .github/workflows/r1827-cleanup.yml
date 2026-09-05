@@ -43,7 +43,18 @@ jobs:
           '''
           if roots_old not in s:
               raise SystemExit('dead-reference roots anchor missing')
-          helper.write_text(s.replace(roots_old, roots_new, 1))
+          s = s.replace(roots_old, roots_new, 1)
+          comments_old = '''    for p in changed_kotlin_files():
+        p.write_text(strip_kotlin_comments(p.read_text(encoding="utf-8")), encoding="utf-8")
+'''
+          comments_new = '''    for p in changed_kotlin_files():
+        cleaned = strip_kotlin_comments(p.read_text(encoding="utf-8"))
+        cleaned = "\\n".join(line.rstrip() for line in cleaned.splitlines()) + ("\\n" if cleaned.endswith("\\n") else "")
+        p.write_text(cleaned, encoding="utf-8")
+'''
+          if comments_old not in s:
+              raise SystemExit('comment cleanup whitespace anchor missing')
+          helper.write_text(s.replace(comments_old, comments_new, 1))
 
           request = Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt')
           r = request.read_text()

@@ -15,7 +15,7 @@ package com.oai.geminilivetranslate.ui
  * It never reads cookies, auth headers, passwords, API keys, or file bytes.
  */
 object AiStudioWebSessionR11SubmitTargetFix {
-    const val VERSION = "2026-09-05-web-session-r11.8-semantic-submit-file-only"
+    const val VERSION = "2026-09-05-web-session-r11.9-cached-hit-test-submit"
 
     val DOCUMENT_START: String = """
         (function(){
@@ -29,6 +29,10 @@ object AiStudioWebSessionR11SubmitTargetFix {
           let lastTrustedButton=null;
           let lastTrustedAt=0;
           let submitAttempts=0;
+          let preparedButton=null;
+          let preparedFingerprint=null;
+          let preparedScore=-1;
+          let preparedAt=0;
 
           function emit(kind,payload){
             try{
@@ -192,6 +196,46 @@ object AiStudioWebSessionR11SubmitTargetFix {
             }catch(_){return {label:labelOf(button).slice(0,180)};}
           }
 
+          function cachedPreparedTarget(){
+            try{
+              if(!preparedButton||!preparedButton.isConnected||!visible(preparedButton)||disabled(preparedButton))return null;
+              if(Date.now()-preparedAt>15000)return null;
+              return {button:preparedButton,score:preparedScore,label:labelOf(preparedButton),fingerprint:preparedFingerprint};
+            }catch(_){return null;}
+          }
+
+          function hitSummary(el){
+            try{return {tag:String(el&&el.tagName||'').slice(0,40),role:String(el&&el.getAttribute&&el.getAttribute('role')||'').slice(0,60),label:labelOf(el).slice(0,160)};}
+            catch(_){return {tag:'',role:'',label:''};}
+          }
+
+          function safeNativePoint(button){
+            try{
+              if(!button||!button.isConnected||!visible(button)||disabled(button))return {ok:false,error:'SUBMIT_NOT_VISIBLE'};
+              let r=button.getBoundingClientRect();
+              const vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1),vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||1);
+              let cx=r.left+r.width/2,cy=r.top+r.height/2;
+              if(r.width<2||r.height<2)return {ok:false,error:'SUBMIT_EMPTY_GEOMETRY'};
+              if(cx<0||cy<0||cx>vw||cy>vh){
+                try{button.scrollIntoView({block:'center',inline:'center'});}catch(_){}
+                r=button.getBoundingClientRect();cx=r.left+r.width/2;cy=r.top+r.height/2;
+              }
+              const fx=[0.50,0.28,0.72,0.50,0.50,0.28,0.72,0.28,0.72];
+              const fy=[0.50,0.50,0.50,0.28,0.72,0.28,0.28,0.72,0.72];
+              let lastHit=null;
+              for(let i=0;i<fx.length;i++){
+                const x=r.left+r.width*fx[i],y=r.top+r.height*fy[i];
+                if(x<0||y<0||x>vw||y>vh)continue;
+                const hit=document.elementFromPoint?document.elementFromPoint(x,y):button;
+                lastHit=hit;
+                if(hit&&(hit===button||(button.contains&&button.contains(hit)))){
+                  return {ok:true,xRatio:x/vw,yRatio:y/vh,x:Math.round(x),y:Math.round(y),sample:i,hit:hitSummary(hit)};
+                }
+              }
+              return {ok:false,error:'SUBMIT_POINT_COVERED',cover:hitSummary(lastHit),rect:{x:Math.round(r.left),y:Math.round(r.top),w:Math.round(r.width),h:Math.round(r.height)}};
+            }catch(err){return {ok:false,error:'SUBMIT_HIT_TEST_ERROR',detail:String(err).slice(0,500)};}
+          }
+
           function discover(){
             const attachment=findAttachmentSurface();
             const prompts=promptCandidates();
@@ -255,7 +299,8 @@ object AiStudioWebSessionR11SubmitTargetFix {
           }
 
           function attachmentPresent(){
-            return attachmentWindowActive()&&!!findAttachmentSurface();
+            const s=requestFixState();
+            return attachmentWindowActive()&&(!!findAttachmentSurface()||!!s.attachmentFileChangeMatched);
           }
 
           function setPromptValue(el,text){
@@ -294,7 +339,14 @@ object AiStudioWebSessionR11SubmitTargetFix {
             const set=setPromptValue(d.prompt,promptText);
             if(net){net.expectedMarker='';net.lastResult=null;net.lastProgress=null;net.lastXhrLifecycle=null;}
             const readiness=submissionReadinessIfAttachment();
-            const out={ok:!!set.ok,baselineCaptureCount:baseline,promptChars:String(promptText||'').length,observedChars:Number(set.observedChars||0),tag:String(set.tag||''),role:String(set.role||''),submitReady:!!readiness.ready,submitDisabled:!!readiness.disabled,submitScore:Number(readiness.score||-1),submitLabel:String(readiness.label||'').slice(0,180),fingerprint:readiness.fingerprint||null};
+            try{
+              const post=discover(),semantic=semanticSubmitCandidates(post),best=semantic.length?semantic[0]:null;
+              if(best&&!best.disabled&&best.score>=900){
+                preparedButton=best.button;preparedScore=best.score;preparedAt=Date.now();preparedFingerprint=fingerprint(best.button,post.composerRoot,post.prompt,post.attachment);
+                emit('R23_PREPARED_SUBMIT_TARGET',{score:best.score,label:best.label.slice(0,180),fingerprint:preparedFingerprint});
+              }
+            }catch(_){}
+            const out={ok:!!set.ok,baselineCaptureCount:baseline,promptChars:String(promptText||'').length,observedChars:Number(set.observedChars||0),tag:String(set.tag||''),role:String(set.role||''),submitReady:!!readiness.ready,submitDisabled:!!readiness.disabled,submitScore:Number(readiness.score||-1),submitLabel:String(readiness.label||'').slice(0,180),fingerprint:readiness.fingerprint||null,cachedTarget:!!cachedPreparedTarget()};
             emit('R19_MANUAL_PROMPT_PREPARED',out);
             return out;
           }
@@ -371,19 +423,21 @@ object AiStudioWebSessionR11SubmitTargetFix {
 
           function nativeTargetIfAttachment(){
             const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);
-            if(!attachmentPresent())return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
-            const d=discover(),list=d.candidates;
-            emit('R11_NATIVE_SUBMIT_DISCOVERY',{expectedName:expectedName(),hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot,baselineCaptureCount:baseline,count:list.length,top:list.slice(0,8).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})});
-            if(!list.length)return {ok:false,error:'NO_BUTTON_CANDIDATE',baselineCaptureCount:baseline};
-            const best=list[0];
-            if(best.disabled||best.score<2500)return {ok:false,error:'NO_HIGH_CONFIDENCE_SUBMIT',score:best.score,label:best.label.slice(0,180),baselineCaptureCount:baseline};
-            try{
-              const r=best.button.getBoundingClientRect(),vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1),vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||1);
-              const cx=r.left+r.width/2,cy=r.top+r.height/2;
-              if(r.width<2||r.height<2||cx<0||cy<0||cx>vw||cy>vh)return {ok:false,error:'SUBMIT_OUT_OF_VIEW',baselineCaptureCount:baseline,score:best.score};
-              return {ok:true,native:true,xRatio:cx/vw,yRatio:cy/vh,baselineCaptureCount:baseline,score:best.score,label:best.label.slice(0,180),fingerprint:fingerprint(best.button,d.composerRoot,d.prompt,d.attachment)};
-            }catch(err){return {ok:false,error:'SUBMIT_GEOMETRY_ERROR',detail:String(err).slice(0,500),baselineCaptureCount:baseline};}
+            const known=attachmentPresent();
+            const d=discover(),semantic=semanticSubmitCandidates(d),cached=cachedPreparedTarget();
+            let best=null,fromCache=false;
+            if(cached){best={button:cached.button,score:cached.score,label:cached.label,disabled:false};fromCache=true;}
+            else if(semantic.length)best=semantic[0];
+            emit('R11_NATIVE_SUBMIT_DISCOVERY',{expectedName:expectedName(),attachmentKnown:known,hasAttachment:!!d.attachment,hasPrompt:!!d.prompt,hasComposerRoot:!!d.composerRoot,baselineCaptureCount:baseline,count:semantic.length,cachedTarget:!!cached,top:semantic.slice(0,8).map(function(x){return {score:x.score,label:x.label.slice(0,180),disabled:x.disabled,fingerprint:fingerprint(x.button,d.composerRoot,d.prompt,d.attachment)};})});
+            if(!known&&!cached)return {ok:false,error:'NO_ATTACHMENT',baselineCaptureCount:baseline};
+            if(!best)return {ok:false,error:'NO_SEMANTIC_SUBMIT',baselineCaptureCount:baseline};
+            if(best.disabled||Number(best.score||0)<900)return {ok:false,error:'NO_HIGH_CONFIDENCE_SUBMIT',score:Number(best.score||-1),label:String(best.label||'').slice(0,180),baselineCaptureCount:baseline};
+            const point=safeNativePoint(best.button);
+            emit('R23_NATIVE_SUBMIT_HIT_TEST',{ok:!!point.ok,error:String(point.error||''),fromCache:fromCache,score:Number(best.score||-1),label:String(best.label||'').slice(0,180),point:point.ok?{x:point.x,y:point.y,sample:point.sample,hit:point.hit}:null,cover:point.cover||null,rect:point.rect||null});
+            if(!point.ok)return {ok:false,error:String(point.error||'SUBMIT_HIT_TEST_FAILED'),baselineCaptureCount:baseline,score:Number(best.score||-1),cover:point.cover||null,rect:point.rect||null};
+            return {ok:true,native:true,hitTest:true,cachedTarget:fromCache,xRatio:point.xRatio,yRatio:point.yRatio,baselineCaptureCount:baseline,score:Number(best.score||-1),label:String(best.label||'').slice(0,180),fingerprint:fingerprint(best.button,d.composerRoot,d.prompt,d.attachment)};
           }
+
 
           function nativeTargetIfAttachmentFileOnly(){
             const net=window.__AIS_WEB_SESSION__,baseline=Number(net&&net.captureCount||0);

@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.10-manual-config-trace"
+    const val VERSION = "2026-09-05-web-session-r11.11-http-rpc-diagnostic"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -121,8 +121,72 @@ object AiStudioWebSessionR11RequestFix {
               s = s.replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi,'Bearer <REDACTED>');
               s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'<EMAIL_REDACTED>');
               s = s.replace(/[A-Za-z0-9+\/_=-]{256,}/g,function(m){return '<LONG_TOKEN_'+m.length+'>';});
+              s = s.replace(/\b(?=[A-Za-z0-9_-]{24,80}\b)(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]+\b/g,function(m){return '<OPAQUE_'+m.length+'>';});
               return s.slice(0,1800);
             } catch (_) { return ''; }
+          }
+
+          function summarizeGenerateBody(body) {
+            const out={parsed:false,topType:'',topLength:-1,numericVectors:[],literalStrings:[],opaqueStrings:[]};
+            try {
+              if(typeof body!=='string')return out;
+              const root=JSON.parse(body);out.parsed=true;out.topType=Array.isArray(root)?'array':typeof root;out.topLength=Array.isArray(root)?root.length:-1;
+              const walk=function(v,path,depth){
+                if(depth>7)return;
+                if(Array.isArray(v)){
+                  const nums=[];
+                  for(let i=0;i<v.length;i++)if(typeof v[i]==='number'&&Number.isFinite(v[i]))nums.push({i:i,v:v[i]});
+                  if(nums.length>=3&&out.numericVectors.length<16)out.numericVectors.push({path:path,length:v.length,values:nums.slice(0,32)});
+                  for(let i=0;i<v.length&&i<40;i++)walk(v[i],path+'['+i+']',depth+1);
+                  return;
+                }
+                if(v&&typeof v==='object'){
+                  const keys=Object.keys(v).slice(0,30);
+                  for(let i=0;i<keys.length;i++)walk(v[keys[i]],path+'.'+keys[i],depth+1);
+                  return;
+                }
+                if(typeof v==='string'){
+                  const s=String(v);
+                  if(/^(?:models\/)?gemini-[a-z0-9._-]+$/i.test(s)||/^(?:user|model|assistant)$/i.test(s)||/^[A-Za-z_]+\/[A-Za-z_]+$/.test(s)||/^(?:audio|video)\//i.test(s)){
+                    if(out.literalStrings.length<24)out.literalStrings.push({path:path,value:s.slice(0,120)});
+                  }else if(out.opaqueStrings.length<32){
+                    out.opaqueStrings.push({path:path,length:s.length,kind:s.length>200?'long-token':(s.length>=20?'opaque':'short')});
+                  }
+                }
+              };
+              walk(root,'$',0);
+            } catch (err) { out.error=String(err).slice(0,300); }
+            return out;
+          }
+
+          function responseHeaderSummary(xhr) {
+            const out={names:[],contentType:'',grpcStatus:'',grpcMessage:''};
+            try {
+              const raw=String(xhr.getAllResponseHeaders&&xhr.getAllResponseHeaders()||'');
+              raw.split(/\r?\n/).forEach(function(line){
+                const p=line.indexOf(':');if(p<=0)return;
+                const name=line.slice(0,p).trim().toLowerCase(),value=line.slice(p+1).trim();
+                if(name&&out.names.indexOf(name)<0&&out.names.length<40)out.names.push(name.slice(0,80));
+                if(name==='content-type')out.contentType=value.slice(0,160);
+                else if(name==='grpc-status')out.grpcStatus=value.slice(0,80);
+                else if(name==='grpc-message')out.grpcMessage=sanitizeTraceText(value).slice(0,400);
+              });
+            } catch (_) {}
+            return out;
+          }
+
+          function emitGenerateHttpDiagnostic(xhr, meta, body, phase) {
+            try {
+              const url=String(meta&&meta.url||'');if(!isGenerateUrl(url))return;
+              const status=Number(xhr&&xhr.status||-1);if(status<400)return;
+              let text='';try{text=String(xhr.responseText||'');}catch(_){}
+              const hp=hostPath(url),headers=responseHeaderSummary(xhr),headerNames=Array.isArray(meta&&meta.headerNames)?meta.headerNames.slice(0,40):[];
+              emit('R23_GENERATE_HTTP_DIAGNOSTIC',{
+                source:'xhr',phase:String(phase||''),host:hp.host,path:hp.path,method:String(meta&&meta.method||'POST'),status:status,readyState:Number(xhr&&xhr.readyState||-1),
+                responseChars:text.length,responsePreview:sanitizeTraceText(text),responseHeaders:headers,
+                withCredentials:!!(xhr&&xhr.withCredentials),requestHeaderNames:headerNames,requestBody:summarizeGenerateBody(body)
+              });
+            } catch (err) { emit('R23_GENERATE_HTTP_DIAGNOSTIC_ERROR',{error:String(err).slice(0,500)}); }
           }
 
           function emitGenerateRequestShape(source, url, body, stage) {
@@ -146,6 +210,7 @@ object AiStudioWebSessionR11RequestFix {
                 hasTimestamp:/timestamp[_-]?granular|timestampGranular/i.test(body),
                 hasAudioMime:/audio\//i.test(body),hasVideoMime:/video\//i.test(body),
                 hasDriveRef:/drive|resource[_-]?name|file[_-]?(?:uri|id)|attachment/i.test(body),
+                rpcSummary:summarizeGenerateBody(body),
                 preview:sanitizeTraceText(body)
               });
             } catch (err) { emit('R22_GENERATE_REQUEST_SHAPE_ERROR',{error:String(err).slice(0,500)}); }
@@ -416,15 +481,42 @@ object AiStudioWebSessionR11RequestFix {
                 fix.xhrRewriteInstalled = !!current;
                 return !!current;
               }
+              const currentSetHeader=proto.setRequestHeader;
+              if(currentSetHeader&&currentSetHeader.__aisR23HeaderNames!==true){
+                const wrappedHeader=function(name,value){
+                  try{
+                    const meta=this.__aisR11||(this.__aisR11={});
+                    const n=String(name||'').trim().toLowerCase();
+                    if(n){if(!Array.isArray(meta.headerNames))meta.headerNames=[];if(meta.headerNames.indexOf(n)<0&&meta.headerNames.length<40)meta.headerNames.push(n.slice(0,80));}
+                  }catch(_){}
+                  return currentSetHeader.apply(this,arguments);
+                };
+                wrappedHeader.__aisR23HeaderNames=true;proto.setRequestHeader=wrappedHeader;
+              }
               const wrapped = function(body) {
                 let nextBody = body;
                 let netToken = null;
                 try {
                   const meta = this.__aisR11 || {};
                   nextBody = rewriteBody(meta.url || '', body, 'xhr');
+                  const xhr=this;
+                  if(isGenerateUrl(meta.url||'')){
+                    let lastDiagKey='';
+                    const diag=function(phase){
+                      try{
+                        const status=Number(xhr.status||-1),readyState=Number(xhr.readyState||-1);
+                        if(status<400)return;
+                        let chars=-1;try{chars=String(xhr.responseText||'').length;}catch(_){}
+                        const key=status+':'+readyState+':'+chars+':'+String(phase||'');
+                        if(key===lastDiagKey)return;lastDiagKey=key;
+                        emitGenerateHttpDiagnostic(xhr,meta,nextBody,phase);
+                      }catch(_){}
+                    };
+                    xhr.addEventListener('readystatechange',function(){if(Number(xhr.readyState||0)>=3)diag('readystatechange');},false);
+                    xhr.addEventListener('loadend',function(){diag('loadend');},{once:true});
+                  }
                   netToken = noteAttachmentNetStart('xhr',meta.url||'',meta.method||'POST',nextBody);
                   if (netToken) {
-                    const xhr = this;
                     if (netToken.payloadCandidate && xhr.upload && xhr.upload.addEventListener) {
                       xhr.upload.addEventListener('progress',function(ev){
                         try {
@@ -443,15 +535,6 @@ object AiStudioWebSessionR11RequestFix {
                     xhr.addEventListener('loadend',function(){
                       let status=-1;try{status=Number(xhr.status||-1);}catch(_){}
                       noteAttachmentNetDone(netToken,status);
-                      try {
-                        if (isGenerateUrl(meta.url||'') && status >= 400) {
-                          let text=''; try { text=String(xhr.responseText||''); } catch (_) {}
-                          emit('R22_GENERATE_RESPONSE_ERROR',{
-                            source:'xhr',host:hostPath(meta.url||'').host,path:hostPath(meta.url||'').path,status:status,
-                            responseChars:text.length,preview:sanitizeTraceText(text)
-                          });
-                        }
-                      } catch (_) {}
                     },{once:true});
                   }
                 } catch (err) {
@@ -469,6 +552,7 @@ object AiStudioWebSessionR11RequestFix {
               return false;
             }
           }
+
 
           function installFetchObserver() {
             try {

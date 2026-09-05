@@ -335,7 +335,8 @@ class AiStudioWebSessionExecutor(
             }
             val request = beginPreparedAttachmentRequest(prompt, callback, "attachment-native-only")
             events?.onLog("R19_NATIVE_FILE_SUBMIT_ARMED", "seq=${request.seq} promptChars=${prompt.length}")
-            tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0, allowProgrammaticFallback = false)
+            events?.onLog("R23_VIDEO_AUTO_SUBMIT_POLICY", "seq=${request.seq} nativeHitTest=true cachedPreparedTarget=true programmaticFallback=true")
+            tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0, allowProgrammaticFallback = true)
         }
         return true
     }
@@ -366,7 +367,7 @@ class AiStudioWebSessionExecutor(
             callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
             return false
         }
-        val baselineScript = "JSON.stringify((function(){var n=window.__AIS_WEB_SESSION__;var f=window.__AIS_R11_REQUEST_FIX__;return {ok:true,captureCount:Number(n&&n.captureCount||0),selectedModel:String(f&&f.selectedModel||''),requestedModel:String(f&&f.requestedModel||'')};})())"
+        val baselineScript = "JSON.stringify((function(){var n=window.__AIS_WEB_SESSION__;var s=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.selectionState?window.__AIS_R11_SUPPORT__.selectionState():{};return {ok:true,captureCount:Number(n&&n.captureCount||0),selectedModel:String(s&&s.selectedModel||''),requestedModel:String(s&&s.requestedModel||'')};})())"
         webView.evaluateJavascript(baselineScript) { raw ->
             if (destroyed || pending != null) {
                 callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
@@ -391,7 +392,7 @@ class AiStudioWebSessionExecutor(
 
     private fun monitorManualFileOnlyGenerate(requestSeq: Int, baseline: Int) {
         if (pending?.seq != requestSeq || destroyed) return
-        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var f=window.__AIS_R11_REQUEST_FIX__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domReadyAfterBusy:!!a.domReadyAfterBusy,selectedModel:String(f&&f.selectedModel||''),requestedModel:String(f&&f.requestedModel||''),payloadStarted:Number(a.payloadStarted||0),payloadCompleted:Number(a.payloadCompleted||0),payloadFailed:Number(a.payloadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
+        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var s=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.selectionState?window.__AIS_R11_SUPPORT__.selectionState():{};var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domReadyAfterBusy:!!a.domReadyAfterBusy,selectedModel:String(s&&s.selectedModel||''),requestedModel:String(s&&s.requestedModel||''),payloadStarted:Number(a.payloadStarted||0),payloadCompleted:Number(a.payloadCompleted||0),payloadFailed:Number(a.payloadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
         webView.evaluateJavascript(script) { raw ->
             if (pending?.seq != requestSeq) return@evaluateJavascript
             val decoded = decodeEvalValue(raw)

@@ -30,6 +30,7 @@ jobs:
           python3 tools/r1827_cleanup.py
           echo "R18.27 cleanup transform complete"
           git diff --check
+          git diff --exit-code -- .github/workflows/android-pr-checks.yml
           test ! -e AI_STUDIO_WEB_SESSION_LAB.md
           test ! -e app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionDirectEngine.kt
           ! grep -R "generateAttachmentFileOnlyNative\|awaitManualAttachmentFileOnlyGenerate\|awaitManualAttachmentGenerate\|nativeTargetIfAttachmentFileOnly\|stripUnsupportedTranscribe" app/src/main/java
@@ -63,6 +64,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -- gradlew
           git add -A
           git commit -m 'R18.27: remove obsolete AI Studio experiments and dead code'
           git push origin HEAD:experiment/aistudio-r183-network-vi

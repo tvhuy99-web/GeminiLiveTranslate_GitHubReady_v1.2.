@@ -52,6 +52,12 @@ if call_old not in s:
     raise SystemExit("lab scripts call-removal anchor missing")
 s = s.replace(call_old, call_new, 1)
 
+workflow_call = '''    restore_pr_workflow()
+'''
+if s.count(workflow_call) != 1:
+    raise SystemExit("restore_pr_workflow call anchor missing")
+s = s.replace(workflow_call, "", 1)
+
 helper.write_text(s, encoding="utf-8")
 
 request = Path("app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")

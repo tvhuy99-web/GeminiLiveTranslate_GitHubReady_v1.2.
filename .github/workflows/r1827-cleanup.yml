@@ -28,6 +28,7 @@ jobs:
         run: |
           python3 tools/r1827_fixup.py
           python3 tools/r1827_cleanup.py
+          echo "R18.27 cleanup transform complete"
           git diff --check
           test ! -e AI_STUDIO_WEB_SESSION_LAB.md
           test ! -e app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionDirectEngine.kt

@@ -12,7 +12,7 @@ class AiStudioWebSessionR12R1SourceTest {
     @Test
     fun r121KeepsProgressWatchdogAndTerminal2xxCompletion() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-05-web-session-r12.6-direct-stt-page"))
+        assertTrue(executor.contains("2026-09-05-web-session-r12.7-video-partial-stream"))
         assertTrue(executor.contains("FIRST_PROGRESS_TIMEOUT_MS = 300_000L"))
         assertTrue(executor.contains("PROGRESS_IDLE_TIMEOUT_MS = 60_000L"))
         assertTrue(executor.contains("PROGRESS_HARD_TIMEOUT_MS = 900_000L"))

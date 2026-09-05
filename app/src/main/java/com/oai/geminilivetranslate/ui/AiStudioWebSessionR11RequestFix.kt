@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.13-transcribe-no-tools"
+    const val VERSION = "2026-09-05-web-session-r11.14-transcribe-no-search-envelope"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -127,7 +127,7 @@ object AiStudioWebSessionR11RequestFix {
           }
 
           function summarizeGenerateBody(body) {
-            const out={parsed:false,topType:'',topLength:-1,toolSlot:{kind:'unknown',count:-1,entries:[]},numericVectors:[],literalStrings:[],opaqueStrings:[]};
+            const out={parsed:false,topType:'',topLength:-1,toolSlot:{kind:'unknown',count:-1,entries:[]},searchEnvelopeSlot:{kind:'unknown',count:-1,shape:null},numericVectors:[],literalStrings:[],opaqueStrings:[]};
             try {
               if(typeof body!=='string')return out;
               const root=JSON.parse(body);out.parsed=true;out.topType=Array.isArray(root)?'array':typeof root;out.topLength=Array.isArray(root)?root.length:-1;
@@ -143,6 +143,16 @@ object AiStudioWebSessionR11RequestFix {
                     return {kind:'array',length:entry.length,numbers:nums.slice(0,12)};
                   });
                 }
+                const searchEnvelope=root.length>6?root[6]:null;
+                out.searchEnvelopeSlot.kind=Array.isArray(searchEnvelope)?'array':(searchEnvelope===null?'null':typeof searchEnvelope);
+                out.searchEnvelopeSlot.count=Array.isArray(searchEnvelope)?searchEnvelope.length:-1;
+                const shapeOnly=function(v,depth){
+                  if(depth>7)return '<depth>';
+                  if(Array.isArray(v))return v.slice(0,16).map(function(x){return shapeOnly(x,depth+1);});
+                  if(v===null)return null;
+                  return '<'+typeof v+'>';
+                };
+                out.searchEnvelopeSlot.shape=shapeOnly(searchEnvelope,0);
               }
               const walk=function(v,path,depth){
                 if(depth>7)return;
@@ -529,6 +539,45 @@ object AiStudioWebSessionR11RequestFix {
             }
           }
 
+          function stripUnsupportedTranscribeSearchEnvelope(body, source) {
+            try {
+              if (typeof body !== 'string') return body;
+              const root = JSON.parse(body);
+              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
+              if (model !== 'gemini-3.5-transcribe') return body;
+              if (!Array.isArray(root) || root.length < 7) {
+                emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_NOOP',{source:String(source||''),model:model,reason:'RPC_SHAPE_MISMATCH',topLength:Array.isArray(root)?root.length:-1});
+                return body;
+              }
+              const slot = root[6];
+              const matchesKnownSearchEnvelope = Array.isArray(slot) && slot.length === 1 &&
+                Array.isArray(slot[0]) && slot[0].length === 4 &&
+                slot[0][0] === null && slot[0][1] === null && slot[0][2] === null &&
+                Array.isArray(slot[0][3]) && slot[0][3].length === 2 &&
+                slot[0][3][0] === null && Array.isArray(slot[0][3][1]) &&
+                slot[0][3][1].length === 1 && Array.isArray(slot[0][3][1][0]) &&
+                slot[0][3][1][0].length === 0;
+              if (!matchesKnownSearchEnvelope) {
+                emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_NOOP',{
+                  source:String(source||''),model:model,reason:'FINGERPRINT_MISMATCH',
+                  slotKind:Array.isArray(slot)?'array':(slot===null?'null':typeof slot),
+                  slotCount:Array.isArray(slot)?slot.length:-1
+                });
+                return body;
+              }
+              root[6] = [];
+              const rewritten = JSON.stringify(root);
+              emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_STRIPPED',{
+                source:String(source||''),model:model,path:'$[6]',fingerprint:'[[null,null,null,[null,[[]]]]]',
+                bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length
+              });
+              return rewritten;
+            } catch (err) {
+              emit('R27_TRANSCRIBE_SEARCH_ENVELOPE_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
+              return body;
+            }
+          }
+
           function rewriteBody(url, body, source) {
             if (typeof body !== 'string' || !isGenerateUrl(url)) return body;
             const original = firstModel(body);
@@ -547,6 +596,7 @@ object AiStudioWebSessionR11RequestFix {
             }
             rewritten = stripUnsupportedTranscribeThinking(rewritten, source);
             rewritten = stripUnsupportedTranscribeTools(rewritten, source);
+            rewritten = stripUnsupportedTranscribeSearchEnvelope(rewritten, source);
             emitGenerateRequestShape(source,url,rewritten,'post-rewrite');
             return rewritten;
           }

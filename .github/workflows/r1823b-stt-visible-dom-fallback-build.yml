@@ -1,4 +1,4 @@
-name: R18.25 Clean Production Verification
+name: R18.26 Video Partial Streaming Build
 
 on:
   push:
@@ -8,30 +8,398 @@ on:
       - .github/workflows/r1823b-stt-visible-dom-fallback-build.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify production source markers
+      - name: Apply R18.26 video partial streaming patch
         run: |
-          test ! -e tools/r1825_apply.py
-          grep -q R33_SELECTED_FILE_PERSISTED app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
-          grep -q R33_SELECTED_FILE_RESTORED app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
-          grep -q R34_VIDEO_MODEL_LIST_WEB_START app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt
-          grep -q 'Gemini API dự phòng' app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt
-          echo 'd0a5de09fcce511d7eafff5c3772bc7f1f32450baa59b8441ca532b560051d4a  app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt' | sha256sum -c -
-          echo 'b165f4d90ec4d5343010548e78fc221115888fe0478bc2135e2fa39048d72082  app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt' | sha256sum -c -
-          echo '0b535f564aaf5b12b961b67aa071418c2fc3b613f7bd303d33a6bc7c3693c142  app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, got {count}')
+              return text.replace(old, new, 1)
+
+          executor_path = Path('app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt')
+          s = executor_path.read_text()
+
+          s = replace_once(s,
+          '''    private var activeAttachment: PendingAttachment? = null
+              private var sttModeModel: String? = null
+              private val nativeTapController = AiStudioNativeTapController(webView, null)
+          ''',
+          '''    private var activeAttachment: PendingAttachment? = null
+              private var sttModeModel: String? = null
+              private var attachmentPartialCallback: ((String) -> Unit)? = null
+              private var attachmentPartialLastText: String = ""
+              private val nativeTapController = AiStudioNativeTapController(webView, null)
+          ''', 'executor partial fields')
+
+          s = replace_once(s,
+          '''    fun generateAttachmentNativeOnly(
+                  prompt: String,
+                  callback: (Result) -> Unit,
+              ): Boolean {
+                  if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
+                      callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
+                      return false
+                  }
+                  prepareAttachmentPrompt(prompt) { ok, detail, _ ->
+                      if (!ok) {
+                          callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
+                          return@prepareAttachmentPrompt
+                      }
+                      val request = beginPreparedAttachmentRequest(prompt, callback, "attachment-native-only")
+          ''',
+          '''    fun generateAttachmentNativeOnly(
+                  prompt: String,
+                  onPartial: ((String) -> Unit)? = null,
+                  callback: (Result) -> Unit,
+              ): Boolean {
+                  if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
+                      callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
+                      return false
+                  }
+                  attachmentPartialCallback = onPartial
+                  attachmentPartialLastText = ""
+                  prepareAttachmentPrompt(prompt) { ok, detail, _ ->
+                      if (!ok) {
+                          clearAttachmentPartial()
+                          callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
+                          return@prepareAttachmentPrompt
+                      }
+                      val request = beginPreparedAttachmentRequest(prompt, callback, "attachment-native-only")
+          ''', 'executor video generate callback')
+
+          s = replace_once(s,
+          '''    private fun schedulePolls(requestSeq: Int) {
+                  listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L, 20_000L, 30_000L).forEach { delay ->
+                      main.postDelayed({ if (pending?.seq == requestSeq) readNormalized(requestSeq, "poll-$delay") }, delay)
+                  }
+              }
+          ''',
+          '''    private fun schedulePolls(requestSeq: Int) {
+                  listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L, 20_000L, 30_000L).forEach { delay ->
+                      main.postDelayed({ if (pending?.seq == requestSeq) readNormalized(requestSeq, "poll-$delay") }, delay)
+                  }
+                  main.postDelayed(object : Runnable {
+                      override fun run() {
+                          if (pending?.seq != requestSeq || attachmentPartialCallback == null) return
+                          readNormalized(requestSeq, "video-partial-live")
+                          main.postDelayed(this, ATTACHMENT_PARTIAL_POLL_MS)
+                      }
+                  }, ATTACHMENT_PARTIAL_POLL_MS)
+              }
+          ''', 'executor continuous partial polling')
+
+          marker = '''    private fun timeoutRequest(requestSeq: Int, reason: String) {
+          '''
+          helper = '''    private fun publishAttachmentPartial(requestSeq: Int, text: String, source: String) {
+                  val p = pending ?: return
+                  val callback = attachmentPartialCallback ?: return
+                  if (p.seq != requestSeq) return
+                  val normalized = text.trim()
+                  if (normalized.isBlank() || normalized.length <= attachmentPartialLastText.length) return
+                  val previous = attachmentPartialLastText.length
+                  attachmentPartialLastText = normalized
+                  events?.onLog(
+                      "R35_VIDEO_PARTIAL_RAW",
+                      "seq=$requestSeq source=$source chars=${normalized.length} delta=${normalized.length - previous}",
+                  )
+                  callback(normalized)
+              }
+
+              private fun clearAttachmentPartial() {
+                  attachmentPartialCallback = null
+                  attachmentPartialLastText = ""
+              }
+
+          '''
+          if marker not in s:
+              raise SystemExit('executor helper insertion marker missing')
+          s = s.replace(marker, helper + marker, 1)
+
+          s = replace_once(s,
+          '''            parseNormalized(decoded)?.let {
+                          recordProgress(requestSeq, it.modelText.length, "normalized-$source")
+                          maybeFinish(requestSeq, it)
+                      }
+          ''',
+          '''            parseNormalized(decoded)?.let {
+                          recordProgress(requestSeq, it.modelText.length, "normalized-$source")
+                          publishAttachmentPartial(requestSeq, it.modelText, "normalized-$source")
+                          maybeFinish(requestSeq, it)
+                      }
+          ''', 'executor normalized partial publish')
+
+          s = replace_once(s,
+          '''        pending = null
+                  directRecoverySeq = -1
+                  runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
+                  p.callback(Result(ok = false, error = "CANCELLED"))
+          ''',
+          '''        pending = null
+                  directRecoverySeq = -1
+                  clearAttachmentPartial()
+                  runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
+                  p.callback(Result(ok = false, error = "CANCELLED"))
+          ''', 'executor cancel clear partial')
+
+          s = replace_once(s,
+          '''        pending = null
+                  directRecoverySeq = -1
+                  p.callback(result)
+          ''',
+          '''        pending = null
+                  directRecoverySeq = -1
+                  clearAttachmentPartial()
+                  p.callback(result)
+          ''', 'executor finish clear partial')
+
+          s = replace_once(s,
+          '''        const val VERSION = "2026-09-05-web-session-r12.6-direct-stt-page"
+          ''',
+          '''        const val VERSION = "2026-09-05-web-session-r12.7-video-partial-stream"
+          ''', 'executor version')
+
+          s = replace_once(s,
+          '''        private const val WATCHDOG_TICK_MS = 2_000L
+          ''',
+          '''        private const val WATCHDOG_TICK_MS = 2_000L
+                  private const val ATTACHMENT_PARTIAL_POLL_MS = 850L
+          ''', 'executor partial poll constant')
+
+          executor_path.write_text(s)
+
+          client_path = Path('app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt')
+          c = client_path.read_text()
+
+          c = replace_once(c,
+          '''        val webResult = generateAndAwaitAuto(exec, prompt)
+                  val output = webResult.modelText.trim()
+                  if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
+                  onPartial(output)
+                  if (includeOutputInLogs) logger.log(3, TAG, "Output preview=${output.replace('\\n', ' ').take(2000)}")
+
+                  val timelineItems: List<GeminiVideoDescriptionClient.TimelineItem>
+          ''',
+          '''        var lastPartialText = ""
+                  val webResult = generateAndAwaitAuto(exec, prompt) { rawPartial ->
+                      val displayPartial = streamingTextForUi(rawPartial, mode)
+                      if (displayPartial.isNotBlank() && displayPartial.length > lastPartialText.length) {
+                          val previous = lastPartialText.length
+                          lastPartialText = displayPartial
+                          logger.log(
+                              2,
+                              TAG,
+                              "R35_VIDEO_PARTIAL_UI mode=$mode chars=${displayPartial.length} delta=${displayPartial.length - previous}",
+                          )
+                          onPartial(displayPartial)
+                      }
+                  }
+                  val output = webResult.modelText.trim()
+                  if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
+                  if (includeOutputInLogs) logger.log(3, TAG, "Output preview=${output.replace('\\n', ' ').take(2000)}")
+
+                  val timelineItems: List<GeminiVideoDescriptionClient.TimelineItem>
+          ''', 'client stream callback')
+
+          c = replace_once(c,
+          '''        if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
+                      timelineItems = parseTimeline(output, durationSeconds)
+                      summaryText = ""
+                  } else {
+                      timelineItems = emptyList()
+                      summaryText = parseSummary(output)
+                  }
+                  onProgress("Đang tạo kết quả...", 98)
+          ''',
+          '''        if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
+                      timelineItems = parseTimeline(output, durationSeconds)
+                      summaryText = ""
+                  } else {
+                      timelineItems = emptyList()
+                      summaryText = parseSummary(output)
+                  }
+                  val finalDisplayText = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
+                      timelineItems.joinToString("\\n") { it.text }.trim()
+                  } else {
+                      summaryText.trim()
+                  }
+                  if (finalDisplayText.isNotBlank() && finalDisplayText != lastPartialText) {
+                      onPartial(finalDisplayText)
+                  }
+                  onProgress("Đang tạo kết quả...", 98)
+          ''', 'client final sanitized partial')
+
+          c = replace_once(c,
+          '''    private fun generateAndAwaitAuto(
+                  exec: AiStudioWebSessionExecutor,
+                  prompt: String,
+              ): AiStudioWebSessionExecutor.Result {
+          ''',
+          '''    private fun generateAndAwaitAuto(
+                  exec: AiStudioWebSessionExecutor,
+                  prompt: String,
+                  onPartial: (String) -> Unit,
+              ): AiStudioWebSessionExecutor.Result {
+          ''', 'client generate signature')
+
+          c = replace_once(c,
+          '''            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt) { result ->
+          ''',
+          '''            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt, onPartial = onPartial) { result ->
+          ''', 'client pass partial')
+
+          c = replace_once(c,
+          '''    companion object {
+                  private const val TAG = "AiStudioVideo"
+              }
+          ''',
+          '''    companion object {
+                  private const val TAG = "AiStudioVideo"
+
+                  internal fun streamingTextForUi(
+                      raw: String,
+                      mode: GeminiVideoDescriptionClient.Mode,
+                  ): String {
+                      val values = extractStreamingJsonStringValues(raw, "text")
+                      if (values.isEmpty()) return ""
+                      return if (mode == GeminiVideoDescriptionClient.Mode.SUMMARY) {
+                          values.first().trim()
+                      } else {
+                          values.joinToString("\\n") { it.trim() }.trim()
+                      }
+                  }
+
+                  private fun extractStreamingJsonStringValues(raw: String, field: String): List<String> {
+                      if (raw.isBlank()) return emptyList()
+                      val needle = "\\\"$field\\\""
+                      val values = ArrayList<String>()
+                      var from = 0
+                      while (from < raw.length) {
+                          val key = raw.indexOf(needle, from)
+                          if (key < 0) break
+                          if (key > 0 && raw[key - 1] == '\\\\') {
+                              from = key + needle.length
+                              continue
+                          }
+                          var i = key + needle.length
+                          while (i < raw.length && raw[i].isWhitespace()) i++
+                          if (i >= raw.length || raw[i] != ':') {
+                              from = key + needle.length
+                              continue
+                          }
+                          i++
+                          while (i < raw.length && raw[i].isWhitespace()) i++
+                          if (i >= raw.length || raw[i] != '\"') {
+                              from = key + needle.length
+                              continue
+                          }
+                          i++
+                          val out = StringBuilder()
+                          var closed = false
+                          while (i < raw.length) {
+                              val ch = raw[i++]
+                              if (ch == '\"') {
+                                  closed = true
+                                  break
+                              }
+                              if (ch != '\\\\') {
+                                  out.append(ch)
+                                  continue
+                              }
+                              if (i >= raw.length) break
+                              when (val escaped = raw[i++]) {
+                                  '\"' -> out.append('\"')
+                                  '\\\\' -> out.append('\\\\')
+                                  '/' -> out.append('/')
+                                  'b' -> out.append('\\b')
+                                  'f' -> out.append('\\u000C')
+                                  'n' -> out.append('\\n')
+                                  'r' -> out.append('\\r')
+                                  't' -> out.append('\\t')
+                                  'u' -> {
+                                      if (i + 4 <= raw.length) {
+                                          val hex = raw.substring(i, i + 4)
+                                          val code = hex.toIntOrNull(16)
+                                          if (code != null) {
+                                              out.append(code.toChar())
+                                              i += 4
+                                          }
+                                      }
+                                  }
+                                  else -> out.append(escaped)
+                              }
+                          }
+                          val value = out.toString()
+                          if (value.isNotBlank()) values += value
+                          from = if (closed) i else raw.length
+                      }
+                      return values
+                  }
+              }
+          ''', 'client streaming JSON parser')
+
+          client_path.write_text(c)
+
+          test_path = Path('app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt')
+          test_path.write_text(r'''package com.oai.geminilivetranslate.network
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class AiStudioVideoDescriptionStreamingTest {
+    @Test
+    fun summaryExtractsIncompleteJsonString() {
+        val raw = "{\\\"text\\\":\\\"Xin chào\\\\nthế giới"
+        assertEquals(
+            "Xin chào\\nthế giới",
+            AiStudioVideoDescriptionClient.streamingTextForUi(raw, GeminiVideoDescriptionClient.Mode.SUMMARY),
+        )
+    }
+
+    @Test
+    fun summaryDecodesEscapedQuote() {
+        val raw = "{\\\"text\\\":\\\"Anh ấy nói \\\\\\\"xin chào\\\\\\\" rồi đi tiếp\\\"}"
+        assertEquals(
+            "Anh ấy nói \\\"xin chào\\\" rồi đi tiếp",
+            AiStudioVideoDescriptionClient.streamingTextForUi(raw, GeminiVideoDescriptionClient.Mode.SUMMARY),
+        )
+    }
+
+    @Test
+    fun timelineCollectsMultipleTextFieldsIncludingLastPartial() {
+        val raw = "{\\\"items\\\":[{\\\"text\\\":\\\"Cảnh một\\\"},{\\\"text\\\":\\\"Cảnh hai đang hình thành"
+        assertEquals(
+            "Cảnh một\\nCảnh hai đang hình thành",
+            AiStudioVideoDescriptionClient.streamingTextForUi(raw, GeminiVideoDescriptionClient.Mode.TIMELINE),
+        )
+    }
+}
+''')
+          PY
+
+          git diff --check
+          grep -q R35_VIDEO_PARTIAL_RAW app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q R35_VIDEO_PARTIAL_UI app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          grep -q ATTACHMENT_PARTIAL_POLL_MS app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q streamingTextForUi app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
 
       - name: Repository verification
         run: |
@@ -51,15 +419,25 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
+      - name: Commit verified R18.26 source
+        run: |
+          git config user.name 'tvhuy99-web'
+          git config user.email 'tvhuy99@gmail.com'
+          git add app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionStreamingTest.kt
+          git commit -m 'R18.26: stream AI Studio video description partials'
+          git push origin HEAD:experiment/aistudio-r183-network-vi
+
       - name: Package artifact
         run: |
           mkdir -p artifact
-          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.26-video-partial-streaming.apk
           git rev-parse HEAD > artifact/source_commit.txt
-          sha256sum artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk > artifact/sha256.txt
+          sha256sum artifact/GeminiLiveTranslate-R18.26-video-partial-streaming.apk > artifact/sha256.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: GeminiLiveTranslate-R18.25-selected-file-video-models
+          name: GeminiLiveTranslate-R18.26-video-partial-streaming
           path: artifact/
           if-no-files-found: error

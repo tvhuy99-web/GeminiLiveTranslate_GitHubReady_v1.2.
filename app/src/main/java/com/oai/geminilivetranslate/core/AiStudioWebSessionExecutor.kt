@@ -88,6 +88,7 @@ class AiStudioWebSessionExecutor(
         val seq: Int,
         val callback: (Result) -> Unit,
         val startedAt: Long,
+        val completionValidator: ((String) -> Boolean)? = null,
         var firstProgressAt: Long = 0L,
         var lastProgressAt: Long = 0L,
         var lastResponseChars: Int = 0,
@@ -340,12 +341,14 @@ class AiStudioWebSessionExecutor(
     private fun beginPreparedAttachmentRequest(
         callback: (Result) -> Unit,
         mode: String,
+        completionValidator: ((String) -> Boolean)? = null,
     ): Pending {
         seq += 1
         val request = Pending(
             seq = seq,
             callback = callback,
             startedAt = SystemClock.uptimeMillis(),
+            completionValidator = completionValidator,
         )
         pending = request
         setState(State.GENERATING, "request=${request.seq} mode=$mode")
@@ -357,6 +360,7 @@ class AiStudioWebSessionExecutor(
     fun generateAttachmentNativeOnly(
         prompt: String,
         onPartial: ((String) -> Unit)? = null,
+        completionValidator: ((String) -> Boolean)? = null,
         callback: (Result) -> Unit,
     ): Boolean {
         if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
@@ -371,7 +375,11 @@ class AiStudioWebSessionExecutor(
                 callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
                 return@prepareAttachmentPrompt
             }
-            val request = beginPreparedAttachmentRequest(callback, "attachment-native-only")
+            val request = beginPreparedAttachmentRequest(
+                callback = callback,
+                mode = "attachment-native-only",
+                completionValidator = completionValidator,
+            )
             events?.onLog("R19_NATIVE_FILE_SUBMIT_ARMED", "seq=${request.seq} promptChars=${prompt.length}")
             events?.onLog("R23_VIDEO_AUTO_SUBMIT_POLICY", "seq=${request.seq} nativeHitTest=true cachedPreparedTarget=true programmaticFallback=true")
             tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0)
@@ -561,7 +569,17 @@ class AiStudioWebSessionExecutor(
             events?.onLog("R28_STT_NETWORK_COMPLETE_EMPTY", "seq=$requestSeq status=${result.status} phase=${result.phase}; waiting for dedicated STT DOM result")
             return
         }
-        if (result.ok && result.complete) finish(requestSeq, result)
+        if (result.ok && result.complete) {
+            val validator = p.completionValidator
+            if (validator != null && !validator(result.modelText)) {
+                events?.onLog(
+                    "R36_VIDEO_COMPLETION_DEFERRED",
+                    "seq=$requestSeq chars=${result.modelText.length} status=${result.status} phase=${result.phase}",
+                )
+                return
+            }
+            finish(requestSeq, result)
+        }
     }
 
     private fun finish(requestSeq: Int, result: Result) {
@@ -863,7 +881,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-05-web-session-r12.8-cleanup"
+        const val VERSION = "2026-09-06-web-session-r12.9-json-completion-guard"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"

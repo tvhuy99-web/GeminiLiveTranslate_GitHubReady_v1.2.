@@ -93,7 +93,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         logger.log(2, TAG, "R22_VIDEO_AUTO_SUBMIT_AFTER_READY promptChars=${prompt.length} model=$model mode=$mode autoSubmit=true readinessGate=attachment-prepared")
         onProgress("Video đã tải và xử lý xong; ứng dụng đang tự nhấn Run...", 25)
         var lastPartialText = ""
-        val webResult = generateAndAwaitAuto(exec, prompt) { rawPartial ->
+        val webResult = generateAndAwaitAuto(exec, prompt, mode) { rawPartial ->
             val displayPartial = streamingTextForUi(rawPartial, mode)
             if (displayPartial.isNotBlank() && displayPartial.length > lastPartialText.length) {
                 val previous = lastPartialText.length
@@ -243,12 +243,22 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
     private fun generateAndAwaitAuto(
         exec: AiStudioWebSessionExecutor,
         prompt: String,
+        mode: GeminiVideoDescriptionClient.Mode,
         onPartial: (String) -> Unit,
     ): AiStudioWebSessionExecutor.Result {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference<AiStudioWebSessionExecutor.Result?>()
+        val completionValidator: ((String) -> Boolean)? = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
+            { raw -> isCompleteJsonObject(raw) }
+        } else {
+            null
+        }
         main.post {
-            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt, onPartial = onPartial) { result ->
+            val accepted = exec.generateAttachmentNativeOnly(
+                prompt = prompt,
+                onPartial = onPartial,
+                completionValidator = completionValidator,
+            ) { result ->
                 resultRef.set(result)
                 latch.countDown()
             }
@@ -310,6 +320,41 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
 
     companion object {
         private const val TAG = "AiStudioVideo"
+
+        internal fun isCompleteJsonObject(raw: String): Boolean {
+            val text = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val start = text.indexOf('{')
+            if (start < 0) return false
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var end = -1
+            for (i in start until text.length) {
+                val ch = text[i]
+                if (inString) {
+                    if (escaped) escaped = false
+                    else if (ch == '\\') escaped = true
+                    else if (ch == '"') inString = false
+                    continue
+                }
+                when (ch) {
+                    '"' -> inString = true
+                    '{', '[' -> depth += 1
+                    '}', ']' -> {
+                        depth -= 1
+                        if (depth < 0) return false
+                        if (depth == 0) {
+                            end = i
+                            break
+                        }
+                    }
+                }
+            }
+            if (inString || depth != 0 || end < 0) return false
+            val trailing = text.substring(end + 1).trim()
+            if (trailing.isNotEmpty()) return false
+            return runCatching { JSONObject(text.substring(start, end + 1)); true }.getOrDefault(false)
+        }
 
         internal fun streamingTextForUi(
             raw: String,

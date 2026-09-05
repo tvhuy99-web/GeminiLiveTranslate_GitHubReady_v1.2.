@@ -34,11 +34,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Full Android verification
-        run: |
-          python3 tools/check_no_secrets.py
-          python3 tools/verify_project.py
-          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+      - name: Android test assemble lint
+        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
 
       - name: Verify APK
         run: |

@@ -32,7 +32,7 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
     @Test
     fun executorSupportsManualVideoObservationAndStrictNativeFileSubmit() {
         val src = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(src.contains("2026-09-05-web-session-r12.5-file-only-transcribe-video-probe"))
+        assertTrue(src.contains("2026-09-05-web-session-r12.6-direct-stt-page"))
         assertTrue(src.contains("AiStudioWebSessionDirectEngine.DOCUMENT_START"))
         assertTrue(src.contains("tryDirectEngineRecovery"))
         assertTrue(src.contains("R12_DIRECT_RECOVERY_START"))

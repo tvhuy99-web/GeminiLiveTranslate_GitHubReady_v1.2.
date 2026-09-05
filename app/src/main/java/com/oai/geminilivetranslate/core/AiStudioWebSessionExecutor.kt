@@ -30,6 +30,7 @@ import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11RequestFix
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11SubmitTargetFix
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR11Support
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionResponseCore
+import com.oai.geminilivetranslate.ui.AiStudioSttPageBridge
 import com.oai.geminilivetranslate.network.AiStudioDebugWebViewHost
 import com.oai.geminilivetranslate.network.AiStudioNativeTapController
 import org.json.JSONObject
@@ -86,6 +87,7 @@ class AiStudioWebSessionExecutor(
     private var directRecoverySeq = -1
     private var attachmentSeq = 0
     private var activeAttachment: PendingAttachment? = null
+    private var sttModeModel: String? = null
     private val nativeTapController = AiStudioNativeTapController(webView, null)
 
     private data class PendingAttachment(
@@ -120,6 +122,13 @@ class AiStudioWebSessionExecutor(
 
     fun currentState(): State = state
 
+    fun startFileTranscribe(modelId: String) {
+        sttModeModel = modelId
+        val url = "https://aistudio.google.com/u/0/prompts/new_chat?model=${Uri.encode(modelId)}"
+        events?.onLog("R28_STT_DIRECT_START", "model=$modelId path=/u/0/prompts/new_chat")
+        start(url)
+    }
+
     fun start(url: String? = null) {
         if (destroyed) return
         val bootstrapUrl = if (url == null) AiStudioGoogleAccountBootstrap.consumeStartUrl(appContext) else null
@@ -138,6 +147,20 @@ class AiStudioWebSessionExecutor(
 
     fun refreshDiscovery() {
         if (destroyed || !pageFinished) return
+        val sttModel = sttModeModel
+        if (sttModel != null) {
+            val script = "JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.pageState?window.__AIS_STT_PAGE__.pageState(${JSONObject.quote(sttModel)}):({ok:false,error:'stt-page-bridge-not-installed'}))"
+            webView.evaluateJavascript(script) { raw ->
+                val decoded = decodeEvalValue(raw)
+                val obj = runCatching { JSONObject(decoded) }.getOrNull()
+                events?.onLog("R28_STT_PAGE_PROBE", decoded.take(6000))
+                if (pending == null) {
+                    if (obj?.optBoolean("ready") == true) setState(State.READY, "dedicated STT page ready model=$sttModel")
+                    else setState(State.WAITING_FOR_CONTROLLER, "waiting for dedicated STT surface")
+                }
+            }
+            return
+        }
         val script = "JSON.stringify(window.__AIS_ADAPTIVE_RUNTIME__ ? window.__AIS_ADAPTIVE_RUNTIME__.discover() : ({ok:false,error:'runtime-not-installed'}))"
         webView.evaluateJavascript(script) { raw ->
             val decoded = decodeEvalValue(raw)
@@ -147,11 +170,8 @@ class AiStudioWebSessionExecutor(
             val controllerReady = obj?.optBoolean("controllerReady", false) == true
             events?.onLog("R10_DISCOVERY", decoded.take(8000))
             if (pending == null) {
-                if (obj?.optBoolean("ok") == true && controllerReady && readyCount > 0) {
-                    setState(State.READY, "ready controllers=$readyCount candidates=$count")
-                } else {
-                    setState(State.WAITING_FOR_CONTROLLER, "waiting for high-confidence controller candidates=$count")
-                }
+                if (obj?.optBoolean("ok") == true && controllerReady && readyCount > 0) setState(State.READY, "ready controllers=$readyCount candidates=$count")
+                else setState(State.WAITING_FOR_CONTROLLER, "waiting for high-confidence controller candidates=$count")
             }
         }
     }
@@ -170,6 +190,52 @@ class AiStudioWebSessionExecutor(
                 events?.onLog("R18_MODEL_SELECT", decoded.take(6000))
                 callback(ok, decoded)
             }
+        }
+    }
+
+    fun attachSttFile(
+        uri: Uri, displayName: String, mimeType: String, size: Long, callback: (Boolean, String) -> Unit,
+    ) {
+        main.post {
+            if (destroyed || !pageFinished || state != State.READY || sttModeModel == null) { callback(false, "NOT_READY"); return@post }
+            if (activeAttachment != null) { callback(false, "ATTACHMENT_BUSY"); return@post }
+            attachmentSeq += 1
+            val item = PendingAttachment(attachmentSeq, uri, displayName.take(260), mimeType.take(180), size, SystemClock.uptimeMillis(), callback, true)
+            activeAttachment = item
+            events?.onLog("R28_STT_FILE_START", "token=${item.token} name=${item.name} mime=${item.mimeType} size=${item.size}")
+            armSttAttachment(item.token, 0)
+        }
+    }
+
+    private fun armSttAttachment(token: Int, attempt: Int) {
+        val item = activeAttachment ?: return
+        if (item.token != token || destroyed) return
+        if (attempt >= 8) { finishAttachment(token, false, "STT_UPLOAD_TARGET_NOT_FOUND"); return }
+        val script = "JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.uploadTarget?window.__AIS_STT_PAGE__.uploadTarget():({ok:false,error:'stt-upload-target-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (activeAttachment?.token != token) return@evaluateJavascript
+            val decoded=decodeEvalValue(raw); val obj=runCatching { JSONObject(decoded) }.getOrNull()
+            events?.onLog("R28_STT_UPLOAD_TARGET", "attempt=${attempt+1} ${decoded.take(5000)}")
+            val x=obj?.optDouble("xRatio", Double.NaN) ?: Double.NaN; val y=obj?.optDouble("yRatio", Double.NaN) ?: Double.NaN
+            if (obj?.optBoolean("ok") == true && x.isFinite() && y.isFinite()) {
+                nativeTapController.requestNativeTap(JSONObject().put("xRatio",x).put("yRatio",y).put("tag","STT_UPLOAD").put("role","stt-upload").put("purpose","file-transcribe-upload").toString())
+                main.postDelayed({ pollSttAttachment(token) }, 450L)
+            } else main.postDelayed({ armSttAttachment(token, attempt+1) }, 650L)
+        }
+    }
+
+    private fun pollSttAttachment(token: Int) {
+        val item=activeAttachment ?: return
+        if (item.token != token || destroyed) return
+        if (SystemClock.uptimeMillis()-item.startedAt > ATTACHMENT_TIMEOUT_MS) { finishAttachment(token,false,"STT_ATTACHMENT_TIMEOUT"); return }
+        val script="JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.fileState?window.__AIS_STT_PAGE__.fileState(${JSONObject.quote(item.name)}):({ok:false,error:'stt-file-state-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (activeAttachment?.token != token) return@evaluateJavascript
+            val decoded=decodeEvalValue(raw); val obj=runCatching { JSONObject(decoded) }.getOrNull(); val ready=obj?.optBoolean("ready") == true
+            if (ready) { item.readyScans += 1; if (item.readySince==0L) item.readySince=SystemClock.uptimeMillis() } else { item.readyScans=0; item.readySince=0L }
+            events?.onLog("R28_STT_FILE_POLL", "readyScans=${item.readyScans} ${decoded.take(6000)}")
+            if (ready && item.readyScans>=ATTACHMENT_READY_STABLE_SCANS && SystemClock.uptimeMillis()-item.readySince>=ATTACHMENT_READY_SETTLE_MS) finishAttachment(token,true,decoded)
+            else main.postDelayed({ pollSttAttachment(token) },500L)
         }
     }
 
@@ -339,6 +405,44 @@ class AiStudioWebSessionExecutor(
             tryNativeAttachmentSubmit(request.seq, "native-file-primary", 0, allowProgrammaticFallback = true)
         }
         return true
+    }
+
+    fun generateSttFileNative(callback: (Result) -> Unit): Boolean {
+        if (destroyed || !pageFinished || state != State.READY || pending != null || sttModeModel == null) { callback(Result(ok=false,error="NOT_READY_OR_BUSY")); return false }
+        val request=beginPreparedAttachmentRequest("",callback,"stt-direct-page-file")
+        events?.onLog("R28_STT_AUTO_RUN_ARMED", "seq=${request.seq} model=${sttModeModel} prompt=false")
+        trySttRunSubmit(request.seq,0)
+        return true
+    }
+
+    private fun trySttRunSubmit(requestSeq: Int, attempt: Int) {
+        if (pending?.seq != requestSeq) return
+        if (attempt >= NATIVE_SUBMIT_MAX_RETRIES) { finish(requestSeq,Result(ok=false,error="STT_RUN_NO_CAPTURE")); return }
+        val script="JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.runTarget?window.__AIS_STT_PAGE__.runTarget():({ok:false,error:'stt-run-target-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded=decodeEvalValue(raw); val obj=runCatching { JSONObject(decoded) }.getOrNull(); events?.onLog("R28_STT_RUN_TARGET", "attempt=${attempt+1} ${decoded.take(5000)}")
+            val x=obj?.optDouble("xRatio",Double.NaN) ?: Double.NaN; val y=obj?.optDouble("yRatio",Double.NaN) ?: Double.NaN; val base=obj?.optInt("baselineCaptureCount",-1) ?: -1
+            if (obj?.optBoolean("ok") != true || !x.isFinite() || !y.isFinite() || base < 0) { main.postDelayed({trySttRunSubmit(requestSeq,attempt+1)},NATIVE_SUBMIT_RETRY_MS); return@evaluateJavascript }
+            nativeTapController.requestNativeTap(JSONObject().put("xRatio",x).put("yRatio",y).put("tag","STT_RUN").put("role","stt-run").put("purpose","file-transcribe-run").toString())
+            main.postDelayed({ checkGenerateCapture(requestSeq,base,"stt-run-${attempt+1}") { started ->
+                if (pending?.seq != requestSeq) return@checkGenerateCapture
+                if (started) { events?.onLog("R28_STT_RUN_ACK", "seq=$requestSeq attempt=${attempt+1} captureStarted=true"); setState(State.GENERATING,"dedicated STT Run triggered GenerateContent"); pollSttResult(requestSeq,0) }
+                else main.postDelayed({trySttRunSubmit(requestSeq,attempt+1)},NATIVE_SUBMIT_RETRY_MS)
+            } },NATIVE_SUBMIT_ACK_MS)
+        }
+    }
+
+    private fun pollSttResult(requestSeq: Int, attempt: Int) {
+        if (pending?.seq != requestSeq) return
+        val script="JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.resultState?window.__AIS_STT_PAGE__.resultState():({ok:false,error:'stt-result-state-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded=decodeEvalValue(raw); val obj=runCatching { JSONObject(decoded) }.getOrNull(); val text=obj?.optString("text").orEmpty(); val chars=text.length
+            events?.onLog("R28_STT_RESULT_POLL", "attempt=$attempt chars=$chars source=${obj?.optString("source").orEmpty()} status=${obj?.optInt("status",-1)} responseChars=${obj?.optInt("responseChars",0)} terminal=${obj?.optBoolean("terminal",false)} elapsedMs=${obj?.optLong("elapsedMs",-1)}")
+            if (text.isNotBlank()) { recordProgress(requestSeq,chars,"stt-dom"); finish(requestSeq,Result(ok=true,status=obj?.optInt("status",200) ?: 200,modelText=text,complete=true,phase="stt-dom-result")); return@evaluateJavascript }
+            main.postDelayed({pollSttResult(requestSeq,attempt+1)}, if(attempt<10) 900L else 1800L)
+        }
     }
 
     fun generateAttachmentFileOnlyNative(
@@ -633,6 +737,10 @@ class AiStudioWebSessionExecutor(
             return
         }
         val markerSatisfied = p.marker.isBlank() || result.markerFound
+        if (sttModeModel != null && result.ok && result.complete && result.modelText.isBlank()) {
+            events?.onLog("R28_STT_NETWORK_COMPLETE_EMPTY", "seq=$requestSeq status=${result.status} phase=${result.phase}; waiting for dedicated STT DOM result")
+            return
+        }
         if (result.ok && result.complete && markerSatisfied) finish(requestSeq, result)
     }
 
@@ -934,6 +1042,7 @@ class AiStudioWebSessionExecutor(
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionAdaptiveRuntime.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, R11_BROAD_FALLBACK_GUARD, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11Support.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
+            WebViewCompat.addDocumentStartJavaScript(webView, AiStudioSttPageBridge.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11RequestFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionR11SubmitTargetFix.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
             WebViewCompat.addDocumentStartJavaScript(webView, AiStudioWebSessionDirectEngine.DOCUMENT_START, setOf(AI_STUDIO_ORIGIN))
@@ -977,10 +1086,15 @@ class AiStudioWebSessionExecutor(
                 val item = activeAttachment ?: return false
                 val callback = filePathCallback ?: return false
                 callback.onReceiveValue(arrayOf(item.uri))
-                val mark = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.markFileChooserServed?window.__AIS_R11_SUPPORT__.markFileChooserServed(${JSONObject.quote(item.name)},${JSONObject.quote(item.mimeType)},${item.size}):({ok:false,error:'r11-mark-file-not-installed'}))"
+                val stt = sttModeModel != null
+                val mark = if (stt) {
+                    "JSON.stringify((function(){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.markFileChooserServed?window.__AIS_R11_SUPPORT__.markFileChooserServed(${JSONObject.quote(item.name)},${JSONObject.quote(item.mimeType)},${item.size}):null;var b=window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.markFileChooserServed?window.__AIS_STT_PAGE__.markFileChooserServed(${JSONObject.quote(item.name)},${JSONObject.quote(item.mimeType)},${item.size}):null;return {ok:true,r11:a,stt:b};})())"
+                } else {
+                    "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.markFileChooserServed?window.__AIS_R11_SUPPORT__.markFileChooserServed(${JSONObject.quote(item.name)},${JSONObject.quote(item.mimeType)},${item.size}):({ok:false,error:'r11-mark-file-not-installed'}))"
+                }
                 this@AiStudioWebSessionExecutor.webView.evaluateJavascript(mark) { raw ->
-                    events?.onLog("R18_ATTACHMENT_URI_SERVED", decodeEvalValue(raw).take(5000))
-                    main.postDelayed({ pollAttachment(item.token) }, 250L)
+                    events?.onLog(if(stt) "R28_STT_URI_SERVED" else "R18_ATTACHMENT_URI_SERVED", decodeEvalValue(raw).take(5000))
+                    main.postDelayed({ if(stt) pollSttAttachment(item.token) else pollAttachment(item.token) }, 250L)
                 }
                 return true
             }
@@ -996,7 +1110,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-05-web-session-r12.5-file-only-transcribe-video-probe"
+        const val VERSION = "2026-09-05-web-session-r12.6-direct-stt-page"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"

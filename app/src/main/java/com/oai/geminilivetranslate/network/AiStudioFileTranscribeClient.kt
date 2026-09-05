@@ -40,10 +40,9 @@ class AiStudioFileTranscribeClient(
         logger.log(2, TAG, "START backend=aistudio-file model=$model name=$displayName mime=$mimeType bytes=$size live=false")
         onProgress("Đang mở AI Studio cho chép lời tệp...", 2)
         val exec = createAndAwaitReady()
-        selectModel(exec)
-        onProgress("Đang đưa tệp vào AI Studio và chờ trang đọc xong...", 8)
+        onProgress("Đang đưa tệp vào trang chép lời AI Studio và chờ trang đọc xong...", 8)
         attachAndWait(exec, uri, displayName, mimeType, size)
-        logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-web-file-only manualRun=false autoSubmit=true")
+        logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-stt-direct-page manualRun=false autoSubmit=true")
         onProgress("Tệp đã tải/xử lý xong. Ứng dụng đang tự nhấn Run để bắt đầu chép lời...", 55)
         logger.log(2, TAG, "R24_FILE_TRANSCRIBE_AUTO_SUBMIT_START model=$model prompt=false fileOnly=true")
         val result = generateFileOnly(exec)
@@ -76,28 +75,15 @@ class AiStudioFileTranscribeClient(
                     }
                 }
                 override fun onLog(name: String, detail: String) {
-                    val level = if (name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
+                    val level = if (name.startsWith("R29_") || name.startsWith("JS_R29_") || name.startsWith("R28_") || name.startsWith("JS_R28_") || name.startsWith("R27_") || name.startsWith("JS_R27_") || name.startsWith("R26_") || name.startsWith("JS_R26_") || name.startsWith("R25_") || name.startsWith("JS_R25_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
                     logger.log(level, TAG, "$name ${detail.take(5000)}")
                 }
             })
-            holder.set(created); executor = created; created.start()
+            holder.set(created); executor = created; created.startFileTranscribe(model)
         }
         if (!latch.await(45, TimeUnit.SECONDS)) error("AI Studio file transcribe chưa sẵn sàng")
         failure.get()?.let { error(it) }
         return holder.get() ?: error("Không tạo được AI Studio file session")
-    }
-
-    private fun selectModel(exec: AiStudioWebSessionExecutor) {
-        var last = ""
-        repeat(12) { attempt ->
-            val latch = CountDownLatch(1); val ok = AtomicReference(false); val detail = AtomicReference("")
-            exec.selectModel(model) { yes, d -> ok.set(yes); detail.set(d); latch.countDown() }
-            latch.await(4, TimeUnit.SECONDS)
-            last = detail.get()
-            if (ok.get()) { logger.log(2, TAG, "MODEL_READY model=$model attempt=${attempt+1}"); return }
-            Thread.sleep(500)
-        }
-        error("Không chọn được model tệp $model: ${last.take(500)}")
     }
 
     private fun attachAndWait(exec: AiStudioWebSessionExecutor, uri: Uri, name: String, mime: String, size: Long) {
@@ -106,7 +92,7 @@ class AiStudioFileTranscribeClient(
             val latch = CountDownLatch(1)
             val ok = AtomicReference(false)
             val detail = AtomicReference("")
-            exec.attachFile(uri, name, mime, size, requireUploadReady = true) { yes, d ->
+            exec.attachSttFile(uri, name, mime, size) { yes, d ->
                 ok.set(yes); detail.set(d); latch.countDown()
             }
             if (!latch.await(5, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio tải tệp chép lời")
@@ -126,7 +112,7 @@ class AiStudioFileTranscribeClient(
         val latch = CountDownLatch(1)
         val ref = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.generateAttachmentFileOnlyNative { r -> ref.set(r); latch.countDown() }
+            val accepted = exec.generateSttFileNative { r -> ref.set(r); latch.countDown() }
             if (!accepted && ref.get() == null) {
                 ref.set(AiStudioWebSessionExecutor.Result(ok = false, error = "AUTO_FILE_TRANSCRIBE_NOT_ARMED"))
                 latch.countDown()

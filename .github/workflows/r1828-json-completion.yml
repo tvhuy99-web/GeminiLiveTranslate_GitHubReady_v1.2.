@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/r1828-json-completion.yml'
       - 'tools/r1828_json_completion_patch.py'
+      - 'app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionExecutorSourceTest.kt'
 
 permissions:
   contents: write

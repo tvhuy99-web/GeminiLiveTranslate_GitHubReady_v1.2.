@@ -47,6 +47,7 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var connectionModeSpinner: AccessibleSpinner
     private lateinit var accountButton: Button
     private lateinit var providerSpinner: AccessibleSpinner
+    private lateinit var geminiKeyFields: LinearLayout
     private lateinit var geminiFields: LinearLayout
     private lateinit var proxyFields: LinearLayout
     private lateinit var geminiKey: EditText
@@ -143,11 +144,13 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
         root.addView(accountButton)
 
-        root.addView(label("Gemini API Key"))
+        geminiKeyFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        geminiKeyFields.addView(label("Gemini API Key"))
         geminiKey = multiKeyEdit().apply {
             contentDescription = "Gemini API Key. Mỗi dòng một khóa"
         }
-        root.addView(geminiKey)
+        geminiKeyFields.addView(geminiKey)
+        root.addView(geminiKeyFields)
 
         root.addView(label("Nhà cung cấp cho Mô tả video"))
         providerSpinner = AccessibleSpinner(this).apply {
@@ -339,9 +342,9 @@ class ApiSettingsActivity : AppCompatActivity() {
         val temperatureValue = temperatureInput.text.toString().trim().toDoubleOrNull()
         val reconnectRetriesValue = reconnectRetriesInput.text.toString().trim().toIntOrNull()
 
-        val invalidGeminiKey = geminiValues.firstOrNull {
-            it.length < 20 || it.any(Char::isWhitespace)
-        }
+        val invalidGeminiKey = if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            geminiValues.firstOrNull { it.length < 20 || it.any(Char::isWhitespace) }
+        } else null
         if (invalidGeminiKey != null) {
             toast("Có Gemini API Key không hợp lệ")
             return
@@ -366,7 +369,9 @@ class ApiSettingsActivity : AppCompatActivity() {
         val previousGeminiKeys = keys.load().keys
         val previousConnectionMode = AiConnectionModeStore(this).load()
         runCatching {
-            keys.setGeminiKeys(geminiValues)
+            if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+                keys.setGeminiKeys(geminiValues)
+            }
             keys.setProxyKey(proxyValue)
             AiConnectionModeStore(this).save(connectionMode)
             val appPreferences = AppPreferences(this)
@@ -661,7 +666,9 @@ class ApiSettingsActivity : AppCompatActivity() {
 
     private fun refreshConnectionModeFields() {
         val mode = currentConnectionMode()
-        accountButton.isVisible = mode == AiConnectionModeStore.MODE_AI_STUDIO
+        val aiStudio = mode == AiConnectionModeStore.MODE_AI_STUDIO
+        accountButton.isVisible = aiStudio
+        geminiKeyFields.isVisible = !aiStudio
     }
 
     private fun refreshProviderFields() {

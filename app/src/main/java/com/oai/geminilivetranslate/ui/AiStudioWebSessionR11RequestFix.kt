@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.11-http-rpc-diagnostic"
+    const val VERSION = "2026-09-05-web-session-r11.12-transcribe-no-thinking"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -452,6 +452,30 @@ object AiStudioWebSessionR11RequestFix {
             }
           }
 
+          function stripUnsupportedTranscribeThinking(body, source) {
+            if (typeof body !== 'string' || normalizeModel(fix.selectedModel) !== 'gemini-3.5-transcribe') return body;
+            try {
+              const root = JSON.parse(body);
+              const model = Array.isArray(root) ? normalizeModel(root[0]) : '';
+              if (model !== 'gemini-3.5-transcribe') return body;
+              const generation = Array.isArray(root[3]) ? root[3] : null;
+              const thinking = generation && generation.length > 16 ? generation[16] : null;
+              const observedSignature = Array.isArray(thinking) && thinking.length === 4 && thinking[0] === 1 && thinking[1] == null && thinking[2] == null && Number.isFinite(Number(thinking[3]));
+              if (!observedSignature) {
+                emit('R25_TRANSCRIBE_THINKING_GUARD_NOOP',{source:String(source||''),model:model,generationLength:generation?generation.length:-1,thinkingKind:Array.isArray(thinking)?'array':typeof thinking});
+                return body;
+              }
+              const previousLevel = Number(thinking[3]);
+              generation[16] = null;
+              const rewritten = JSON.stringify(root);
+              emit('R25_TRANSCRIBE_THINKING_STRIPPED',{source:String(source||''),model:model,path:'$[3][16]',previousLevel:previousLevel,bodyCharsBefore:body.length,bodyCharsAfter:rewritten.length});
+              return rewritten;
+            } catch (err) {
+              emit('R25_TRANSCRIBE_THINKING_GUARD_ERROR',{source:String(source||''),error:String(err).slice(0,500)});
+              return body;
+            }
+          }
+
           function rewriteBody(url, body, source) {
             if (typeof body !== 'string' || !isGenerateUrl(url)) return body;
             const original = firstModel(body);
@@ -468,6 +492,7 @@ object AiStudioWebSessionR11RequestFix {
             } else if (!original) {
               emit('R11_MODEL_REWRITE_SKIPPED',{reason:'MODEL_NOT_FOUND_IN_BODY',target:fix.selectedModel,source:source,bodyChars:body.length});
             }
+            rewritten = stripUnsupportedTranscribeThinking(rewritten, source);
             emitGenerateRequestShape(source,url,rewritten,'post-rewrite');
             return rewritten;
           }

@@ -497,12 +497,10 @@ class SettingsActivity : AppCompatActivity() {
         check(
             label = "Hiển thị trang web AI Studio",
             checked = preferences.loadAiStudioWebViewVisible(),
-            detail = "Mặc định tắt. Chỉ bật khi cần xem trực tiếp trang AI Studio để kiểm tra lỗi; khi tắt, phiên web vẫn chạy ẩn và không xuất hiện với trình đọc màn hình.",
         ) { visible ->
             preferences.setAiStudioWebViewVisible(visible)
             AiStudioDebugWebViewHost.setVisibleForActive(visible, logger)
         }
-        description("Công tắc này chỉ thay đổi cách hiển thị trang gỡ lỗi, không đổi model, prompt hay cách gửi tệp.")
 
         title("Khôi phục và xóa dữ liệu")
         rowButton("Đưa cài đặt về mặc định") { confirmRestoreSettings() }

@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 /** Dedicated bridge for AI Studio's Speech-to-Text surface opened with the transcribe model URL. */
 object AiStudioSttPageBridge {
-    const val VERSION = "2026-09-05-stt-page-r6-visible-dom-stable-fallback"
+    const val VERSION = "2026-09-05-stt-page-r7-post-2xx-delta-gate"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -18,6 +18,9 @@ object AiStudioSttPageBridge {
             baselineLines:null,
             runStartedAt:0,
             lastRunGestureAt:0,
+            network2xxSeen:false,
+            preNetworkObserved:false,
+            preNetworkDelta:'',
             lastBodyDelta:'',
             bodyDeltaStableScans:0
           };
@@ -353,6 +356,9 @@ object AiStudioSttPageBridge {
               out.baselineCaptureCount=base;
               captureBaseline();
               state.runStartedAt=Date.now();
+              state.network2xxSeen=false;
+              state.preNetworkObserved=false;
+              state.preNetworkDelta='';
               state.lastBodyDelta='';
               state.bodyDeltaStableScans=0;
               emit('R28_STT_RUN_TARGET',{
@@ -378,14 +384,43 @@ object AiStudioSttPageBridge {
               }catch(_){}
               const terminal=!!(net&&netOk&&!partial);
               const failed=!!(net&&status>=400);
-              if(delta&&delta===state.lastBodyDelta){
-                state.bodyDeltaStableScans+=1;
-              }else{
-                state.lastBodyDelta=delta;
-                state.bodyDeltaStableScans=delta?1:0;
-              }
-              const deltaStable=state.bodyDeltaStableScans>=2;
               const progressiveNetworkSuccess=!!(net&&netOk&&status>=200&&status<300&&responseChars>0);
+              let networkGateReset=false;
+              if(!progressiveNetworkSuccess){
+                state.preNetworkObserved=true;
+                state.preNetworkDelta=delta;
+                state.network2xxSeen=false;
+                state.lastBodyDelta='';
+                state.bodyDeltaStableScans=0;
+              }else if(!state.network2xxSeen){
+                state.network2xxSeen=true;
+                if(!state.preNetworkObserved)state.preNetworkDelta='';
+                state.lastBodyDelta='';
+                state.bodyDeltaStableScans=0;
+                networkGateReset=true;
+                emit('R32_STT_RESULT_NETWORK_GATE',{
+                  status:status,responseChars:responseChars,partial:partial,
+                  preNetworkObserved:state.preNetworkObserved,
+                  preNetworkDeltaChars:state.preNetworkDelta.length,
+                  preNetworkDeltaPreview:state.preNetworkDelta.slice(0,120)
+                });
+              }
+              const changedAfterNetwork=!!(
+                delta&&state.network2xxSeen&&
+                (!state.preNetworkObserved||!state.preNetworkDelta||delta!==state.preNetworkDelta)
+              );
+              if(state.network2xxSeen&&!networkGateReset&&changedAfterNetwork){
+                if(delta===state.lastBodyDelta){
+                  state.bodyDeltaStableScans+=1;
+                }else{
+                  state.lastBodyDelta=delta;
+                  state.bodyDeltaStableScans=1;
+                }
+              }else if(state.network2xxSeen&&!networkGateReset){
+                state.lastBodyDelta='';
+                state.bodyDeltaStableScans=0;
+              }
+              const deltaStable=!!(changedAfterNetwork&&state.bodyDeltaStableScans>=2);
               const deltaUsable=!!(delta&&deltaStable&&progressiveNetworkSuccess&&!failed&&!errorish(delta)&&!statusish(delta));
               let text='',source='';
               if(dedicated){
@@ -400,13 +435,19 @@ object AiStudioSttPageBridge {
                 responseChars:responseChars,partial:partial,networkOk:netOk,terminal:terminal,failed:failed,
                 dedicatedChars:dedicated.length,bodyDeltaChars:delta.length,
                 bodyDeltaStableScans:state.bodyDeltaStableScans,deltaUsable:deltaUsable,
+                network2xxSeen:state.network2xxSeen,networkGateReset:networkGateReset,
+                preNetworkDeltaChars:state.preNetworkDelta.length,changedAfterNetwork:changedAfterNetwork,
+                deltaPreview:delta.slice(0,120),
                 elapsedMs:state.runStartedAt?Date.now()-state.runStartedAt:-1
               };
               emit('R28_STT_RESULT_STATE',{
                 ok:true,textChars:out.textChars,source:out.source,status:status,responseChars:responseChars,
                 partial:partial,networkOk:netOk,terminal:terminal,failed:failed,
                 dedicatedChars:out.dedicatedChars,bodyDeltaChars:out.bodyDeltaChars,
-                bodyDeltaStableScans:out.bodyDeltaStableScans,deltaUsable:out.deltaUsable,elapsedMs:out.elapsedMs
+                bodyDeltaStableScans:out.bodyDeltaStableScans,deltaUsable:out.deltaUsable,
+                network2xxSeen:out.network2xxSeen,networkGateReset:out.networkGateReset,
+                preNetworkDeltaChars:out.preNetworkDeltaChars,changedAfterNetwork:out.changedAfterNetwork,
+                deltaPreview:out.deltaPreview,elapsedMs:out.elapsedMs
               });
               return out;
             }

@@ -1,0 +1,70 @@
+name: R18.23b STT Visible DOM Fallback Build
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r1823b-stt-visible-dom-fallback-build.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+
+      - name: Verify R18.23 source invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+          grep -F 'stt-page-r6-visible-dom-stable-fallback' "$f"
+          grep -F 'bodyDeltaStableScans>=2' "$f"
+          grep -F 'body-delta-stable-during-partial-200' "$f"
+          grep -F 'progressiveNetworkSuccess' "$f"
+          grep -F "activationPolicy='native-touch-only'" "$f"
+          if grep -F 'else if(terminal&&delta)' "$f"; then exit 1; fi
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt').read_text()
+          start=s.index('val DOCUMENT_START: String = """')+len('val DOCUMENT_START: String = """')
+          end=s.index('""".trimIndent()', start)
+          js=s[start:end].replace("$VERSION", "2026-09-05-stt-page-r6-visible-dom-stable-fallback")
+          Path('/tmp/stt.js').write_text(js)
+          PY
+          node --check /tmp/stt.js
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Full Android verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+          python3 tools/verify_apk.py app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk
+          sha256sum artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk | tee artifact/apk.sha256
+          git rev-parse HEAD > artifact/source_commit.txt
+          if command -v apksigner >/dev/null 2>&1; then
+            apksigner verify --verbose artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk > artifact/apksigner.txt 2>&1 || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.23-stt-visible-dom-fallback
+          path: artifact/

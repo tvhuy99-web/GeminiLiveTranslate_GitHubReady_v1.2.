@@ -1,8 +1,12 @@
 package com.oai.geminilivetranslate.ui
 
 import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.IBinder
 import android.view.View
 import android.widget.Button
 import androidx.appcompat.app.AlertDialog
@@ -13,6 +17,7 @@ import com.oai.geminilivetranslate.core.SessionHistoryStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityHistoryBinding
+import com.oai.geminilivetranslate.service.TranslationService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,6 +26,24 @@ class HistoryActivity : AppCompatActivity() {
     private lateinit var binding: ActivityHistoryBinding
     private lateinit var store: SessionHistoryStore
     private lateinit var logger: SessionLogger
+    private var serviceKeepAliveBindRequested = false
+    private var serviceKeepAliveBound = false
+
+    private val serviceKeepAliveConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            serviceKeepAliveBound = binder is TranslationService.LocalBinder
+            logger.log(
+                2,
+                TAG,
+                "R31_HISTORY_SERVICE_KEEPALIVE connected=$serviceKeepAliveBound component=$name",
+            )
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            serviceKeepAliveBound = false
+            logger.log(1, TAG, "R31_HISTORY_SERVICE_KEEPALIVE disconnected component=$name")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +52,37 @@ class HistoryActivity : AppCompatActivity() {
         store = SessionHistoryStore(this)
         logger = SessionLogger(this, AppPreferences(this))
         render()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!serviceKeepAliveBindRequested) {
+            serviceKeepAliveBindRequested = bindService(
+                Intent(this, TranslationService::class.java),
+                serviceKeepAliveConnection,
+                Context.BIND_AUTO_CREATE,
+            )
+            logger.log(
+                if (serviceKeepAliveBindRequested) 2 else 1,
+                TAG,
+                "R31_HISTORY_SERVICE_KEEPALIVE bindRequested=$serviceKeepAliveBindRequested",
+            )
+        }
+    }
+
+    override fun onStop() {
+        if (serviceKeepAliveBindRequested) {
+            runCatching { unbindService(serviceKeepAliveConnection) }
+                .onFailure { logger.log(1, TAG, "R31_HISTORY_SERVICE_KEEPALIVE unbind failed", it) }
+            logger.log(
+                2,
+                TAG,
+                "R31_HISTORY_SERVICE_KEEPALIVE released wasConnected=$serviceKeepAliveBound",
+            )
+            serviceKeepAliveBindRequested = false
+            serviceKeepAliveBound = false
+        }
+        super.onStop()
     }
 
     override fun onResume() {

@@ -17,7 +17,7 @@ src = Path(p).read_text()
 func = src.index("          function nativeTargetIfAttachmentFileOnly(){")
 best = src.index("            const best=list[0];", func)
 try_start = src.index("            try{", best)
-catch_start = src.index("            }catch(err){return {ok:false,error:'FILE_ONLY_TARGET_ERROR'", try_start)
+catch_start = src.index("            }catch(err){return {ok:false,error:'SUBMIT_GEOMETRY_ERROR'", try_start)
 catch_end = src.index("\n", catch_start) + 1
 new_block = ''' + "'''" + r'''            try{
               const point=safeNativePoint(best.button);

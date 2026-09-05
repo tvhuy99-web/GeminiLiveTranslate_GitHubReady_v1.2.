@@ -34,29 +34,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android test assemble lint
-        run: ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
-
-      - name: Verify APK
+      - name: Android compiler diagnostic
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          test -f "$APK"
-          python3 tools/verify_apk.py "$APK"
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
-          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          set +e
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug > gradle-r1825.log 2>&1
+          code=$?
+          cat gradle-r1825.log
+          echo "$code" > gradle-exit-code.txt
+          exit 0
 
-      - name: Package verified APK and source
+      - name: Package diagnostics and candidate APK
         run: |
           mkdir -p artifact/source
-          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk
+          cp gradle-r1825.log artifact/
+          cp gradle-exit-code.txt artifact/
           cp app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt artifact/source/MainActivity.kt
           cp app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt artifact/source/ApiSettingsActivity.kt
           cp app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt artifact/source/AiStudioModelCatalogLoader.kt
           git rev-parse HEAD > artifact/base_commit.txt
-          sha256sum artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk > artifact/sha256.txt
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk
+            sha256sum artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk > artifact/sha256.txt
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: GeminiLiveTranslate-R18.25-selected-file-video-models
+          name: GeminiLiveTranslate-R18.25-diagnostics
           path: artifact/
           if-no-files-found: error

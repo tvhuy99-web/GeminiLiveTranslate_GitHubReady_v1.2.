@@ -31,6 +31,27 @@ comments_new = '''    for p in changed_kotlin_files():
 if comments_old not in s:
     raise SystemExit("comment cleanup whitespace anchor missing")
 s = s.replace(comments_old, comments_new, 1)
+
+marker_anchor = '''    s = s.replace("        val markerFound: Boolean = false,\\n", "")
+'''
+marker_patch = marker_anchor + '''    s = s.replace(" markerFound=${result.markerFound}", "")
+'''
+if marker_anchor not in s:
+    raise SystemExit("executor marker log anchor missing")
+s = s.replace(marker_anchor, marker_patch, 1)
+
+call_old = '''    s = remove_kotlin_function(s, "call")
+'''
+call_new = '''    call_start = s.find("\\n    fun call(")
+    object_end = s.rfind("\\n}")
+    if call_start < 0 or object_end < call_start:
+        raise SystemExit("lab scripts call function boundary missing")
+    s = s[:call_start] + s[object_end:]
+'''
+if call_old not in s:
+    raise SystemExit("lab scripts call-removal anchor missing")
+s = s.replace(call_old, call_new, 1)
+
 helper.write_text(s, encoding="utf-8")
 
 request = Path("app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")

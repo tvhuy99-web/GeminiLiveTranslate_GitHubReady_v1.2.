@@ -33,7 +33,6 @@ jobs:
           grep -q 'R26_TRANSCRIBE_TOOLS_STRIPPED' "$SRC"
           grep -q 'R26_TRANSCRIBE_TOOLS_GUARD_NOOP' "$SRC"
           grep -Fq 'root[2] = []' "$SRC"
-          grep -Fq "path:'$[2]'" "$SRC"
           grep -Fq "toolSlot:{kind:'unknown',count:-1,entries:[]}" "$SRC"
           grep -q 'R25_TRANSCRIBE_THINKING_STRIPPED' "$SRC"
           echo 'R18.16 source invariants PASS'

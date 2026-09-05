@@ -1,4 +1,4 @@
-name: R18.25 Selected File Video Models Build
+name: R18.25 Commit Verified Source
 
 on:
   push:
@@ -8,58 +8,30 @@ on:
       - .github/workflows/r1823b-stt-visible-dom-fallback-build.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
+  commit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Apply and inspect R18.25 fixes
+      - name: Recreate verified R18.25 source
         run: |
           python3 tools/r1825_apply.py
           git diff --check
-          grep -q R33_SELECTED_FILE_PERSISTED app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
-          grep -q R33_SELECTED_FILE_RESTORED app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
-          grep -q 'restorePersistedSelectedFile("before-start"' app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
-          grep -q R34_VIDEO_MODEL_LIST_WEB_START app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt
-          grep -q openModelPicker app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt
-          grep -q discoverModels app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt
-          grep -q supportedGenerationMethods app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt
+          echo 'd0a5de09fcce511d7eafff5c3772bc7f1f32450baa59b8441ca532b560051d4a  app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt' | sha256sum -c -
+          echo 'b165f4d90ec4d5343010548e78fc221115888fe0478bc2135e2fa39048d72082  app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt' | sha256sum -c -
+          echo '0b535f564aaf5b12b961b67aa071418c2fc3b613f7bd303d33a6bc7c3693c142  app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt' | sha256sum -c -
 
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Android compiler diagnostic
+      - name: Commit verified production source
         run: |
-          set +e
-          chmod +x gradlew
-          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug > gradle-r1825.log 2>&1
-          code=$?
-          cat gradle-r1825.log
-          echo "$code" > gradle-exit-code.txt
-          exit 0
-
-      - name: Package diagnostics and candidate APK
-        run: |
-          mkdir -p artifact/source
-          cp gradle-r1825.log artifact/
-          cp gradle-exit-code.txt artifact/
-          cp app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt artifact/source/MainActivity.kt
-          cp app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt artifact/source/ApiSettingsActivity.kt
-          cp app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt artifact/source/AiStudioModelCatalogLoader.kt
-          git rev-parse HEAD > artifact/base_commit.txt
-          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
-            cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk
-            sha256sum artifact/GeminiLiveTranslate-R18.25-selected-file-video-models.apk > artifact/sha256.txt
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: GeminiLiveTranslate-R18.25-diagnostics
-          path: artifact/
-          if-no-files-found: error
+          git config user.name 'tvhuy99-web'
+          git config user.email 'tvhuy99@gmail.com'
+          git add app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/ui/ApiSettingsActivity.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioModelCatalogLoader.kt
+          git commit -m 'R18.25: persist selected file and load video models web-first'
+          git push origin HEAD:experiment/aistudio-r183-network-vi

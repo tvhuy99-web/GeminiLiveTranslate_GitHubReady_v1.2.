@@ -28,15 +28,27 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('tools/r1827_cleanup.py')
-          s = p.read_text()
+          helper = Path('tools/r1827_cleanup.py')
+          s = helper.read_text()
           old = '''    s = s.replace("            out.rawMarkerFound=rawMarkerFound;\\n            out.markerFound=markerFound;\\n", "")
           '''
           new = old + '''    s = s.replace("            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.markerFound,normalized.modelTextChars].join('|');\\n", "            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.modelTextChars].join('|');\\n")
           '''
           if old not in s:
               raise SystemExit('response marker patch anchor missing')
-          p.write_text(s.replace(old, new, 1))
+          helper.write_text(s.replace(old, new, 1))
+
+          request = Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt')
+          r = request.read_text()
+          for line in (
+              "            fix.attachmentSubmitFallbacks = 0;\n",
+              "            fix.attachmentSubmitButtonClicks = 0;\n",
+              "            fix.attachmentSubmitListenerInvokes = 0;\n",
+              "            fix.attachmentLastSubmitLabel = '';\n",
+              "            fix.attachmentLastSubmitPath = '';\n",
+          ):
+              r = r.replace(line, '')
+          request.write_text(r)
           PY
           python3 tools/r1827_cleanup.py
           git diff --check

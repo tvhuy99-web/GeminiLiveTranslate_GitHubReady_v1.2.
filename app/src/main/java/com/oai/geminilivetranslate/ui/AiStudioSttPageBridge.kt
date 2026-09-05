@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 /** Dedicated bridge for AI Studio's Speech-to-Text surface opened with the transcribe model URL. */
 object AiStudioSttPageBridge {
-    const val VERSION = "2026-09-05-stt-page-r5-accessibility-touch-guard"
+    const val VERSION = "2026-09-05-stt-page-r6-visible-dom-stable-fallback"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -17,7 +17,9 @@ object AiStudioSttPageBridge {
             fileServedAt:0,
             baselineLines:null,
             runStartedAt:0,
-            lastRunGestureAt:0
+            lastRunGestureAt:0,
+            lastBodyDelta:'',
+            bodyDeltaStableScans:0
           };
 
           function emit(kind,payload){
@@ -187,6 +189,12 @@ object AiStudioSttPageBridge {
             return /(something went wrong|an error occurred|error occurred|request failed|failed to|try again|not have permission|permission denied|forbidden|no api key selected|api key required|quota|unable to|couldn['’]t|cannot|can['’]t process)/i.test(s);
           }
 
+          function statusish(s){
+            s=clean(s);
+            if(!s)return false;
+            return /^(processing|transcribing|transcription in progress|transcription complete|transcription completed|completed|copy|copy transcript|download|download transcript|play|pause|loading|working|đang xử lý|đang phiên âm|đã hoàn tất)$/i.test(s);
+          }
+
           function captureBaseline(){
             const set=new Set();
             try{
@@ -223,7 +231,7 @@ object AiStudioSttPageBridge {
               const base=state.baselineLines||new Set();
               String(document.body&&document.body.innerText||'').split(/\r?\n/).forEach(function(line){
                 const t=clean(line);
-                if(t.length>=2&&!base.has(t)&&!errorish(t))candidates.push({t:t,s:t.length});
+                if(t.length>=2&&!base.has(t)&&!errorish(t)&&!statusish(t))candidates.push({t:t,s:t.length});
               });
             }catch(_){}
             candidates.sort(function(a,b){return b.s-a.s;});
@@ -345,6 +353,8 @@ object AiStudioSttPageBridge {
               out.baselineCaptureCount=base;
               captureBaseline();
               state.runStartedAt=Date.now();
+              state.lastBodyDelta='';
+              state.bodyDeltaStableScans=0;
               emit('R28_STT_RUN_TARGET',{
                 ok:out.ok,error:out.error||'',score:r.score,label:out.label||'',scrolled:!!out.scrolled,
                 activationPolicy:out.activationPolicy,candidates:r.candidates,baselineCaptureCount:base,
@@ -368,24 +378,35 @@ object AiStudioSttPageBridge {
               }catch(_){}
               const terminal=!!(net&&netOk&&!partial);
               const failed=!!(net&&status>=400);
+              if(delta&&delta===state.lastBodyDelta){
+                state.bodyDeltaStableScans+=1;
+              }else{
+                state.lastBodyDelta=delta;
+                state.bodyDeltaStableScans=delta?1:0;
+              }
+              const deltaStable=state.bodyDeltaStableScans>=2;
+              const progressiveNetworkSuccess=!!(net&&netOk&&status>=200&&status<300&&responseChars>0);
+              const deltaUsable=!!(delta&&deltaStable&&progressiveNetworkSuccess&&!failed&&!errorish(delta)&&!statusish(delta));
               let text='',source='';
               if(dedicated){
                 text=dedicated;
                 source='stt-dom';
-              }else if(terminal&&delta){
+              }else if(deltaUsable){
                 text=delta;
-                source='body-delta-after-network-success';
+                source=terminal?'body-delta-after-network-success':'body-delta-stable-during-partial-200';
               }
               const out={
                 ok:true,text:text,textChars:text.length,source:source,status:status,
                 responseChars:responseChars,partial:partial,networkOk:netOk,terminal:terminal,failed:failed,
                 dedicatedChars:dedicated.length,bodyDeltaChars:delta.length,
+                bodyDeltaStableScans:state.bodyDeltaStableScans,deltaUsable:deltaUsable,
                 elapsedMs:state.runStartedAt?Date.now()-state.runStartedAt:-1
               };
               emit('R28_STT_RESULT_STATE',{
                 ok:true,textChars:out.textChars,source:out.source,status:status,responseChars:responseChars,
                 partial:partial,networkOk:netOk,terminal:terminal,failed:failed,
-                dedicatedChars:out.dedicatedChars,bodyDeltaChars:out.bodyDeltaChars,elapsedMs:out.elapsedMs
+                dedicatedChars:out.dedicatedChars,bodyDeltaChars:out.bodyDeltaChars,
+                bodyDeltaStableScans:out.bodyDeltaStableScans,deltaUsable:out.deltaUsable,elapsedMs:out.elapsedMs
               });
               return out;
             }

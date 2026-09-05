@@ -88,6 +88,8 @@ class AiStudioWebSessionExecutor(
     private var attachmentSeq = 0
     private var activeAttachment: PendingAttachment? = null
     private var sttModeModel: String? = null
+    private var attachmentPartialCallback: ((String) -> Unit)? = null
+    private var attachmentPartialLastText: String = ""
     private val nativeTapController = AiStudioNativeTapController(webView, null)
 
     private data class PendingAttachment(
@@ -388,14 +390,18 @@ class AiStudioWebSessionExecutor(
 
     fun generateAttachmentNativeOnly(
         prompt: String,
+        onPartial: ((String) -> Unit)? = null,
         callback: (Result) -> Unit,
     ): Boolean {
         if (destroyed || !pageFinished || state != State.READY || pending != null || prompt.isBlank()) {
             callback(Result(ok = false, error = if (prompt.isBlank()) "EMPTY_PROMPT" else "NOT_READY_OR_BUSY"))
             return false
         }
+        attachmentPartialCallback = onPartial
+        attachmentPartialLastText = ""
         prepareAttachmentPrompt(prompt) { ok, detail, _ ->
             if (!ok) {
+                clearAttachmentPartial()
                 callback(Result(ok = false, error = "PROMPT_PREPARE_FAILED", phase = detail.take(500)))
                 return@prepareAttachmentPrompt
             }
@@ -629,6 +635,7 @@ class AiStudioWebSessionExecutor(
         val p = pending ?: return false
         pending = null
         directRecoverySeq = -1
+        clearAttachmentPartial()
         runCatching { webView.evaluateJavascript("window.__AIS_ADAPTIVE_RUNTIME__ && window.__AIS_ADAPTIVE_RUNTIME__.cancel()", null) }
         p.callback(Result(ok = false, error = "CANCELLED"))
         setState(if (pageFinished) State.READY else State.LOADING, "cancelled request=${p.seq}")
@@ -638,6 +645,7 @@ class AiStudioWebSessionExecutor(
     fun destroy() {
         if (destroyed) return
         cancelCurrent()
+        clearAttachmentPartial()
         destroyed = true
         state = State.DESTROYED
         activeAttachment?.let { it.callback(false, "DESTROYED") }
@@ -653,6 +661,13 @@ class AiStudioWebSessionExecutor(
         listOf(450L, 900L, 1_500L, 2_500L, 4_000L, 6_500L, 9_000L, 13_000L, 20_000L, 30_000L).forEach { delay ->
             main.postDelayed({ if (pending?.seq == requestSeq) readNormalized(requestSeq, "poll-$delay") }, delay)
         }
+        main.postDelayed(object : Runnable {
+            override fun run() {
+                if (pending?.seq != requestSeq || attachmentPartialCallback == null) return
+                readNormalized(requestSeq, "video-partial-live")
+                main.postDelayed(this, ATTACHMENT_PARTIAL_POLL_MS)
+            }
+        }, ATTACHMENT_PARTIAL_POLL_MS)
     }
 
     private fun scheduleProgressWatchdog(requestSeq: Int) {
@@ -704,6 +719,26 @@ class AiStudioWebSessionExecutor(
         )
     }
 
+    private fun publishAttachmentPartial(requestSeq: Int, text: String, source: String) {
+        val p = pending ?: return
+        val callback = attachmentPartialCallback ?: return
+        if (p.seq != requestSeq) return
+        val normalized = text.trim()
+        if (normalized.isBlank() || normalized.length <= attachmentPartialLastText.length) return
+        val previous = attachmentPartialLastText.length
+        attachmentPartialLastText = normalized
+        events?.onLog(
+            "R35_VIDEO_PARTIAL_RAW",
+            "seq=$requestSeq source=$source chars=${normalized.length} delta=${normalized.length - previous}",
+        )
+        callback(normalized)
+    }
+
+    private fun clearAttachmentPartial() {
+        attachmentPartialCallback = null
+        attachmentPartialLastText = ""
+    }
+
     private fun timeoutRequest(requestSeq: Int, reason: String) {
         if (pending?.seq != requestSeq) return
         events?.onLog("R12_TIMEOUT_FIRED", "seq=$requestSeq reason=$reason")
@@ -720,6 +755,7 @@ class AiStudioWebSessionExecutor(
             events?.onLog("R10_RESPONSE_$source", decoded.take(12000))
             parseNormalized(decoded)?.let {
                 recordProgress(requestSeq, it.modelText.length, "normalized-$source")
+                publishAttachmentPartial(requestSeq, it.modelText, "normalized-$source")
                 maybeFinish(requestSeq, it)
             }
         }
@@ -749,6 +785,7 @@ class AiStudioWebSessionExecutor(
         if (p.seq != requestSeq) return
         pending = null
         directRecoverySeq = -1
+        clearAttachmentPartial()
         p.callback(result)
         if (!destroyed) setState(if (pageFinished) State.READY else State.LOADING, if (result.ok) "completed" else "failed:${result.error}")
     }
@@ -927,9 +964,11 @@ class AiStudioWebSessionExecutor(
 
             if (payload != null && (kind == "GENERATE_PROGRESS" || kind == "NORMALIZED_GENERATE_RESULT" || kind == "GENERATE_RESULT")) {
                 val chars = payload.optInt("responseChars", payload.optString("modelText").length)
+                val partialText = payload.optString("modelText")
                 main.post {
                     val p = pending ?: return@post
                     recordProgress(p.seq, chars, kind)
+                    publishAttachmentPartial(p.seq, partialText, "js-$kind")
                 }
             }
 
@@ -1110,7 +1149,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-05-web-session-r12.6-direct-stt-page"
+        const val VERSION = "2026-09-05-web-session-r12.7-video-partial-stream"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
@@ -1123,6 +1162,7 @@ class AiStudioWebSessionExecutor(
         private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L
         private const val PROGRESS_HARD_TIMEOUT_MS = 900_000L
         private const val WATCHDOG_TICK_MS = 2_000L
+        private const val ATTACHMENT_PARTIAL_POLL_MS = 850L
         private const val DIRECT_ENGINE_WATCHDOG_MS = 7_500L
         private const val LEGACY_FALLBACK_CHECK_MS = 900L
         private const val NATIVE_SUBMIT_ACK_MS = 1_250L

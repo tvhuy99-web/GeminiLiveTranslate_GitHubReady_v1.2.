@@ -92,10 +92,22 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         )
         logger.log(2, TAG, "R22_VIDEO_AUTO_SUBMIT_AFTER_READY promptChars=${prompt.length} model=$model mode=$mode autoSubmit=true readinessGate=attachment-prepared")
         onProgress("Video đã tải và xử lý xong; ứng dụng đang tự nhấn Run...", 25)
-        val webResult = generateAndAwaitAuto(exec, prompt)
+        var lastPartialText = ""
+        val webResult = generateAndAwaitAuto(exec, prompt) { rawPartial ->
+            val displayPartial = streamingTextForUi(rawPartial, mode)
+            if (displayPartial.isNotBlank() && displayPartial.length > lastPartialText.length) {
+                val previous = lastPartialText.length
+                lastPartialText = displayPartial
+                logger.log(
+                    2,
+                    TAG,
+                    "R35_VIDEO_PARTIAL_UI mode=$mode chars=${displayPartial.length} delta=${displayPartial.length - previous}",
+                )
+                onPartial(displayPartial)
+            }
+        }
         val output = webResult.modelText.trim()
         if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
-        onPartial(output)
         if (includeOutputInLogs) logger.log(3, TAG, "Output preview=${output.replace('\n', ' ').take(2000)}")
 
         val timelineItems: List<GeminiVideoDescriptionClient.TimelineItem>
@@ -106,6 +118,14 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         } else {
             timelineItems = emptyList()
             summaryText = parseSummary(output)
+        }
+        val finalDisplayText = if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) {
+            timelineItems.joinToString("\n") { it.text }.trim()
+        } else {
+            summaryText.trim()
+        }
+        if (finalDisplayText.isNotBlank() && finalDisplayText != lastPartialText) {
+            onPartial(finalDisplayText)
         }
         onProgress("Đang tạo kết quả...", 98)
         val elapsed = SystemClock.elapsedRealtime() - startedAt
@@ -160,7 +180,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
                     }
                     override fun onLog(name: String, detail: String) {
                         val level = when {
-                            name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
+                            name.startsWith("R35_") || name.startsWith("JS_R35_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
                             name.contains("ERROR") || name.contains("TIMEOUT") -> 1
                             else -> 3
                         }
@@ -223,11 +243,12 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
     private fun generateAndAwaitAuto(
         exec: AiStudioWebSessionExecutor,
         prompt: String,
+        onPartial: (String) -> Unit,
     ): AiStudioWebSessionExecutor.Result {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt) { result ->
+            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt, onPartial = onPartial) { result ->
                 resultRef.set(result)
                 latch.countDown()
             }
@@ -289,5 +310,85 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
 
     companion object {
         private const val TAG = "AiStudioVideo"
+
+        internal fun streamingTextForUi(
+            raw: String,
+            mode: GeminiVideoDescriptionClient.Mode,
+        ): String {
+            val values = extractStreamingJsonStringValues(raw, "text")
+            if (values.isEmpty()) return ""
+            return if (mode == GeminiVideoDescriptionClient.Mode.SUMMARY) {
+                values.first().trim()
+            } else {
+                values.joinToString("\n") { it.trim() }.trim()
+            }
+        }
+
+        private fun extractStreamingJsonStringValues(raw: String, field: String): List<String> {
+            if (raw.isBlank()) return emptyList()
+            val needle = "\"$field\""
+            val values = ArrayList<String>()
+            var from = 0
+            while (from < raw.length) {
+                val key = raw.indexOf(needle, from)
+                if (key < 0) break
+                if (key > 0 && raw[key - 1] == '\\') {
+                    from = key + needle.length
+                    continue
+                }
+                var i = key + needle.length
+                while (i < raw.length && raw[i].isWhitespace()) i++
+                if (i >= raw.length || raw[i] != ':') {
+                    from = key + needle.length
+                    continue
+                }
+                i++
+                while (i < raw.length && raw[i].isWhitespace()) i++
+                if (i >= raw.length || raw[i] != '"') {
+                    from = key + needle.length
+                    continue
+                }
+                i++
+                val out = StringBuilder()
+                var closed = false
+                while (i < raw.length) {
+                    val ch = raw[i++]
+                    if (ch == '"') {
+                        closed = true
+                        break
+                    }
+                    if (ch != '\\') {
+                        out.append(ch)
+                        continue
+                    }
+                    if (i >= raw.length) break
+                    when (val escaped = raw[i++]) {
+                        '"' -> out.append('"')
+                        '\\' -> out.append('\\')
+                        '/' -> out.append('/')
+                        'b' -> out.append('\b')
+                        'f' -> out.append('\u000C')
+                        'n' -> out.append('\n')
+                        'r' -> out.append('\r')
+                        't' -> out.append('\t')
+                        'u' -> {
+                            if (i + 4 <= raw.length) {
+                                val hex = raw.substring(i, i + 4)
+                                val code = hex.toIntOrNull(16)
+                                if (code != null) {
+                                    out.append(code.toChar())
+                                    i += 4
+                                }
+                            }
+                        }
+                        else -> out.append(escaped)
+                    }
+                }
+                val value = out.toString()
+                if (value.isNotBlank()) values += value
+                from = if (closed) i else raw.length
+            }
+            return values
+        }
     }
 }

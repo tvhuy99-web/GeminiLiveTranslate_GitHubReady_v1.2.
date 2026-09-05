@@ -1,0 +1,175 @@
+name: R18.23 STT Visible DOM Fallback
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r1823-stt-visible-dom-fallback.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+
+      - name: Apply R18.23 result extraction fix
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt')
+          s = p.read_text()
+          old = s
+          s = s.replace(
+              'const val VERSION = "2026-09-05-stt-page-r5-accessibility-touch-guard"',
+              'const val VERSION = "2026-09-05-stt-page-r6-visible-dom-stable-fallback"',
+              1,
+          )
+          s = s.replace(
+              "            runStartedAt:0,\n            lastRunGestureAt:0\n",
+              "            runStartedAt:0,\n            lastRunGestureAt:0,\n            lastBodyDelta:'',\n            bodyDeltaStableScans:0\n",
+              1,
+          )
+          marker = '''          function errorish(s){
+            s=clean(s);
+            if(!s||s.length>240)return false;
+            return /(something went wrong|an error occurred|error occurred|request failed|failed to|try again|not have permission|permission denied|forbidden|no api key selected|api key required|quota|unable to|couldn['’]t|cannot|can['’]t process)/i.test(s);
+          }
+'''
+          replacement = marker + '''
+          function statusish(s){
+            s=clean(s);
+            if(!s)return false;
+            return /^(processing|transcribing|transcription in progress|transcription complete|transcription completed|completed|copy|copy transcript|download|download transcript|play|pause|loading|working|đang xử lý|đang phiên âm|đã hoàn tất)$/i.test(s);
+          }
+'''
+          if marker not in s:
+              raise SystemExit('R18.23 statusish insertion marker not found')
+          s = s.replace(marker, replacement, 1)
+          s = s.replace(
+              "if(t.length>=2&&!base.has(t)&&!errorish(t))candidates.push({t:t,s:t.length});",
+              "if(t.length>=2&&!base.has(t)&&!errorish(t)&&!statusish(t))candidates.push({t:t,s:t.length});",
+              1,
+          )
+          s = s.replace(
+              "              captureBaseline();\n              state.runStartedAt=Date.now();\n",
+              "              captureBaseline();\n              state.runStartedAt=Date.now();\n              state.lastBodyDelta='';\n              state.bodyDeltaStableScans=0;\n",
+              1,
+          )
+          old_block = '''              const terminal=!!(net&&netOk&&!partial);
+              const failed=!!(net&&status>=400);
+              let text='',source='';
+              if(dedicated){
+                text=dedicated;
+                source='stt-dom';
+              }else if(terminal&&delta){
+                text=delta;
+                source='body-delta-after-network-success';
+              }
+'''
+          new_block = '''              const terminal=!!(net&&netOk&&!partial);
+              const failed=!!(net&&status>=400);
+              if(delta&&delta===state.lastBodyDelta){
+                state.bodyDeltaStableScans+=1;
+              }else{
+                state.lastBodyDelta=delta;
+                state.bodyDeltaStableScans=delta?1:0;
+              }
+              const deltaStable=state.bodyDeltaStableScans>=2;
+              const progressiveNetworkSuccess=!!(net&&netOk&&status>=200&&status<300&&responseChars>0);
+              const deltaUsable=!!(delta&&deltaStable&&progressiveNetworkSuccess&&!failed&&!errorish(delta)&&!statusish(delta));
+              let text='',source='';
+              if(dedicated){
+                text=dedicated;
+                source='stt-dom';
+              }else if(deltaUsable){
+                text=delta;
+                source=terminal?'body-delta-after-network-success':'body-delta-stable-during-partial-200';
+              }
+'''
+          if old_block not in s:
+              raise SystemExit('R18.23 result block marker not found')
+          s = s.replace(old_block, new_block, 1)
+          s = s.replace(
+              "                dedicatedChars:dedicated.length,bodyDeltaChars:delta.length,\n                elapsedMs:state.runStartedAt?Date.now()-state.runStartedAt:-1\n",
+              "                dedicatedChars:dedicated.length,bodyDeltaChars:delta.length,\n                bodyDeltaStableScans:state.bodyDeltaStableScans,deltaUsable:deltaUsable,\n                elapsedMs:state.runStartedAt?Date.now()-state.runStartedAt:-1\n",
+              1,
+          )
+          s = s.replace(
+              "                dedicatedChars:out.dedicatedChars,bodyDeltaChars:out.bodyDeltaChars,elapsedMs:out.elapsedMs\n",
+              "                dedicatedChars:out.dedicatedChars,bodyDeltaChars:out.bodyDeltaChars,\n                bodyDeltaStableScans:out.bodyDeltaStableScans,deltaUsable:out.deltaUsable,elapsedMs:out.elapsedMs\n",
+              1,
+          )
+          if s == old:
+              raise SystemExit('R18.23 made no changes')
+          p.write_text(s)
+
+      - name: Verify R18.23 source invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+          grep -F 'stt-page-r6-visible-dom-stable-fallback' "$f"
+          grep -F "bodyDeltaStableScans>=2" "$f"
+          grep -F "body-delta-stable-during-partial-200" "$f"
+          grep -F "progressiveNetworkSuccess" "$f"
+          grep -F "activationPolicy='native-touch-only'" "$f"
+          ! grep -F "else if(terminal&&delta)" "$f"
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt').read_text()
+          start=s.index('val DOCUMENT_START: String = """')+len('val DOCUMENT_START: String = """')
+          end=s.index('""".trimIndent()', start)
+          js=s[start:end].replace("$VERSION", "2026-09-05-stt-page-r6-visible-dom-stable-fallback")
+          Path('/tmp/stt.js').write_text(js)
+          PY
+          node --check /tmp/stt.js
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Full Android verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+          python3 tools/verify_apk.py app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Commit verified R18.23 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'tvhuy99-web'
+          git config user.email 'tvhuy99@gmail.com'
+          git add app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+          git commit -m 'R18.23: capture stable visible STT result during partial 200'
+          git push origin HEAD:experiment/aistudio-r183-network-vi
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk
+          sha256sum artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk | tee artifact/apk.sha256
+          git rev-parse HEAD > artifact/source_commit.txt
+          if command -v apksigner >/dev/null 2>&1; then
+            apksigner verify --verbose artifact/GeminiLiveTranslate-R18.23-stt-visible-dom-fallback.apk > artifact/apksigner.txt 2>&1 || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.23-stt-visible-dom-fallback
+          path: artifact/

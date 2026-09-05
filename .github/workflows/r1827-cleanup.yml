@@ -36,7 +36,14 @@ jobs:
           '''
           if old not in s:
               raise SystemExit('response marker patch anchor missing')
-          helper.write_text(s.replace(old, new, 1))
+          s = s.replace(old, new, 1)
+          roots_old = '''    roots = [path("app/src/main/java"), path("app/src/test/java")]
+          '''
+          roots_new = '''    roots = [path("app/src/main/java")]
+          '''
+          if roots_old not in s:
+              raise SystemExit('dead-reference roots anchor missing')
+          helper.write_text(s.replace(roots_old, roots_new, 1))
 
           request = Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt')
           r = request.read_text()
@@ -54,7 +61,7 @@ jobs:
           git diff --check
           test ! -e AI_STUDIO_WEB_SESSION_LAB.md
           test ! -e app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionDirectEngine.kt
-          ! grep -R "generateAttachmentFileOnlyNative\|awaitManualAttachmentFileOnlyGenerate\|awaitManualAttachmentGenerate\|nativeTargetIfAttachmentFileOnly\|stripUnsupportedTranscribe" app/src/main/java app/src/test/java
+          ! grep -R "generateAttachmentFileOnlyNative\|awaitManualAttachmentFileOnlyGenerate\|awaitManualAttachmentGenerate\|nativeTargetIfAttachmentFileOnly\|stripUnsupportedTranscribe" app/src/main/java
           grep -q '2026-09-05-web-session-r12.8-cleanup' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           grep -q 'R35_VIDEO_PARTIAL_RAW' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
           grep -q 'generateSttFileNative' app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt

@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.core.AppPreferences
 import org.json.JSONObject
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
@@ -160,7 +161,7 @@ internal class AiStudioNativeTapController(
 }
 
 internal object AiStudioDebugWebViewHost {
-    const val VERSION = "2026-09-04-r18.4-visible-live-webview-debug"
+    const val VERSION = "2026-09-05-r18.14-toggle-hidden-webview-debug"
     private val main = Handler(Looper.getMainLooper())
     private val panels = WeakHashMap<WebView, WeakReference<ViewGroup>>()
 
@@ -209,7 +210,47 @@ internal object AiStudioDebugWebViewHost {
         val height = (screenHeight * 0.48f).roundToInt().coerceAtLeast(dp(activity, 300))
         content.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height, Gravity.BOTTOM))
         panels[webView] = WeakReference(panel)
-        logger?.log(2, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACHED visible=true height=$height screenHeight=$screenHeight accessibilityPreserved=true")
+        val visible = AppPreferences(activity).loadAiStudioWebViewVisible()
+        applyPresentation(webView, panel, visible, logger, "attach")
+        logger?.log(2, "AiStudioDebugWeb", "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible}")
+    }
+
+    fun setVisibleForActive(visible: Boolean, logger: SessionLogger?) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { setVisibleForActive(visible, logger) }
+            return
+        }
+        var changed = 0
+        panels.entries.toList().forEach { (webView, ref) ->
+            val panel = ref.get() ?: return@forEach
+            applyPresentation(webView, panel, visible, logger, "settings-toggle")
+            changed += 1
+        }
+        logger?.log(2, "AiStudioDebugWeb", "R24_WEBVIEW_VISIBILITY_TOGGLE visible=$visible activePanels=$changed")
+    }
+
+    private fun applyPresentation(
+        webView: WebView,
+        panel: ViewGroup,
+        visible: Boolean,
+        logger: SessionLogger?,
+        reason: String,
+    ) {
+        val screenHeight = panel.resources.displayMetrics.heightPixels
+        val panelHeight = (panel.layoutParams?.height ?: panel.height).coerceAtLeast(1)
+        // Keep the WebView VISIBLE and fully laid out so JS/native dispatch still works. Hidden mode
+        // moves the entire debug panel outside the screen instead of using GONE/INVISIBLE.
+        panel.translationY = if (visible) 0f else (screenHeight + panelHeight).toFloat()
+        val accessibility = if (visible) {
+            android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        } else {
+            android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
+        panel.importantForAccessibility = accessibility
+        webView.importantForAccessibility = accessibility
+        panel.isFocusable = visible
+        panel.isFocusableInTouchMode = visible
+        logger?.log(2, "AiStudioDebugWeb", "R24_WEBVIEW_PRESENTATION visible=$visible hiddenOffscreen=${!visible} reason=$reason webShown=${webView.isShown} width=${webView.width} height=${webView.height}")
     }
 
     fun retain(webView: WebView, logger: SessionLogger?, reason: String) {
@@ -219,7 +260,9 @@ internal object AiStudioDebugWebViewHost {
         }
         val panel = panels[webView]?.get()
         if (panel != null && panel.parent != null && webView.parent != null) {
-            logger?.log(2, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_RETAINED reason=$reason visible=true")
+            val visible = AppPreferences(panel.context).loadAiStudioWebViewVisible()
+            applyPresentation(webView, panel, visible, logger, "retain:$reason")
+            logger?.log(2, "AiStudioDebugWeb", "AI_STUDIO_WEBVIEW_RETAINED reason=$reason visible=$visible")
             return
         }
         attach(webView, logger)

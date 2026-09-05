@@ -12,8 +12,12 @@ class AiStudioFileTranscribeNoPromptSourceTest {
     @Test
     fun authenticatedFileTranscribeUsesFileOnlyModelInvocation() {
         val src = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt")
-        assertTrue(src.contains("awaitManualAttachmentFileOnlyGenerate"))
+        assertTrue(src.contains("generateAttachmentFileOnlyNative"))
+        assertTrue(src.contains("manualRun=false autoSubmit=true"))
+        assertTrue(src.contains("R24_FILE_TRANSCRIBE_ATTACH_RETRY"))
         assertTrue(src.contains("prompt=false"))
+        assertFalse(src.contains("awaitManualAttachmentFileOnlyGenerate"))
+        assertFalse(src.contains("manualRun=true"))
         assertTrue(src.contains("parsePlainTranscript"))
         assertFalse(src.contains("buildPrompt("))
         assertFalse(src.contains("Hãy chép lời CHÍNH XÁC"))

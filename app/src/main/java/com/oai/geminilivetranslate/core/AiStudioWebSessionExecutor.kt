@@ -350,6 +350,7 @@ class AiStudioWebSessionExecutor(
         }
         val request = beginPreparedAttachmentRequest("", callback, "attachment-file-only-native")
         events?.onLog("R21_FILE_TRANSCRIBE_ARMED", "seq=${request.seq} prompt=false modelInput=file-only")
+        events?.onLog("R24_FILE_TRANSCRIBE_AUTO_SUBMIT_POLICY", "seq=${request.seq} autoSubmit=true prompt=false fileOnly=true nativeHitTest=true programmaticFallback=false")
         tryNativeAttachmentSubmit(
             request.seq,
             "file-transcribe-primary",

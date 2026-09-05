@@ -26,6 +26,18 @@ jobs:
 
       - name: Apply cleanup
         run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/r1827_cleanup.py')
+          s = p.read_text()
+          old = '''    s = s.replace("            out.rawMarkerFound=rawMarkerFound;\\n            out.markerFound=markerFound;\\n", "")
+          '''
+          new = old + '''    s = s.replace("            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.markerFound,normalized.modelTextChars].join('|');\\n", "            const fp=[normalized.at,normalized.responseChars,normalized.phase,normalized.modelTextChars].join('|');\\n")
+          '''
+          if old not in s:
+              raise SystemExit('response marker patch anchor missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
           python3 tools/r1827_cleanup.py
           git diff --check
           test ! -e AI_STUDIO_WEB_SESSION_LAB.md

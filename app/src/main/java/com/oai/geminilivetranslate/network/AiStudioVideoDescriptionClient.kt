@@ -160,7 +160,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
                     }
                     override fun onLog(name: String, detail: String) {
                         val level = when {
-                            name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
+                            name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
                             name.contains("ERROR") || name.contains("TIMEOUT") -> 1
                             else -> 3
                         }

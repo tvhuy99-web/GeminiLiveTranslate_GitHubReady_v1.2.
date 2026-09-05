@@ -1,0 +1,113 @@
+name: R18.20 STT Action Button Fix
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+      - .github/workflows/r1820-stt-action-button.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 1
+
+      - name: Verify STT Start Transcription detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt')
+          s=p.read_text()
+          marker='val DOCUMENT_START: String = """'
+          a=s.index(marker)+len(marker)
+          b=s.index('""".trimIndent()',a)
+          js=s[a:b].replace('$VERSION','2026-09-05-stt-page-r3-action-button')
+          Path('/tmp/stt-r3.js').write_text(js)
+          assert 'start transcription' in js.lower()
+          assert 'runCandidates' in js
+          PY
+          node --check /tmp/stt-r3.js
+          node - <<'JS'
+          const root={tagName:'MS-STT-WORKSPACE',className:'stt-workspace',id:'',parentElement:null,getAttribute:()=>null};
+          const start={
+            tagName:'BUTTON',textContent:'Start Transcription',className:'primary-action',id:'start-transcription',parentElement:root,isConnected:true,disabled:false,
+            getAttribute:(k)=>k==='aria-label'?'Start Transcription':(k==='aria-disabled'?'false':null),
+            getBoundingClientRect:()=>({left:100,top:100,width:200,height:48})
+          };
+          global.window={AIStudioWebSessionLab:{onJsEvent:()=>{}}};
+          global.location={href:'https://aistudio.google.com/u/0/prompts/new_chat?model=gemini-3.5-transcribe',pathname:'/u/0/prompts/new_chat'};
+          global.document={
+            querySelector:(s)=>s==='ms-stt-zero-state'?{}:null,
+            querySelectorAll:()=>[start],
+            body:{innerText:'Turn speech to transcriptions\nsample.m4a\nStart Transcription'},
+            elementFromPoint:()=>start
+          };
+          global.URL=URL; global.getComputedStyle=()=>({display:'block',visibility:'visible'}); global.innerWidth=1000; global.innerHeight=800;
+          require('/tmp/stt-r3.js');
+          window.__AIS_STT_PAGE__.markFileChooserServed('sample.m4a','audio/mp4',1234);
+          const r=window.__AIS_STT_PAGE__.fileState('sample.m4a');
+          if(!r || !r.ready || !r.runReady || !/Start Transcription/i.test(r.runLabel)) throw new Error(JSON.stringify(r));
+          console.log('STT Start Transcription detection PASS', JSON.stringify(r));
+          JS
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
+
+      - name: Full Android verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          python3 tools/verify_apk.py "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee /tmp/badging.txt
+          sha256sum "$APK" | tee /tmp/apk.sha256
+          git rev-parse HEAD | tee /tmp/source_commit.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" /tmp/badging.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/apksigner.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/apksigner.txt
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk out/GeminiLiveTranslate-R18.20-stt-action-button.apk
+          cp /tmp/apksigner.txt out/apksigner.txt
+          cp /tmp/badging.txt out/badging.txt
+          cp /tmp/apk.sha256 out/apk.sha256
+          cp /tmp/source_commit.txt out/source_commit.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.20-stt-action-button
+          path: out/
+          if-no-files-found: error
+          retention-days: 30

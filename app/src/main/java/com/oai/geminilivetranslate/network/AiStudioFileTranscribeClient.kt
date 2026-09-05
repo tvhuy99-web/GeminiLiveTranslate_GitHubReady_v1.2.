@@ -56,7 +56,14 @@ class AiStudioFileTranscribeClient(
         cancelled = true
         val current = executor
         executor = null
-        main.post { current?.destroy() }
+        main.post {
+            current?.destroy()
+            // File Transcribe is intentionally inspectable after every outcome. destroy() retains the
+            // real session WebView; force it back on-screen even if the general debug visibility
+            // preference is off so success/failure never erases the user's inspection surface.
+            AiStudioDebugWebViewHost.setVisibleForActive(true, logger)
+            logger.log(2, TAG, "R28_STT_WEBVIEW_FORCE_VISIBLE stage=retained-after-close")
+        }
     }
     fun close() = cancel()
 
@@ -79,7 +86,13 @@ class AiStudioFileTranscribeClient(
                     logger.log(level, TAG, "$name ${detail.take(5000)}")
                 }
             })
-            holder.set(created); executor = created; created.startFileTranscribe(model)
+            holder.set(created)
+            executor = created
+            created.startFileTranscribe(model)
+            // Unlike the generic hidden debug mode, dedicated File Transcribe always shows the exact
+            // AI Studio page being automated, from initial load through its retained final state.
+            AiStudioDebugWebViewHost.setVisibleForActive(true, logger)
+            logger.log(2, TAG, "R28_STT_WEBVIEW_FORCE_VISIBLE stage=start")
         }
         if (!latch.await(45, TimeUnit.SECONDS)) error("AI Studio file transcribe chưa sẵn sàng")
         failure.get()?.let { error(it) }

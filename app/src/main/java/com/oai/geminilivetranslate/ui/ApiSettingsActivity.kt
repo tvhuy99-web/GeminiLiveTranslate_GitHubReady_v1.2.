@@ -62,6 +62,7 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var temperatureInput: EditText
     private lateinit var timelinePrompt: EditText
     private lateinit var summaryPrompt: EditText
+    private var modelCatalogLoader: AiStudioModelCatalogLoader? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
@@ -101,6 +102,8 @@ class ApiSettingsActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        modelCatalogLoader?.cancel()
+        modelCatalogLoader = null
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
         super.onDestroy()
@@ -421,38 +424,90 @@ class ApiSettingsActivity : AppCompatActivity() {
     }
 
     private fun fetchModels(provider: String) {
-        val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            geminiKeysFromUi().firstOrNull().orEmpty()
-        } else {
-            proxyKey.text.toString().trim()
+        if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            fetchGeminiModelsWebFirst()
+            return
         }
-        val proxyUrlValue = proxyUrl.text.toString().trim()
+        fetchModelsFromApi(
+            provider = provider,
+            keyValue = proxyKey.text.toString().trim(),
+            proxyUrlValue = proxyUrl.text.toString().trim(),
+            sourceLabel = "OpenAI-compatible API",
+        )
+    }
+
+    private fun fetchGeminiModelsWebFirst() {
+        val fallbackKey = geminiKeysFromUi().firstOrNull().orEmpty()
+        modelCatalogLoader?.cancel()
+        val loader = AiStudioModelCatalogLoader(this, logger)
+        modelCatalogLoader = loader
+        toast("Đang tải danh sách model từ AI Studio...")
+        loader.load { models, error ->
+            if (modelCatalogLoader === loader) modelCatalogLoader = null
+            if (isFinishing || isDestroyed) return@load
+            if (models.isNotEmpty()) {
+                logger.log(
+                    2,
+                    "ApiSettings",
+                    "R34_VIDEO_MODEL_LIST source=ai-studio-web count=${models.size}",
+                )
+                showModelDialog(models, geminiModel, "AI Studio")
+            } else {
+                logger.log(
+                    1,
+                    "ApiSettings",
+                    "R34_VIDEO_MODEL_LIST_WEB_FAILED error=${error.take(240)} fallbackApiKey=${fallbackKey.isNotBlank()}",
+                )
+                if (fallbackKey.isBlank()) {
+                    toast("AI Studio chưa trả được danh sách model và chưa có Gemini API Key để dùng phương án dự phòng")
+                } else {
+                    toast("AI Studio chưa trả danh sách. Đang thử Gemini API...")
+                    fetchModelsFromApi(
+                        provider = AiApiSettingsStore.PROVIDER_GEMINI,
+                        keyValue = fallbackKey,
+                        proxyUrlValue = "",
+                        sourceLabel = "Gemini API dự phòng",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun fetchModelsFromApi(
+        provider: String,
+        keyValue: String,
+        proxyUrlValue: String,
+        sourceLabel: String,
+    ) {
         lifecycleScope.launch {
-            toast("Đang tải danh sách model...")
             runCatching {
                 withContext(Dispatchers.IO) { fetchModelList(provider, keyValue, proxyUrlValue) }
             }.onSuccess { models ->
                 if (models.isEmpty()) {
-                    toast("API không trả danh sách model")
+                    toast("$sourceLabel không trả danh sách model phù hợp")
                 } else {
-                    val target = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-                        geminiModel
-                    } else {
-                        proxyModel
-                    }
-                    AlertDialog.Builder(this@ApiSettingsActivity)
-                        .setTitle("CHỌN MODEL")
-                        .setItems(models.toTypedArray()) { _, which ->
-                            target.setText(models[which])
-                        }
-                        .setNegativeButton("HỦY", null)
-                        .show()
+                    val target = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) geminiModel else proxyModel
+                    logger.log(
+                        2,
+                        "ApiSettings",
+                        "R34_VIDEO_MODEL_LIST source=${sourceLabel.replace(' ', '-').lowercase()} count=${models.size}",
+                    )
+                    showModelDialog(models, target, sourceLabel)
                 }
             }.onFailure {
-                logger.log(0, "ApiSettings", "Tải danh sách model thất bại provider=$provider", it)
-                toast("Không tải được danh sách model: ${it.message}")
+                logger.log(0, "ApiSettings", "Tải danh sách model thất bại source=$sourceLabel provider=$provider", it)
+                toast("Không tải được danh sách model từ $sourceLabel: ${it.message}")
             }
         }
+    }
+
+    private fun showModelDialog(models: List<String>, target: EditText, sourceLabel: String) {
+        toast("Đã tải ${models.size} model từ $sourceLabel")
+        AlertDialog.Builder(this@ApiSettingsActivity)
+            .setTitle("CHỌN MODEL - $sourceLabel")
+            .setItems(models.toTypedArray()) { _, which -> target.setText(models[which]) }
+            .setNegativeButton("HỦY", null)
+            .show()
     }
 
     private fun testConnection() {
@@ -635,9 +690,21 @@ class ApiSettingsActivity : AppCompatActivity() {
             val array = root.optJSONArray("models")
             if (array != null) {
                 for (i in 0 until array.length()) {
-                    array.optJSONObject(i)?.optString("name")
-                        ?.removePrefix("models/")
-                        ?.takeIf(String::isNotBlank)
+                    val item = array.optJSONObject(i) ?: continue
+                    val methods = item.optJSONArray("supportedGenerationMethods")
+                    var supportsGenerateContent = methods == null
+                    if (methods != null) {
+                        for (j in 0 until methods.length()) {
+                            if (methods.optString(j).equals("generateContent", ignoreCase = true)) {
+                                supportsGenerateContent = true
+                                break
+                            }
+                        }
+                    }
+                    if (!supportsGenerateContent) continue
+                    item.optString("name")
+                        .removePrefix("models/")
+                        .takeIf(String::isNotBlank)
                         ?.let(output::add)
                 }
             }
@@ -651,7 +718,12 @@ class ApiSettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        return output.distinct().sorted()
+        val unique = output.distinct().sorted()
+        return if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            AiStudioModelCatalogLoader.videoDescriptionCandidates(unique)
+        } else {
+            unique
+        }
     }
 
     private fun currentConnectionMode(): String =

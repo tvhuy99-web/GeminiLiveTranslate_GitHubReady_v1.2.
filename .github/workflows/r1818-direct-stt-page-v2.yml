@@ -1,4 +1,4 @@
-name: R18.18 Direct STT Page V2
+name: R18.18 Direct STT Page V3
 
 on:
   push:
@@ -44,8 +44,9 @@ jobs:
           grep -Fq 'data-test-upload-file-input' "$B"
           grep -Fq 'R28_STT_RESULT_STATE' "$B"
           grep -Fq 'org.junit.Test' "$T"
+          grep -Fq 'sequenceOf(' "$T"
           ! grep -Fq 'kotlin.test' "$T"
-          echo 'R18.18 v2 source invariants PASS'
+          echo 'R18.18 v3 source invariants PASS'
 
       - name: Check embedded STT JavaScript syntax
         run: |
@@ -99,7 +100,8 @@ jobs:
             app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt \
             app/src/test/java/com/oai/geminilivetranslate/network/AiStudioDirectSttPageSourceTest.kt \
             app/src/test/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeNoPromptSourceTest.kt \
-            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR12R1SourceTest.kt \
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetSourceTest.kt
           if ! git diff --cached --quiet; then
             git commit -m 'R18.18: use dedicated AI Studio STT model page'
             git push origin HEAD:experiment/aistudio-r183-network-vi

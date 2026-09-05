@@ -90,9 +90,9 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
             if (mode == GeminiVideoDescriptionClient.Mode.TIMELINE) "Đang mô tả toàn bộ video..." else "Đang tổng hợp toàn bộ video...",
             25,
         )
-        logger.log(2, TAG, "Manual generate armed promptChars=${prompt.length} model=$model mode=$mode autoSubmit=false")
-        onProgress("Video đã gắn. Hãy chờ trang AI Studio xử lý xong rồi tự nhấn Send/Run trên trang web.", 25)
-        val webResult = generateAndAwaitManual(exec, prompt)
+        logger.log(2, TAG, "R22_VIDEO_AUTO_SUBMIT_AFTER_READY promptChars=${prompt.length} model=$model mode=$mode autoSubmit=true readinessGate=attachment-prepared")
+        onProgress("Video đã tải và xử lý xong; ứng dụng đang tự nhấn Run...", 25)
+        val webResult = generateAndAwaitAuto(exec, prompt)
         val output = webResult.modelText.trim()
         if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
         onPartial(output)
@@ -211,35 +211,35 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         val latch = CountDownLatch(1)
         val okRef = AtomicReference(false)
         val detailRef = AtomicReference("")
-        exec.attachFile(uri, displayName, mimeType, size, requireUploadReady = false) { ok, detail ->
+        exec.attachFile(uri, displayName, mimeType, size, requireUploadReady = true) { ok, detail ->
             okRef.set(ok); detailRef.set(detail); latch.countDown()
         }
-        if (!latch.await(95, TimeUnit.SECONDS)) error("Hết thời gian gắn video vào AI Studio")
+        if (!latch.await(5, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio tải/xử lý video")
         throwIfCancelled()
-        if (!okRef.get()) error("Không gắn được video vào AI Studio: ${detailRef.get().take(500)}")
-        logger.log(2, TAG, "Attachment visible; manual readiness monitoring will continue name=$displayName size=$size")
+        if (!okRef.get()) error("AI Studio chưa xác nhận video sẵn sàng: ${detailRef.get().take(500)}")
+        logger.log(2, TAG, "R22_VIDEO_ATTACHMENT_READY name=$displayName size=$size readiness=server-payload-settled+ready-after-busy")
     }
 
-    private fun generateAndAwaitManual(
+    private fun generateAndAwaitAuto(
         exec: AiStudioWebSessionExecutor,
         prompt: String,
     ): AiStudioWebSessionExecutor.Result {
         val latch = CountDownLatch(1)
         val resultRef = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.awaitManualAttachmentGenerate(prompt = prompt) { result ->
+            val accepted = exec.generateAttachmentNativeOnly(prompt = prompt) { result ->
                 resultRef.set(result)
                 latch.countDown()
             }
             if (!accepted && resultRef.get() == null) {
-                resultRef.set(AiStudioWebSessionExecutor.Result(ok = false, error = "MANUAL_GENERATE_NOT_ARMED"))
+                resultRef.set(AiStudioWebSessionExecutor.Result(ok = false, error = "AUTO_GENERATE_NOT_ARMED"))
                 latch.countDown()
             }
         }
-        if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ bạn nhấn Send/Run thủ công trong AI Studio")
+        if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio mô tả video")
         throwIfCancelled()
-        val result = resultRef.get() ?: error("AI Studio không trả trạng thái sau thao tác thủ công")
-        if (!result.ok) error("AI Studio GenerateContent thất bại sau thao tác thủ công: ${result.error.ifBlank { "HTTP ${result.status}" }}")
+        val result = resultRef.get() ?: error("AI Studio không trả trạng thái mô tả video")
+        if (!result.ok) error("AI Studio GenerateContent tự động thất bại: ${result.error.ifBlank { "HTTP ${result.status}" }}")
         return result
     }
 

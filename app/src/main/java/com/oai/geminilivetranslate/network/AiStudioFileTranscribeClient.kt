@@ -43,9 +43,9 @@ class AiStudioFileTranscribeClient(
         selectModel(exec)
         onProgress("Đang đưa tệp vào AI Studio và chờ trang đọc xong...", 8)
         attachAndWait(exec, uri, displayName, mimeType, size)
-        logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-web-file-only")
-        onProgress("Tệp đã sẵn sàng; đang chép lời bằng model tệp, không dùng lời nhắc...", 55)
-        val result = generateFileOnlyNative(exec)
+        logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-web-file-only manualRun=true")
+        onProgress("Tệp đã tải/xử lý xong. Hãy tự nhấn Run trên trang AI Studio; ứng dụng chỉ theo dõi request/config.", 55)
+        val result = awaitManualFileOnly(exec)
         val parsed = parsePlainTranscript(result.modelText)
         logger.log(2, TAG, "DONE backend=aistudio-file model=$model chars=${parsed.text.length} words=${parsed.words.size} elapsedMs=${SystemClock.elapsedRealtime()-startedAt}")
         onProgress("Đang tạo kết quả...", 98)
@@ -107,19 +107,19 @@ class AiStudioFileTranscribeClient(
         logger.log(2, TAG, "ATTACHMENT_PREPARED model=$model name=$name")
     }
 
-    private fun generateFileOnlyNative(exec: AiStudioWebSessionExecutor): AiStudioWebSessionExecutor.Result {
+    private fun awaitManualFileOnly(exec: AiStudioWebSessionExecutor): AiStudioWebSessionExecutor.Result {
         val latch = CountDownLatch(1)
         val ref = AtomicReference<AiStudioWebSessionExecutor.Result?>()
         main.post {
-            val accepted = exec.generateAttachmentFileOnlyNative { r -> ref.set(r); latch.countDown() }
+            val accepted = exec.awaitManualAttachmentFileOnlyGenerate { r -> ref.set(r); latch.countDown() }
             if (!accepted && ref.get() == null) {
-                ref.set(AiStudioWebSessionExecutor.Result(ok = false, error = "NATIVE_FILE_ONLY_TRANSCRIBE_NOT_ARMED"))
+                ref.set(AiStudioWebSessionExecutor.Result(ok = false, error = "MANUAL_FILE_TRANSCRIBE_NOT_ARMED"))
                 latch.countDown()
             }
         }
-        if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ AI Studio chép lời tệp")
-        val r = ref.get() ?: error("Không nhận được trạng thái chép lời tệp")
-        if (!r.ok) error("AI Studio file transcribe thất bại: ${r.error.ifBlank { "HTTP ${r.status}" }}")
+        if (!latch.await(15, TimeUnit.MINUTES)) error("Hết thời gian chờ bạn nhấn Run thủ công cho chép lời tệp")
+        val r = ref.get() ?: error("Không nhận được trạng thái chép lời tệp sau thao tác thủ công")
+        if (!r.ok) error("AI Studio file transcribe sau thao tác thủ công thất bại: ${r.error.ifBlank { "HTTP ${r.status}" }}")
         return r
     }
 

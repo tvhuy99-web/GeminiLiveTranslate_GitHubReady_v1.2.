@@ -36,7 +36,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * R12.4 production-shaped executor for an authenticated AI Studio web session.
+ * R12.5 production-shaped executor for an authenticated AI Studio web session.
  *
  * R12 Direct Engine remains unchanged: the proven R9 adaptive path is first for text, and if it
  * reaches R9_HANDLER_FINAL the executor calls AI Studio's own page-local handlers directly rather
@@ -357,6 +357,56 @@ class AiStudioWebSessionExecutor(
             fileOnly = true,
         )
         return true
+    }
+
+    fun awaitManualAttachmentFileOnlyGenerate(
+        callback: (Result) -> Unit,
+    ): Boolean {
+        if (destroyed || !pageFinished || state != State.READY || pending != null) {
+            callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
+            return false
+        }
+        val baselineScript = "JSON.stringify((function(){var n=window.__AIS_WEB_SESSION__;var f=window.__AIS_R11_REQUEST_FIX__;return {ok:true,captureCount:Number(n&&n.captureCount||0),selectedModel:String(f&&f.selectedModel||''),requestedModel:String(f&&f.requestedModel||'')};})())"
+        webView.evaluateJavascript(baselineScript) { raw ->
+            if (destroyed || pending != null) {
+                callback(Result(ok = false, error = "NOT_READY_OR_BUSY"))
+                return@evaluateJavascript
+            }
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val baseline = obj?.optInt("captureCount", -1) ?: -1
+            if (baseline < 0) {
+                callback(Result(ok = false, error = "CAPTURE_BASELINE_UNAVAILABLE", phase = decoded.take(500)))
+                return@evaluateJavascript
+            }
+            val request = beginPreparedAttachmentRequest("", callback, "manual-file-transcribe")
+            events?.onLog(
+                "R22_FILE_TRANSCRIBE_MANUAL_ARMED",
+                "seq=${request.seq} baseline=$baseline prompt=false modelInput=file-only selectedModel=${obj?.optString("selectedModel").orEmpty()} autoSubmit=false",
+            )
+            monitorManualFileOnlyGenerate(request.seq, baseline)
+        }
+        return true
+    }
+
+    private fun monitorManualFileOnlyGenerate(requestSeq: Int, baseline: Int) {
+        if (pending?.seq != requestSeq || destroyed) return
+        val script = "JSON.stringify((function(b){var a=window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():{};var n=window.__AIS_WEB_SESSION__;var f=window.__AIS_R11_REQUEST_FIX__;var c=Number(n&&n.captureCount||0);return {ok:true,baseline:b,captureCount:c,manualSubmitSeen:b>=0&&c>b,present:!!a.present,ready:!!a.ready,busy:!!a.busy,submitReady:!!a.submitReady,localReadReady:!!a.localReadReady,serverPayloadObserved:!!a.serverPayloadObserved,serverPayloadSettled:!!a.serverPayloadSettled,domState:String(a.domState||''),domReadyAfterBusy:!!a.domReadyAfterBusy,selectedModel:String(f&&f.selectedModel||''),requestedModel:String(f&&f.requestedModel||''),payloadStarted:Number(a.payloadStarted||0),payloadCompleted:Number(a.payloadCompleted||0),payloadFailed:Number(a.payloadFailed||0),performanceCount:Number(a.performanceCount||0),submitLabel:String(a.submitLabel||''),submitScore:Number(a.submitScore||-1)};})($baseline))"
+        webView.evaluateJavascript(script) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            events?.onLog("R22_FILE_TRANSCRIBE_MANUAL_STATE", decoded.take(8000))
+            if (obj?.optBoolean("manualSubmitSeen") == true) {
+                events?.onLog(
+                    "R22_FILE_TRANSCRIBE_MANUAL_SUBMIT_DETECTED",
+                    "seq=$requestSeq captureCount=${obj.optInt("captureCount", -1)} baseline=$baseline selectedModel=${obj.optString("selectedModel")}",
+                )
+                readNormalized(requestSeq, "manual-file-transcribe-submit")
+                return@evaluateJavascript
+            }
+            main.postDelayed({ monitorManualFileOnlyGenerate(requestSeq, baseline) }, MANUAL_READINESS_POLL_MS)
+        }
     }
 
     fun awaitManualAttachmentGenerate(

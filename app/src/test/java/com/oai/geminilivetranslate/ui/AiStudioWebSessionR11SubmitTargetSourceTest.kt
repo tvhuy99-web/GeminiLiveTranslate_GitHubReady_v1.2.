@@ -47,7 +47,7 @@ class AiStudioWebSessionR11SubmitTargetSourceTest {
         assertTrue(src.contains("R20_ATTACHMENT_PREPARED"))
         val requestFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11RequestFix.kt")
         val submitFix = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR11SubmitTargetFix.kt")
-        assertTrue(requestFix.contains("2026-09-05-web-session-r11.9-blob-stream-dom-trace"))
+        assertTrue(requestFix.contains("2026-09-05-web-session-r11.10-manual-config-trace"))
         assertTrue(requestFix.contains("R20_ATTACHMENT_FILE_READ_DONE"))
         assertTrue(requestFix.contains("R20_ATTACHMENT_PAYLOAD_START"))
         assertTrue(requestFix.contains("R20_ATTACHMENT_PAYLOAD_PROGRESS"))

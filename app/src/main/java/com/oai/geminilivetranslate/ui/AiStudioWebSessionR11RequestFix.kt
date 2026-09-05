@@ -14,7 +14,7 @@ package com.oai.geminilivetranslate.ui
  * No cookie, Authorization value, Google password, API-key value, or file bytes are exported.
  */
 object AiStudioWebSessionR11RequestFix {
-    const val VERSION = "2026-09-05-web-session-r11.9-blob-stream-dom-trace"
+    const val VERSION = "2026-09-05-web-session-r11.10-manual-config-trace"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -110,6 +110,45 @@ object AiStudioWebSessionR11RequestFix {
           function isGenerateUrl(raw) {
             const s = String(raw || '');
             return /MakerSuiteService\/(?:GenerateContent|BidiGenerateContent)/i.test(s) || /\/GenerateContent(?:[/?]|$)/i.test(s);
+          }
+
+          function sanitizeTraceText(raw) {
+            try {
+              let s = String(raw || '');
+              s = s.replace(/data:[^,]{0,160};base64,[A-Za-z0-9+\/_=-]{64,}/gi,'<DATA_URL_REDACTED>');
+              s = s.replace(/AIza[0-9A-Za-z_-]{20,}/g,'<API_KEY_REDACTED>');
+              s = s.replace(/ya29\.[0-9A-Za-z._-]+/g,'<OAUTH_REDACTED>');
+              s = s.replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi,'Bearer <REDACTED>');
+              s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'<EMAIL_REDACTED>');
+              s = s.replace(/[A-Za-z0-9+\/_=-]{256,}/g,function(m){return '<LONG_TOKEN_'+m.length+'>';});
+              return s.slice(0,1800);
+            } catch (_) { return ''; }
+          }
+
+          function emitGenerateRequestShape(source, url, body, stage) {
+            try {
+              if (!isGenerateUrl(url) || typeof body !== 'string') return;
+              const hp = hostPath(url);
+              const models = [];
+              const seen = Object.create(null);
+              const re = /(?:models\/)?gemini-[a-z0-9][a-z0-9._-]{2,110}/ig;
+              let m;
+              while ((m = re.exec(body)) && models.length < 8) {
+                const id = normalizeModel(m[0]);
+                if (id && !seen[id]) { seen[id] = true; models.push(id); }
+              }
+              emit('R22_GENERATE_REQUEST_SHAPE',{
+                stage:String(stage||''),source:String(source||''),host:hp.host,path:hp.path,bodyChars:body.length,
+                selectedModel:String(fix.selectedModel||''),models:models,
+                hasTranscriptionConfig:/transcription[_-]?config|transcriptionConfig/i.test(body),
+                hasDiarization:/diarization|speaker[_-]?separation|speakerDiarization/i.test(body),
+                hasLanguageCodes:/language[_-]?codes|languageCodes/i.test(body),
+                hasTimestamp:/timestamp[_-]?granular|timestampGranular/i.test(body),
+                hasAudioMime:/audio\//i.test(body),hasVideoMime:/video\//i.test(body),
+                hasDriveRef:/drive|resource[_-]?name|file[_-]?(?:uri|id)|attachment/i.test(body),
+                preview:sanitizeTraceText(body)
+              });
+            } catch (err) { emit('R22_GENERATE_REQUEST_SHAPE_ERROR',{error:String(err).slice(0,500)}); }
           }
 
           function hostPath(raw) {
@@ -349,25 +388,22 @@ object AiStudioWebSessionR11RequestFix {
           }
 
           function rewriteBody(url, body, source) {
-            if (!fix.selectedModel || typeof body !== 'string' || !isGenerateUrl(url)) return body;
+            if (typeof body !== 'string' || !isGenerateUrl(url)) return body;
             const original = firstModel(body);
-            if (!original) {
-              emit('R11_MODEL_REWRITE_SKIPPED',{reason:'MODEL_NOT_FOUND_IN_BODY',target:fix.selectedModel,source:source,bodyChars:body.length});
-              return body;
-            }
             let rewritten = body;
-            if (original !== fix.selectedModel) rewritten = body.split(original).join(fix.selectedModel);
-            fix.lastOriginalModel = original;
-            fix.lastAppliedModel = fix.selectedModel;
-            fix.rewriteCount += 1;
-            emit('R11_GENERATE_MODEL_REWRITE',{
-              source:source,
-              originalModel:original,
-              targetModel:fix.selectedModel,
-              changed:rewritten!==body,
-              rewriteCount:fix.rewriteCount,
-              bodyChars:rewritten.length
-            });
+            if (fix.selectedModel && original) {
+              if (original !== fix.selectedModel) rewritten = body.split(original).join(fix.selectedModel);
+              fix.lastOriginalModel = original;
+              fix.lastAppliedModel = fix.selectedModel;
+              fix.rewriteCount += 1;
+              emit('R11_GENERATE_MODEL_REWRITE',{
+                source:source,originalModel:original,targetModel:fix.selectedModel,changed:rewritten!==body,
+                rewriteCount:fix.rewriteCount,bodyChars:rewritten.length
+              });
+            } else if (!original) {
+              emit('R11_MODEL_REWRITE_SKIPPED',{reason:'MODEL_NOT_FOUND_IN_BODY',target:fix.selectedModel,source:source,bodyChars:body.length});
+            }
+            emitGenerateRequestShape(source,url,rewritten,'post-rewrite');
             return rewritten;
           }
 
@@ -407,6 +443,15 @@ object AiStudioWebSessionR11RequestFix {
                     xhr.addEventListener('loadend',function(){
                       let status=-1;try{status=Number(xhr.status||-1);}catch(_){}
                       noteAttachmentNetDone(netToken,status);
+                      try {
+                        if (isGenerateUrl(meta.url||'') && status >= 400) {
+                          let text=''; try { text=String(xhr.responseText||''); } catch (_) {}
+                          emit('R22_GENERATE_RESPONSE_ERROR',{
+                            source:'xhr',host:hostPath(meta.url||'').host,path:hostPath(meta.url||'').path,status:status,
+                            responseChars:text.length,preview:sanitizeTraceText(text)
+                          });
+                        }
+                      } catch (_) {}
                     },{once:true});
                   }
                 } catch (err) {

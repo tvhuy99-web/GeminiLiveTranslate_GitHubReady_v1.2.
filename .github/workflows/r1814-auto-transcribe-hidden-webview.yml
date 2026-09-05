@@ -1,6 +1,6 @@
 name: R18.14 Auto Transcribe + Hidden WebView
 
-# trigger: v4
+# trigger: v5
 on:
   push:
     branches:
@@ -29,7 +29,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Apply R18.14 patch
-        run: python3 tools/r1814_patch_v2.py
+        run: |
+          python3 tools/r1814_patch_v2.py
+          python3 tools/r1814_test_patch.py
       - name: Verify R18.14 invariants
         run: |
           set -euxo pipefail
@@ -106,6 +108,6 @@ jobs:
           git reset --hard "origin/$BRANCH_NAME"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f tools/r1814_patch.py tools/r1814_patch_v2.py .github/workflows/r1814-auto-transcribe-hidden-webview.yml
+          git rm -f tools/r1814_patch.py tools/r1814_patch_v2.py tools/r1814_test_patch.py .github/workflows/r1814-auto-transcribe-hidden-webview.yml
           git commit -m 'chore: remove one-shot R18.14 build helpers'
           git push origin HEAD:${BRANCH_NAME}

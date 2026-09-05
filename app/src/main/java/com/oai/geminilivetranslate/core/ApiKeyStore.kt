@@ -49,10 +49,34 @@ class ApiKeyStore(context: Context) {
         return save(current.copy(keys = normalized, selected = selected))
     }
 
+    /**
+     * Credential for the operation currently selected in the main UI.
+     * AI Studio is an official Gemini Live connection mode only, so the local sentinel is returned
+     * only for Live translate or Live transcribe. File transcription, subtitle translation and
+     * Gemini video description always require a real app-owned API key.
+     */
     @Synchronized
     fun currentGeminiKey(): String? {
-        val current = load()
-        return current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
+        val real = realGeminiKey(load())
+        return if (
+            AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext) &&
+            selectedOperationUsesGeminiLive()
+        ) {
+            AiStudioLiveBackendPolicy.liveCredential(real)
+        } else {
+            real
+        }
+    }
+
+    /** Explicit Live-only resolver for callers that already know they are opening Gemini Live. */
+    @Synchronized
+    fun currentLiveCredential(): String? {
+        val real = realGeminiKey(load())
+        return if (AiStudioLiveBackendPolicy.configuredToPreferAiStudio(appContext)) {
+            AiStudioLiveBackendPolicy.liveCredential(real)
+        } else {
+            real
+        }
     }
 
     @Synchronized
@@ -105,6 +129,24 @@ class ApiKeyStore(context: Context) {
         }
         invalidateLogRedactionCache()
     }
+
+    private fun selectedOperationUsesGeminiLive(): Boolean {
+        val appPreferences = AppPreferences(appContext)
+        return when (appPreferences.loadProcessingMode()) {
+            AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION -> false
+            AppPreferences.PROCESSING_MODE_TRANSCRIBE -> {
+                val selectedSource = appContext
+                    .getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_LAST_SOURCE_MODE, SourceMode.FILE.name)
+                    .orEmpty()
+                selectedSource != SourceMode.FILE.name
+            }
+            else -> true
+        }
+    }
+
+    private fun realGeminiKey(current: State): String? =
+        current.selected?.takeIf { it in current.keys } ?: current.keys.firstOrNull()
 
     private fun requireValidGeminiKey(key: String) {
         require(key.length >= 20 && key.none(Char::isWhitespace)) { "API Key không hợp lệ" }
@@ -162,5 +204,6 @@ class ApiKeyStore(context: Context) {
         private const val ALIAS = "gemini_translate_api_keys_v1"
         private const val PAYLOAD = "payload"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val KEY_LAST_SOURCE_MODE = "lastSourceMode"
     }
 }

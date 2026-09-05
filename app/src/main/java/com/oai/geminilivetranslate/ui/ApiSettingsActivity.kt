@@ -22,6 +22,8 @@ import androidx.lifecycle.lifecycleScope
 import com.oai.geminilivetranslate.core.AiApiEndpointRules
 import com.oai.geminilivetranslate.core.AiApiSettings
 import com.oai.geminilivetranslate.core.AiApiSettingsStore
+import com.oai.geminilivetranslate.core.AiConnectionModeStore
+import com.oai.geminilivetranslate.core.AiFunctionModelCatalog
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
@@ -42,7 +44,10 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var keys: ApiKeyStore
     private lateinit var logger: SessionLogger
 
+    private lateinit var connectionModeSpinner: AccessibleSpinner
+    private lateinit var accountButton: Button
     private lateinit var providerSpinner: AccessibleSpinner
+    private lateinit var geminiKeyFields: LinearLayout
     private lateinit var geminiFields: LinearLayout
     private lateinit var proxyFields: LinearLayout
     private lateinit var geminiKey: EditText
@@ -57,11 +62,21 @@ class ApiSettingsActivity : AppCompatActivity() {
     private lateinit var temperatureInput: EditText
     private lateinit var timelinePrompt: EditText
     private lateinit var summaryPrompt: EditText
+    private var modelCatalogLoader: AiStudioModelCatalogLoader? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+
+    private val connectionModeValues = listOf(
+        AiConnectionModeStore.MODE_API_KEY,
+        AiConnectionModeStore.MODE_AI_STUDIO,
+    )
+    private val connectionModeLabels = listOf(
+        AiConnectionModeStore.LABEL_API_KEY,
+        AiConnectionModeStore.LABEL_AI_STUDIO,
+    )
 
     private val providerValues = listOf(
         AiApiSettingsStore.PROVIDER_GEMINI,
@@ -79,9 +94,16 @@ class ApiSettingsActivity : AppCompatActivity() {
         logger = SessionLogger(this, AppPreferences(this))
         setContentView(buildUi())
         loadIntoUi()
+        logger.log(
+            2,
+            "ApiSettings",
+            "Mở Thiết lập API connectionMode=${AiConnectionModeStore(this).load()} models={${AiFunctionModelCatalog.summary(store.load().geminiModel)}}",
+        )
     }
 
     override fun onDestroy() {
+        modelCatalogLoader?.cancel()
+        modelCatalogLoader = null
         client.dispatcher.cancelAll()
         client.connectionPool.evictAll()
         super.onDestroy()
@@ -101,11 +123,37 @@ class ApiSettingsActivity : AppCompatActivity() {
             ViewCompat.setAccessibilityHeading(this, true)
         })
 
-        root.addView(label("Gemini API Key"))
+        root.addView(label("Chế độ kết nối Gemini Live"))
+        connectionModeSpinner = AccessibleSpinner(this).apply {
+            adapter = ArrayAdapter(
+                this@ApiSettingsActivity,
+                android.R.layout.simple_spinner_item,
+                connectionModeLabels,
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            contentDescription = "Chọn chế độ kết nối Gemini Live: API Key hoặc Tài khoản Google AI Studio"
+            minimumHeight = dp(48)
+        }
+        root.addView(connectionModeSpinner)
+
+        accountButton = Button(this).apply {
+            text = "ĐĂNG NHẬP / ĐĂNG XUẤT / CHUYỂN TÀI KHOẢN"
+            isAllCaps = false
+            minimumHeight = dp(54)
+            contentDescription = "Quản lý tài khoản Google dùng cho AI Studio"
+            setOnClickListener {
+                logger.log(2, "ApiSettings", "Mở quản lý tài khoản AI Studio từ Thiết lập API")
+                startActivity(Intent(this@ApiSettingsActivity, AiStudioAccountActivity::class.java))
+            }
+        }
+        root.addView(accountButton)
+
+        geminiKeyFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        geminiKeyFields.addView(label("Gemini API Key"))
         geminiKey = multiKeyEdit().apply {
             contentDescription = "Gemini API Key. Mỗi dòng một khóa"
         }
-        root.addView(geminiKey)
+        geminiKeyFields.addView(geminiKey)
+        root.addView(geminiKeyFields)
 
         root.addView(label("Nhà cung cấp cho Mô tả video"))
         providerSpinner = AccessibleSpinner(this).apply {
@@ -237,6 +285,12 @@ class ApiSettingsActivity : AppCompatActivity() {
         })
         root.addView(actions)
 
+        connectionModeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                refreshConnectionModeFields()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
         providerSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
                 refreshProviderFields()
@@ -253,6 +307,10 @@ class ApiSettingsActivity : AppCompatActivity() {
     private fun loadIntoUi() {
         val settings = store.load()
         val secretState = keys.load()
+        val connectionMode = AiConnectionModeStore(this).load()
+        connectionModeSpinner.setSelection(
+            if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) 1 else 0,
+        )
         providerSpinner.setSelection(
             if (settings.provider == AiApiSettingsStore.PROVIDER_OPENAI) 1 else 0
         )
@@ -273,11 +331,13 @@ class ApiSettingsActivity : AppCompatActivity() {
         temperatureInput.setText(settings.temperature.toString())
         timelinePrompt.setText(settings.timelinePrompt)
         summaryPrompt.setText(settings.summaryPrompt)
+        refreshConnectionModeFields()
         refreshProviderFields()
     }
 
     private fun saveAndClose() {
         val provider = currentProvider()
+        val connectionMode = currentConnectionMode()
         val geminiValues = geminiKeysFromUi()
         val proxyValue = proxyKey.text.toString().trim()
         val proxyUrlValue = proxyUrl.text.toString().trim()
@@ -285,9 +345,9 @@ class ApiSettingsActivity : AppCompatActivity() {
         val temperatureValue = temperatureInput.text.toString().trim().toDoubleOrNull()
         val reconnectRetriesValue = reconnectRetriesInput.text.toString().trim().toIntOrNull()
 
-        val invalidGeminiKey = geminiValues.firstOrNull {
-            it.length < 20 || it.any(Char::isWhitespace)
-        }
+        val invalidGeminiKey = if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            geminiValues.firstOrNull { it.length < 20 || it.any(Char::isWhitespace) }
+        } else null
         if (invalidGeminiKey != null) {
             toast("Có Gemini API Key không hợp lệ")
             return
@@ -310,9 +370,13 @@ class ApiSettingsActivity : AppCompatActivity() {
         }
 
         val previousGeminiKeys = keys.load().keys
+        val previousConnectionMode = AiConnectionModeStore(this).load()
         runCatching {
-            keys.setGeminiKeys(geminiValues)
+            if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+                keys.setGeminiKeys(geminiValues)
+            }
             keys.setProxyKey(proxyValue)
+            AiConnectionModeStore(this).save(connectionMode)
             val appPreferences = AppPreferences(this)
             appPreferences.save(
                 appPreferences.load().copy(
@@ -335,11 +399,12 @@ class ApiSettingsActivity : AppCompatActivity() {
             )
         }.onSuccess {
             val currentGeminiKeys = keys.load().keys
+            val connectionChanged = previousConnectionMode != connectionMode
             startService(
                 Intent(this, TranslationService::class.java)
                     .setAction(TranslationService.ACTION_APPLY_SETTINGS)
             )
-            if (previousGeminiKeys != currentGeminiKeys) {
+            if (previousGeminiKeys != currentGeminiKeys || connectionChanged) {
                 startService(
                     Intent(this, TranslationService::class.java)
                         .setAction(TranslationService.ACTION_REFRESH_API_KEY)
@@ -348,52 +413,112 @@ class ApiSettingsActivity : AppCompatActivity() {
             logger.log(
                 2,
                 "ApiSettings",
-                "Đã lưu provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue proxyTemperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyCount=${currentGeminiKeys.size} geminiKeysChanged=${previousGeminiKeys != currentGeminiKeys}",
+                "Đã lưu connectionMode=$connectionMode connectionChanged=$connectionChanged provider=$provider streaming=${streamingSwitch.isChecked} autoReconnect=${autoReconnectSwitch.isChecked} reconnectRetries=$reconnectRetriesValue timeoutMs=$timeoutValue proxyTemperature=$temperatureValue geminiModel=${geminiModel.text.toString().trim()} proxyModel=${proxyModel.text.toString().trim()} geminiKeyCount=${currentGeminiKeys.size} geminiKeysChanged=${previousGeminiKeys != currentGeminiKeys} models={${AiFunctionModelCatalog.summary(geminiModel.text.toString())}}",
             )
             toast("Đã lưu thiết lập API")
             finish()
         }.onFailure {
-            logger.log(0, "ApiSettings", "Không lưu được thiết lập API", it)
+            logger.log(0, "ApiSettings", "Không lưu được thiết lập API connectionMode=$connectionMode", it)
             toast("Không lưu được thiết lập API: ${it.message}")
         }
     }
 
     private fun fetchModels(provider: String) {
-        val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-            geminiKeysFromUi().firstOrNull().orEmpty()
-        } else {
-            proxyKey.text.toString().trim()
+        if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            fetchGeminiModelsWebFirst()
+            return
         }
-        val proxyUrlValue = proxyUrl.text.toString().trim()
-        lifecycleScope.launch {
-            toast("Đang tải danh sách model...")
-            runCatching {
-                withContext(Dispatchers.IO) { fetchModelList(provider, keyValue, proxyUrlValue) }
-            }.onSuccess { models ->
-                if (models.isEmpty()) {
-                    toast("API không trả danh sách model")
+        fetchModelsFromApi(
+            provider = provider,
+            keyValue = proxyKey.text.toString().trim(),
+            proxyUrlValue = proxyUrl.text.toString().trim(),
+            sourceLabel = "OpenAI-compatible API",
+        )
+    }
+
+    private fun fetchGeminiModelsWebFirst() {
+        val fallbackKey = geminiKeysFromUi().firstOrNull().orEmpty()
+        modelCatalogLoader?.cancel()
+        val loader = AiStudioModelCatalogLoader(this, logger)
+        modelCatalogLoader = loader
+        toast("Đang tải danh sách model từ AI Studio...")
+        loader.load { models, error ->
+            if (modelCatalogLoader === loader) modelCatalogLoader = null
+            if (isFinishing || isDestroyed) return@load
+            if (models.isNotEmpty()) {
+                logger.log(
+                    2,
+                    "ApiSettings",
+                    "R34_VIDEO_MODEL_LIST source=ai-studio-web count=${models.size}",
+                )
+                showModelDialog(models, geminiModel, "AI Studio")
+            } else {
+                logger.log(
+                    1,
+                    "ApiSettings",
+                    "R34_VIDEO_MODEL_LIST_WEB_FAILED error=${error.take(240)} fallbackApiKey=${fallbackKey.isNotBlank()}",
+                )
+                if (fallbackKey.isBlank()) {
+                    toast("AI Studio chưa trả được danh sách model và chưa có Gemini API Key để dùng phương án dự phòng")
                 } else {
-                    val target = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
-                        geminiModel
-                    } else {
-                        proxyModel
-                    }
-                    AlertDialog.Builder(this@ApiSettingsActivity)
-                        .setTitle("CHỌN MODEL")
-                        .setItems(models.toTypedArray()) { _, which ->
-                            target.setText(models[which])
-                        }
-                        .setNegativeButton("HỦY", null)
-                        .show()
+                    toast("AI Studio chưa trả danh sách. Đang thử Gemini API...")
+                    fetchModelsFromApi(
+                        provider = AiApiSettingsStore.PROVIDER_GEMINI,
+                        keyValue = fallbackKey,
+                        proxyUrlValue = "",
+                        sourceLabel = "Gemini API dự phòng",
+                    )
                 }
-            }.onFailure {
-                logger.log(0, "ApiSettings", "Tải danh sách model thất bại provider=$provider", it)
-                toast("Không tải được danh sách model: ${it.message}")
             }
         }
     }
 
+    private fun fetchModelsFromApi(
+        provider: String,
+        keyValue: String,
+        proxyUrlValue: String,
+        sourceLabel: String,
+    ) {
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { fetchModelList(provider, keyValue, proxyUrlValue) }
+            }.onSuccess { models ->
+                if (models.isEmpty()) {
+                    toast("$sourceLabel không trả danh sách model phù hợp")
+                } else {
+                    val target = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) geminiModel else proxyModel
+                    logger.log(
+                        2,
+                        "ApiSettings",
+                        "R34_VIDEO_MODEL_LIST source=${sourceLabel.replace(' ', '-').lowercase()} count=${models.size}",
+                    )
+                    showModelDialog(models, target, sourceLabel)
+                }
+            }.onFailure {
+                logger.log(0, "ApiSettings", "Tải danh sách model thất bại source=$sourceLabel provider=$provider", it)
+                toast("Không tải được danh sách model từ $sourceLabel: ${it.message}")
+            }
+        }
+    }
+
+    private fun showModelDialog(models: List<String>, target: EditText, sourceLabel: String) {
+        toast("Đã tải ${models.size} model từ $sourceLabel")
+        AlertDialog.Builder(this@ApiSettingsActivity)
+            .setTitle("CHỌN MODEL - $sourceLabel")
+            .setItems(models.toTypedArray()) { _, which -> target.setText(models[which]) }
+            .setNegativeButton("HỦY", null)
+            .show()
+    }
+
     private fun testConnection() {
+        val connectionMode = currentConnectionMode()
+        if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) {
+            logger.log(2, "ApiSettings", "KIỂM TRA KẾT NỐI chuyển sang quản lý phiên AI Studio")
+            toast("Hãy kiểm tra phiên đăng nhập AI Studio trong màn hình tài khoản")
+            startActivity(Intent(this, AiStudioAccountActivity::class.java))
+            return
+        }
+
         val provider = currentProvider()
         val geminiValues = geminiKeysFromUi()
         val keyValue = if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
@@ -460,13 +585,13 @@ class ApiSettingsActivity : AppCompatActivity() {
                 logger.log(
                     2,
                     "ApiSettings",
-                    "Kiểm tra kết nối thành công provider=$provider model=$modelValue info=$info",
+                    "Kiểm tra kết nối thành công connectionMode=$connectionMode provider=$provider model=$modelValue info=$info",
                 )
             }.onFailure {
                 logger.log(
                     0,
                     "ApiSettings",
-                    "Kiểm tra kết nối thất bại provider=$provider model=$modelValue",
+                    "Kiểm tra kết nối thất bại connectionMode=$connectionMode provider=$provider model=$modelValue",
                     it,
                 )
                 toast("Kết nối thất bại: ${it.message}")
@@ -565,9 +690,21 @@ class ApiSettingsActivity : AppCompatActivity() {
             val array = root.optJSONArray("models")
             if (array != null) {
                 for (i in 0 until array.length()) {
-                    array.optJSONObject(i)?.optString("name")
-                        ?.removePrefix("models/")
-                        ?.takeIf(String::isNotBlank)
+                    val item = array.optJSONObject(i) ?: continue
+                    val methods = item.optJSONArray("supportedGenerationMethods")
+                    var supportsGenerateContent = methods == null
+                    if (methods != null) {
+                        for (j in 0 until methods.length()) {
+                            if (methods.optString(j).equals("generateContent", ignoreCase = true)) {
+                                supportsGenerateContent = true
+                                break
+                            }
+                        }
+                    }
+                    if (!supportsGenerateContent) continue
+                    item.optString("name")
+                        .removePrefix("models/")
+                        .takeIf(String::isNotBlank)
                         ?.let(output::add)
                 }
             }
@@ -581,13 +718,30 @@ class ApiSettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        return output.distinct().sorted()
+        val unique = output.distinct().sorted()
+        return if (provider == AiApiSettingsStore.PROVIDER_GEMINI) {
+            AiStudioModelCatalogLoader.videoDescriptionCandidates(unique)
+        } else {
+            unique
+        }
     }
+
+    private fun currentConnectionMode(): String =
+        connectionModeValues.getOrElse(connectionModeSpinner.selectedItemPosition) {
+            AiConnectionModeStore.MODE_API_KEY
+        }
 
     private fun currentProvider(): String =
         providerValues.getOrElse(providerSpinner.selectedItemPosition) {
             AiApiSettingsStore.PROVIDER_GEMINI
         }
+
+    private fun refreshConnectionModeFields() {
+        val mode = currentConnectionMode()
+        val aiStudio = mode == AiConnectionModeStore.MODE_AI_STUDIO
+        accountButton.isVisible = aiStudio
+        geminiKeyFields.isVisible = !aiStudio
+    }
 
     private fun refreshProviderFields() {
         val gemini = currentProvider() == AiApiSettingsStore.PROVIDER_GEMINI

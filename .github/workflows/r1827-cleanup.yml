@@ -1,0 +1,81 @@
+name: R18.27 Branch Cleanup
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - .github/workflows/r1827-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply cleanup
+        run: |
+          python3 tools/r1827_fixup.py
+          python3 tools/r1827_cleanup.py
+          echo "R18.27 cleanup transform complete"
+          git diff --check
+          test ! -e AI_STUDIO_WEB_SESSION_LAB.md
+          test ! -e app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionDirectEngine.kt
+          ! grep -R "generateAttachmentFileOnlyNative\|awaitManualAttachmentFileOnlyGenerate\|awaitManualAttachmentGenerate\|nativeTargetIfAttachmentFileOnly\|stripUnsupportedTranscribe" app/src/main/java
+          grep -q '2026-09-05-web-session-r12.8-cleanup' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q 'R35_VIDEO_PARTIAL_RAW' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q 'generateSttFileNative' app/src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt
+          grep -q 'activationPolicy' app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioSttPageBridge.kt
+
+      - name: Repository verification
+        run: |
+          node --version
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+          python3 tools/verify_github_ready.py
+          python3 tools/check_embedded_js_syntax.py
+
+      - name: Android test assemble lint
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          python3 tools/verify_apk.py "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+      - name: Commit cleaned branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'R18.27: remove obsolete AI Studio experiments and dead code'
+          git push origin HEAD:experiment/aistudio-r183-network-vi
+
+      - name: Package verified APK
+        run: |
+          mkdir -p artifact
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.27-cleanup.apk
+          git rev-parse HEAD > artifact/source_commit.txt
+          sha256sum artifact/GeminiLiveTranslate-R18.27-cleanup.apk > artifact/sha256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.27-cleanup
+          path: artifact/
+          if-no-files-found: error

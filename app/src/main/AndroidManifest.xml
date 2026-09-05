@@ -30,31 +30,20 @@
         android:theme="@style/Theme.GeminiLiveTranslate"
         android:usesCleartextTraffic="false">
 
+        <activity android:name=".ui.HistoryActivity" android:exported="false" />
+        <activity android:name=".ui.SubtitlePlaybackActivity" android:exported="false" />
+        <activity android:name=".ui.LogViewerActivity" android:exported="false" />
+        <activity android:name=".ui.TtsSettingsActivity" android:exported="false" />
+        <activity android:name=".ui.ApiSettingsActivity" android:exported="false" />
         <activity
-            android:name=".ui.HistoryActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SubtitlePlaybackActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.LogViewerActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.TtsSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.ApiSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.MiniBrowserActivity"
+            android:name=".ui.AiStudioAccountActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize" />
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="Tài khoản Google / AI Studio" />
+        <activity android:name=".ui.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
+
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

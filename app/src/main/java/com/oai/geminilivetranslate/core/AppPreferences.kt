@@ -137,6 +137,13 @@ class AppPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_SPEAKER_DIARIZATION, enabled).apply()
     }
 
+    /** Debug-only AI Studio WebView presentation. Hidden by default. */
+    fun loadAiStudioWebViewVisible(): Boolean = prefs.getBoolean(KEY_AI_STUDIO_WEBVIEW_VISIBLE, false)
+
+    fun setAiStudioWebViewVisible(visible: Boolean) {
+        prefs.edit().putBoolean(KEY_AI_STUDIO_WEBVIEW_VISIBLE, visible).apply()
+    }
+
     fun restoreDefaultsPreservingKeys(): AppSettings = AppSettings().let(SettingsPolicy::sanitize).also(::save)
 
     fun clear(): Boolean = prefs.edit().clear().commit()
@@ -188,6 +195,7 @@ class AppPreferences(context: Context) {
         private const val KEY_PROCESSING_MODE = "processingMode"
         private const val KEY_VIDEO_DESCRIPTION_MODE = "videoDescriptionMode"
         private const val KEY_SPEAKER_DIARIZATION = "speakerDiarization"
+        private const val KEY_AI_STUDIO_WEBVIEW_VISIBLE = "aiStudioWebViewVisible"
         const val PROCESSING_MODE_TRANSLATE = "translate"
         const val PROCESSING_MODE_TRANSCRIBE = "transcribe"
         const val PROCESSING_MODE_VIDEO_DESCRIPTION = "video_description"

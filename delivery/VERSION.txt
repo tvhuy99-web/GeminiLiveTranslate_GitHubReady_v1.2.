@@ -1,0 +1,6 @@
+versionName=1.2.2-debug
+versionCode=10202
+applicationId=com.oai.geminilivetranslate.debug
+signingMode=stable-debug
+certificateSha256=85e27156c4557de4f35b6ebe771dd426f108182894219ff3b6dbed607a230c95
+sourceCommit=019099f4f37b3243af63cd4f4e6702e28c9ca514

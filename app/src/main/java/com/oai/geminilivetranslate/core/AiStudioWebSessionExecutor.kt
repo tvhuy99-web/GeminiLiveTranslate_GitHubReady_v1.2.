@@ -22,6 +22,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionAdaptiveRuntime
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionHttpStatusGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionLabScripts
@@ -78,21 +79,29 @@ class AiStudioWebSessionExecutor(
         val name: String,
         val mimeType: String,
         val size: Long,
-        val startedAt: Long,
+        var startedAt: Long,
         val callback: (Boolean, String) -> Unit,
         val requireUploadReady: Boolean,
         var readyScans: Int = 0,
         var readySince: Long = 0L,
+        var lastPollAt: Long = startedAt,
+        var backgroundDeferredMs: Long = 0L,
+        var wasBackground: Boolean = false,
     )
 
     private data class Pending(
         val seq: Int,
         val callback: (Result) -> Unit,
-        val startedAt: Long,
+        var startedAt: Long,
         val completionValidator: ((String) -> Boolean)? = null,
         var firstProgressAt: Long = 0L,
         var lastProgressAt: Long = 0L,
         var lastResponseChars: Int = 0,
+        var lastWatchdogAt: Long = startedAt,
+        var backgroundDeferredMs: Long = 0L,
+        var wasBackground: Boolean = false,
+        var timeoutProbeAt: Long = 0L,
+        var timeoutReason: String = "",
     )
 
     init {
@@ -200,17 +209,33 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun pollSttAttachment(token: Int) {
-        val item=activeAttachment ?: return
+        val item = activeAttachment ?: return
         if (item.token != token || destroyed) return
-        if (SystemClock.uptimeMillis()-item.startedAt > ATTACHMENT_TIMEOUT_MS) { finishAttachment(token,false,"STT_ATTACHMENT_TIMEOUT"); return }
-        val script="JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.fileState?window.__AIS_STT_PAGE__.fileState(${JSONObject.quote(item.name)}):({ok:false,error:'stt-file-state-not-installed'}))"
+        val script = "JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.fileState?window.__AIS_STT_PAGE__.fileState(${JSONObject.quote(item.name)}):({ok:false,error:'stt-file-state-not-installed'}))"
         webView.evaluateJavascript(script) { raw ->
             if (activeAttachment?.token != token) return@evaluateJavascript
-            val decoded=decodeEvalValue(raw); val obj=runCatching { JSONObject(decoded) }.getOrNull(); val ready=obj?.optBoolean("ready") == true
-            if (ready) { item.readyScans += 1; if (item.readySince==0L) item.readySince=SystemClock.uptimeMillis() } else { item.readyScans=0; item.readySince=0L }
+            val now = SystemClock.uptimeMillis()
+            val timeoutSuppressed = compensateAttachmentTiming(item, now, "stt")
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val ready = obj?.optBoolean("ready") == true
+            if (ready) {
+                item.readyScans += 1
+                if (item.readySince == 0L) item.readySince = now
+            } else {
+                item.readyScans = 0
+                item.readySince = 0L
+            }
             events?.onLog("R28_STT_FILE_POLL", "readyScans=${item.readyScans} ${decoded.take(6000)}")
-            if (ready && item.readyScans>=ATTACHMENT_READY_STABLE_SCANS && SystemClock.uptimeMillis()-item.readySince>=ATTACHMENT_READY_SETTLE_MS) finishAttachment(token,true,decoded)
-            else main.postDelayed({ pollSttAttachment(token) },500L)
+            when {
+                ready && item.readyScans >= ATTACHMENT_READY_STABLE_SCANS && now - item.readySince >= ATTACHMENT_READY_SETTLE_MS ->
+                    finishAttachment(token, true, decoded)
+                !timeoutSuppressed && now - item.startedAt > ATTACHMENT_TIMEOUT_MS -> {
+                    events?.onLog("R38_ATTACHMENT_TIMEOUT_CONFIRMED", "kind=stt token=$token activeMs=${now - item.startedAt}")
+                    finishAttachment(token, false, "STT_ATTACHMENT_TIMEOUT")
+                }
+                else -> main.postDelayed({ pollSttAttachment(token) }, 500L)
+            }
         }
     }
 
@@ -282,18 +307,15 @@ class AiStudioWebSessionExecutor(
     private fun pollAttachment(token: Int) {
         val item = activeAttachment ?: return
         if (item.token != token || destroyed) return
-        if (SystemClock.uptimeMillis() - item.startedAt > ATTACHMENT_TIMEOUT_MS) {
-            finishAttachment(token, false, "ATTACHMENT_TIMEOUT")
-            return
-        }
         val script = "JSON.stringify(window.__AIS_R11_SUPPORT__&&window.__AIS_R11_SUPPORT__.attachmentEvidence?window.__AIS_R11_SUPPORT__.attachmentEvidence():({ok:false,error:'r11-attachment-evidence-not-installed'}))"
         webView.evaluateJavascript(script) { raw ->
             if (activeAttachment?.token != token) return@evaluateJavascript
+            val now = SystemClock.uptimeMillis()
+            val timeoutSuppressed = compensateAttachmentTiming(item, now, "video")
             val decoded = decodeEvalValue(raw)
             val obj = runCatching { JSONObject(decoded) }.getOrNull()
             val present = obj?.optBoolean("present", false) == true
             val ready = obj?.optBoolean("ready", false) == true
-            val now = SystemClock.uptimeMillis()
             if (!item.requireUploadReady && present) {
                 events?.onLog("R19_ATTACHMENT_PRESENT_MANUAL", "token=$token waitedMs=${now - item.startedAt} detail=${decoded.take(6000)}")
                 finishAttachment(token, true, decoded)
@@ -307,16 +329,52 @@ class AiStudioWebSessionExecutor(
                 item.readySince = 0L
             }
             events?.onLog("R18_ATTACHMENT_STATE", "readyScans=${item.readyScans} ${decoded.take(7000)}")
-            if (ready && item.readyScans >= ATTACHMENT_READY_STABLE_SCANS && now - item.readySince >= ATTACHMENT_READY_SETTLE_MS) {
-                events?.onLog("R20_ATTACHMENT_PREPARED", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt} localReadReady=${obj?.optBoolean("localReadReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)}")
-                finishAttachment(token, true, decoded)
-            } else {
-                if (present && !ready) {
-                    events?.onLog("R20_ATTACHMENT_WAIT_PREPARED", "token=$token busy=${obj?.optBoolean("busy", false)} present=$present localReadReady=${obj?.optBoolean("localReadReady", false)} attachmentPrepared=${obj?.optBoolean("attachmentPrepared", false)} submitReady=${obj?.optBoolean("submitReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)} payloadActive=${obj?.optInt("payloadActive", 0)} payloadStarted=${obj?.optInt("payloadStarted", 0)} payloadCompleted=${obj?.optInt("payloadCompleted", 0)} payloadFailed=${obj?.optInt("payloadFailed", 0)}")
+            when {
+                ready && item.readyScans >= ATTACHMENT_READY_STABLE_SCANS && now - item.readySince >= ATTACHMENT_READY_SETTLE_MS -> {
+                    events?.onLog("R20_ATTACHMENT_PREPARED", "token=$token stableScans=${item.readyScans} waitedMs=${now - item.startedAt} localReadReady=${obj?.optBoolean("localReadReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)}")
+                    finishAttachment(token, true, decoded)
                 }
-                main.postDelayed({ pollAttachment(token) }, 500L)
+                !timeoutSuppressed && now - item.startedAt > ATTACHMENT_TIMEOUT_MS -> {
+                    events?.onLog("R38_ATTACHMENT_TIMEOUT_CONFIRMED", "kind=video token=$token activeMs=${now - item.startedAt} present=$present ready=$ready")
+                    finishAttachment(token, false, "ATTACHMENT_TIMEOUT")
+                }
+                else -> {
+                    if (present && !ready) {
+                        events?.onLog("R20_ATTACHMENT_WAIT_PREPARED", "token=$token busy=${obj?.optBoolean("busy", false)} present=$present localReadReady=${obj?.optBoolean("localReadReady", false)} attachmentPrepared=${obj?.optBoolean("attachmentPrepared", false)} submitReady=${obj?.optBoolean("submitReady", false)} serverPayloadObserved=${obj?.optBoolean("serverPayloadObserved", false)} serverPayloadSettled=${obj?.optBoolean("serverPayloadSettled", false)} payloadActive=${obj?.optInt("payloadActive", 0)} payloadStarted=${obj?.optInt("payloadStarted", 0)} payloadCompleted=${obj?.optInt("payloadCompleted", 0)} payloadFailed=${obj?.optInt("payloadFailed", 0)}")
+                    }
+                    main.postDelayed({ pollAttachment(token) }, 500L)
+                }
             }
         }
+    }
+
+    private fun compensateAttachmentTiming(item: PendingAttachment, now: Long, kind: String): Boolean {
+        val rawGap = (now - item.lastPollAt).coerceAtLeast(0L)
+        item.lastPollAt = now
+        val appBackground = GeminiTranslateApp.currentActivity() == null
+        val deferred = when {
+            appBackground -> rawGap
+            item.wasBackground -> rawGap
+            rawGap >= ATTACHMENT_SCHEDULER_GAP_MS -> (rawGap - ATTACHMENT_POLL_EXPECTED_MS).coerceAtLeast(0L)
+            else -> 0L
+        }
+        if (deferred > 0L) {
+            item.startedAt += deferred
+            if (item.readySince > 0L) item.readySince += deferred
+            item.backgroundDeferredMs += deferred
+        }
+        val wasBackground = item.wasBackground
+        item.wasBackground = appBackground
+        if (appBackground && !wasBackground) {
+            events?.onLog("R38_ATTACHMENT_BACKGROUND_DEFER", "kind=$kind token=${item.token} state=enter")
+        } else if (!appBackground && wasBackground) {
+            events?.onLog("R38_ATTACHMENT_BACKGROUND_DEFER", "kind=$kind token=${item.token} state=exit deferredMs=${item.backgroundDeferredMs}")
+            resumeWebViewForBackgroundResync()
+        } else if (!appBackground && rawGap >= ATTACHMENT_SCHEDULER_GAP_MS) {
+            events?.onLog("R38_ATTACHMENT_SCHEDULER_GAP", "kind=$kind token=${item.token} gapMs=$rawGap deferredMs=$deferred")
+            resumeWebViewForBackgroundResync()
+        }
+        return appBackground || wasBackground || rawGap >= ATTACHMENT_SCHEDULER_GAP_MS
     }
 
     private fun finishAttachment(token: Int, ok: Boolean, detail: String) {
@@ -470,32 +528,126 @@ class AiStudioWebSessionExecutor(
                 val p = pending ?: return
                 if (p.seq != requestSeq) return
                 val now = SystemClock.uptimeMillis()
+                val rawGap = (now - p.lastWatchdogAt).coerceAtLeast(0L)
+                p.lastWatchdogAt = now
+                val appBackground = GeminiTranslateApp.currentActivity() == null
+                var suppressTimeoutThisTick = false
+
+                when {
+                    appBackground -> {
+                        shiftPendingTimeoutClocks(p, rawGap)
+                        p.backgroundDeferredMs += rawGap
+                        if (!p.wasBackground) {
+                            events?.onLog("R38_WATCHDOG_BACKGROUND_DEFER", "seq=$requestSeq state=enter responseChars=${p.lastResponseChars}")
+                        }
+                        p.wasBackground = true
+                        suppressTimeoutThisTick = true
+                    }
+                    p.wasBackground -> {
+                        shiftPendingTimeoutClocks(p, rawGap)
+                        p.backgroundDeferredMs += rawGap
+                        p.wasBackground = false
+                        events?.onLog("R38_WATCHDOG_BACKGROUND_DEFER", "seq=$requestSeq state=exit deferredMs=${p.backgroundDeferredMs} responseChars=${p.lastResponseChars}")
+                        resumeWebViewForBackgroundResync()
+                        resyncPendingRequest(requestSeq, "background-exit")
+                        suppressTimeoutThisTick = true
+                    }
+                    rawGap >= WATCHDOG_SCHEDULER_GAP_MS -> {
+                        val deferred = (rawGap - WATCHDOG_TICK_MS).coerceAtLeast(0L)
+                        shiftPendingTimeoutClocks(p, deferred)
+                        events?.onLog("R38_WATCHDOG_SCHEDULER_GAP", "seq=$requestSeq gapMs=$rawGap deferredMs=$deferred responseChars=${p.lastResponseChars}")
+                        resumeWebViewForBackgroundResync()
+                        resyncPendingRequest(requestSeq, "scheduler-gap")
+                        suppressTimeoutThisTick = true
+                    }
+                }
+
+                if (suppressTimeoutThisTick) {
+                    main.postDelayed(this, WATCHDOG_TICK_MS)
+                    return
+                }
+
                 val total = now - p.startedAt
                 val noProgressYet = p.firstProgressAt == 0L
                 val idle = if (p.lastProgressAt > 0L) now - p.lastProgressAt else total
+                val timeoutReason = when {
+                    total >= PROGRESS_HARD_TIMEOUT_MS -> "HARD_TIMEOUT totalMs=$total responseChars=${p.lastResponseChars}"
+                    noProgressYet && total >= FIRST_PROGRESS_TIMEOUT_MS -> "FIRST_PROGRESS_TIMEOUT totalMs=$total"
+                    !noProgressYet && idle >= PROGRESS_IDLE_TIMEOUT_MS -> "IDLE_TIMEOUT idleMs=$idle totalMs=$total responseChars=${p.lastResponseChars}"
+                    else -> null
+                }
 
-                when {
-                    total >= PROGRESS_HARD_TIMEOUT_MS -> {
-                        timeoutRequest(requestSeq, "HARD_TIMEOUT totalMs=$total responseChars=${p.lastResponseChars}")
+                if (timeoutReason != null) {
+                    if (p.timeoutProbeAt == 0L) {
+                        p.timeoutProbeAt = now
+                        p.timeoutReason = timeoutReason
+                        events?.onLog("R38_TIMEOUT_RESYNC", "seq=$requestSeq reason=$timeoutReason")
+                        resumeWebViewForBackgroundResync()
+                        resyncPendingRequest(requestSeq, "timeout-probe")
+                        main.postDelayed(this, TIMEOUT_RESYNC_GRACE_MS)
+                        return
                     }
-                    noProgressYet && total >= FIRST_PROGRESS_TIMEOUT_MS -> {
-                        timeoutRequest(requestSeq, "FIRST_PROGRESS_TIMEOUT totalMs=$total")
+                    if (now - p.timeoutProbeAt >= TIMEOUT_RESYNC_GRACE_MS) {
+                        events?.onLog("R38_TIMEOUT_CONFIRMED", "seq=$requestSeq reason=${p.timeoutReason} graceMs=${now - p.timeoutProbeAt}")
+                        timeoutRequest(requestSeq, p.timeoutReason)
+                        return
                     }
-                    !noProgressYet && idle >= PROGRESS_IDLE_TIMEOUT_MS -> {
-                        timeoutRequest(requestSeq, "IDLE_TIMEOUT idleMs=$idle totalMs=$total responseChars=${p.lastResponseChars}")
-                    }
-                    else -> {
-                        if (total % 10_000L < WATCHDOG_TICK_MS) {
-                            events?.onLog(
-                                "R12_PROGRESS_WATCHDOG",
-                                "seq=$requestSeq totalMs=$total firstProgress=${p.firstProgressAt > 0L} idleMs=$idle responseChars=${p.lastResponseChars}",
-                            )
-                        }
-                        main.postDelayed(this, WATCHDOG_TICK_MS)
+                } else {
+                    p.timeoutProbeAt = 0L
+                    p.timeoutReason = ""
+                    if (total % 10_000L < WATCHDOG_TICK_MS) {
+                        events?.onLog(
+                            "R12_PROGRESS_WATCHDOG",
+                            "seq=$requestSeq totalMs=$total firstProgress=${p.firstProgressAt > 0L} idleMs=$idle responseChars=${p.lastResponseChars}",
+                        )
                     }
                 }
+                main.postDelayed(this, WATCHDOG_TICK_MS)
             }
         }, WATCHDOG_TICK_MS)
+    }
+
+    private fun shiftPendingTimeoutClocks(p: Pending, deferredMs: Long) {
+        if (deferredMs <= 0L) return
+        p.startedAt += deferredMs
+        if (p.firstProgressAt > 0L) p.firstProgressAt += deferredMs
+        if (p.lastProgressAt > 0L) p.lastProgressAt += deferredMs
+        if (p.timeoutProbeAt > 0L) p.timeoutProbeAt += deferredMs
+    }
+
+    private fun resumeWebViewForBackgroundResync() {
+        runCatching { webView.onResume() }
+        runCatching { webView.resumeTimers() }
+    }
+
+    private fun resyncPendingRequest(requestSeq: Int, reason: String) {
+        if (pending?.seq != requestSeq) return
+        if (sttModeModel == null) {
+            readNormalized(requestSeq, "watchdog-resync-$reason")
+            return
+        }
+        val script = "JSON.stringify(window.__AIS_STT_PAGE__&&window.__AIS_STT_PAGE__.resultState?window.__AIS_STT_PAGE__.resultState():({ok:false,error:'stt-result-state-not-installed'}))"
+        webView.evaluateJavascript(script) { raw ->
+            if (pending?.seq != requestSeq) return@evaluateJavascript
+            val decoded = decodeEvalValue(raw)
+            val obj = runCatching { JSONObject(decoded) }.getOrNull()
+            val text = obj?.optString("text").orEmpty()
+            val responseChars = obj?.optInt("responseChars", 0) ?: 0
+            events?.onLog("R38_STT_TIMEOUT_RESYNC", "seq=$requestSeq reason=$reason chars=${text.length} responseChars=$responseChars terminal=${obj?.optBoolean("terminal", false)}")
+            recordProgress(requestSeq, maxOf(text.length, responseChars), "stt-timeout-resync")
+            if (text.isNotBlank()) {
+                finish(
+                    requestSeq,
+                    Result(
+                        ok = true,
+                        status = obj?.optInt("status", 200) ?: 200,
+                        modelText = text,
+                        complete = true,
+                        phase = "stt-dom-resync-result",
+                    ),
+                )
+            }
+        }
     }
 
     private fun recordProgress(requestSeq: Int, responseChars: Int, source: String) {
@@ -507,6 +659,8 @@ class AiStudioWebSessionExecutor(
         p.lastResponseChars = responseChars
         p.lastProgressAt = now
         if (p.firstProgressAt == 0L) p.firstProgressAt = now
+        p.timeoutProbeAt = 0L
+        p.timeoutReason = ""
         events?.onLog(
             "R12_PROGRESS_ACTIVITY",
             "seq=$requestSeq source=$source chars=$responseChars delta=${responseChars - previous} totalMs=${now - p.startedAt}",
@@ -892,7 +1046,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-06-web-session-r12.10-background-service"
+        const val VERSION = "2026-09-06-web-session-r12.11-background-resync"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"
@@ -903,6 +1057,10 @@ class AiStudioWebSessionExecutor(
         private const val PROGRESS_IDLE_TIMEOUT_MS = 60_000L
         private const val PROGRESS_HARD_TIMEOUT_MS = 900_000L
         private const val WATCHDOG_TICK_MS = 2_000L
+        private const val WATCHDOG_SCHEDULER_GAP_MS = 8_000L
+        private const val TIMEOUT_RESYNC_GRACE_MS = 15_000L
+        private const val ATTACHMENT_SCHEDULER_GAP_MS = 8_000L
+        private const val ATTACHMENT_POLL_EXPECTED_MS = 500L
         private const val ATTACHMENT_PARTIAL_POLL_MS = 850L
         private const val LEGACY_FALLBACK_CHECK_MS = 900L
         private const val NATIVE_SUBMIT_ACK_MS = 1_250L

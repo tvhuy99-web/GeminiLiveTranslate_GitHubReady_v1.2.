@@ -12,9 +12,15 @@ class AiStudioWebSessionExecutorSourceTest {
     @Test
     fun executorContainsOnlyCurrentVideoAndDedicatedSttGenerationPaths() {
         val executor = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt")
-        assertTrue(executor.contains("2026-09-06-web-session-r12.10-background-service"))
+        assertTrue(executor.contains("2026-09-06-web-session-r12.11-background-resync"))
         assertTrue(executor.contains("RENDERER_PRIORITY_IMPORTANT"))
         assertTrue(executor.contains("R37_WEBVIEW_BACKGROUND_POLICY"))
+        assertTrue(executor.contains("R38_WATCHDOG_BACKGROUND_DEFER"))
+        assertTrue(executor.contains("R38_WATCHDOG_SCHEDULER_GAP"))
+        assertTrue(executor.contains("R38_TIMEOUT_RESYNC"))
+        assertTrue(executor.contains("R38_TIMEOUT_CONFIRMED"))
+        assertTrue(executor.contains("R38_ATTACHMENT_SCHEDULER_GAP"))
+        assertTrue(executor.contains("R38_STT_TIMEOUT_RESYNC"))
         assertTrue(executor.contains("startFileTranscribe"))
         assertTrue(executor.contains("attachSttFile"))
         assertTrue(executor.contains("generateSttFileNative"))

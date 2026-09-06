@@ -214,7 +214,10 @@ class TranslationService : LifecycleService() {
             )
             ACTION_PAUSE -> pause()
             ACTION_RESUME -> resume()
-            ACTION_STOP -> stopTranslation()
+            ACTION_STOP -> {
+                if (_state.value.subtitleTranslationInProgress) stopSubtitleTranslation("Đã dừng dịch phụ đề")
+                else stopTranslation()
+            }
             ACTION_APPLY_SETTINGS -> {
                 applySettingsFromPreferences()
                 if (!_state.value.running) stopSelf(startId)
@@ -840,6 +843,7 @@ class TranslationService : LifecycleService() {
             )
         }
 
+        ensureStartedForSubtitleTranslation()
         subtitleTranslationJob?.cancel()
         subtitleTranslationJob = serviceScope.launch(Dispatchers.IO) {
             try {
@@ -945,8 +949,43 @@ class TranslationService : LifecycleService() {
                 }
             } finally {
                 subtitleTranslationJob = null
+                finishSubtitleTranslationForeground()
             }
         }
+    }
+
+    private fun ensureStartedForSubtitleTranslation() {
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, TranslationService::class.java).setAction(ACTION_SESSION_KEEP_ALIVE),
+        )
+        runCatching { acquireWakeLock() }.onFailure {
+            logger.log(0, "SubtitleTranslate", "Không tạo được wake lock cho dịch phụ đề", it)
+        }
+        notificationController.startDataSync(this, _state.value)
+        logger.log(2, "Service", "R38_SUBTITLE_BACKGROUND_OWNED processing=$processingMode")
+    }
+
+    private fun finishSubtitleTranslationForeground() {
+        releaseWakeLock()
+        notificationController.cancel()
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+        logger.log(2, "Service", "R38_SUBTITLE_BACKGROUND_RELEASED")
+    }
+
+    private fun stopSubtitleTranslation(message: String) {
+        subtitleTranslationJob?.cancel()
+        subtitleTranslationJob = null
+        updateState {
+            it.copy(
+                status = message,
+                subtitleTranslationInProgress = false,
+                subtitleShowingVietnamese = false,
+            )
+        }
+        scheduleHistorySave("subtitle-translate-stop")
+        finishSubtitleTranslationForeground()
     }
 
     fun toggleSubtitleLanguage() {

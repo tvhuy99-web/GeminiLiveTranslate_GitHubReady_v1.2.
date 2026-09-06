@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -89,12 +90,18 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var pageGeneration = 0
     @Volatile private var startSessionRecoveryAttempts = 0
     @Volatile private var lastStartSessionRecoveryAt = 0L
+    @Volatile private var lastHealthTickAt = 0L
+    @Volatile private var backgroundDeferredMs = 0L
+    @Volatile private var healthWasBackground = false
 
     fun connect() {
         if (closed.get()) return
         val now = SystemClock.elapsedRealtime()
         connectingStartedAt = now
         lastBootstrapProgressAt = now
+        lastHealthTickAt = now
+        backgroundDeferredMs = 0L
+        healthWasBackground = false
         lastBootstrapSignature = ""
         logger.log(
             2,
@@ -315,6 +322,17 @@ internal class AiStudioWebRealtimeClient(
     }
 
     private fun configureWebView(view: WebView) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            view.settings.offscreenPreRaster = true
+        }
+        logger.log(
+            2,
+            "AiStudioLive",
+            "R38_LIVE_WEBVIEW_BACKGROUND_POLICY rendererPriority=important waiveWhenNotVisible=false offscreenPreRaster=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.M}",
+        )
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -487,11 +505,55 @@ internal class AiStudioWebRealtimeClient(
         })()
     """.trimIndent()
 
+    private fun shiftLiveControlClocks(deferredMs: Long) {
+        if (deferredMs <= 0L) return
+        connectingStartedAt += deferredMs
+        lastBootstrapProgressAt += deferredMs
+        if (lastProgressAt > 0L) lastProgressAt += deferredMs
+        if (lastRouteRepairAt > 0L) lastRouteRepairAt += deferredMs
+        if (lastBootstrapRecoveryAt > 0L) lastBootstrapRecoveryAt += deferredMs
+        if (lastStartSessionRecoveryAt > 0L) lastStartSessionRecoveryAt += deferredMs
+    }
+
     private val healthTick = object : Runnable {
         override fun run() {
             if (closed.get()) return
             val current = webView ?: return
             val now = SystemClock.elapsedRealtime()
+            val rawHealthGap = (now - lastHealthTickAt).coerceAtLeast(0L)
+            lastHealthTickAt = now
+            val appBackground = GeminiTranslateApp.currentActivity() == null
+            var suppressTimeouts = false
+            when {
+                appBackground -> {
+                    shiftLiveControlClocks(rawHealthGap)
+                    backgroundDeferredMs += rawHealthGap
+                    if (!healthWasBackground) {
+                        logger.log(2, "AiStudioLive", "R38_LIVE_BACKGROUND_DEFER state=enter operation=$operationMode")
+                    }
+                    healthWasBackground = true
+                    suppressTimeouts = true
+                    runCatching { current.onResume() }
+                    runCatching { current.resumeTimers() }
+                }
+                healthWasBackground -> {
+                    shiftLiveControlClocks(rawHealthGap)
+                    backgroundDeferredMs += rawHealthGap
+                    healthWasBackground = false
+                    suppressTimeouts = true
+                    logger.log(2, "AiStudioLive", "R38_LIVE_BACKGROUND_DEFER state=exit deferredMs=$backgroundDeferredMs operation=$operationMode")
+                    runCatching { current.onResume() }
+                    runCatching { current.resumeTimers() }
+                }
+                rawHealthGap >= HEALTH_SCHEDULER_GAP_MS -> {
+                    val deferred = (rawHealthGap - HEALTH_TICK_MS).coerceAtLeast(0L)
+                    shiftLiveControlClocks(deferred)
+                    suppressTimeouts = true
+                    logger.log(1, "AiStudioLive", "R38_LIVE_SCHEDULER_GAP gapMs=$rawHealthGap deferredMs=$deferred operation=$operationMode")
+                    runCatching { current.onResume() }
+                    runCatching { current.resumeTimers() }
+                }
+            }
             val currentUri = runCatching { Uri.parse(current.url.orEmpty()) }.getOrNull()
             val host = currentUri?.host.orEmpty()
 
@@ -513,7 +575,7 @@ internal class AiStudioWebRealtimeClient(
                 return
             }
 
-            if (!setupDelivered.get()) {
+            if (!suppressTimeouts && !setupDelivered.get()) {
                 val stalledFor = now - lastBootstrapProgressAt.coerceAtLeast(connectingStartedAt)
                 val totalFor = now - connectingStartedAt
                 if (totalFor > SETUP_HARD_TIMEOUT_MS || stalledFor > SETUP_STALL_TIMEOUT_MS) {
@@ -526,7 +588,7 @@ internal class AiStudioWebRealtimeClient(
                     return
                 }
             }
-            if (setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
+            if (!suppressTimeouts && setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
                 fail(IllegalStateException("AI_STUDIO_LIVE_CARRIER_STALE"))
                 return
             }
@@ -825,12 +887,13 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-05-production-ai-studio-live-r7-fast-start-recovery-debug"
+        const val VERSION = "2026-09-06-production-ai-studio-live-r8-background-resync"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val AI_STUDIO_LIVE = "https://aistudio.google.com/live"
         private const val HEALTH_TICK_MS = 650L
+        private const val HEALTH_SCHEDULER_GAP_MS = 5_000L
         private const val SETUP_STALL_TIMEOUT_MS = 20_000L
         private const val SETUP_HARD_TIMEOUT_MS = 120_000L
         private const val LIVE_STALE_TIMEOUT_MS = 12_000L

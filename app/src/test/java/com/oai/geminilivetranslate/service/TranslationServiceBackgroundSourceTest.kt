@@ -18,6 +18,18 @@ class TranslationServiceBackgroundSourceTest {
     }
 
     @Test
+    fun subtitleTranslationAlsoOwnsForegroundLifecycle() {
+        val service = source("src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt")
+        val notification = source("src/main/java/com/oai/geminilivetranslate/service/NotificationController.kt")
+        val manifest = source("src/main/AndroidManifest.xml")
+        assertTrue(service.contains("ensureStartedForSubtitleTranslation()"))
+        assertTrue(service.contains("R38_SUBTITLE_BACKGROUND_OWNED"))
+        assertTrue(notification.contains("FOREGROUND_SERVICE_TYPE_DATA_SYNC"))
+        assertTrue(manifest.contains("FOREGROUND_SERVICE_DATA_SYNC"))
+        assertTrue(manifest.contains("mediaPlayback|dataSync"))
+    }
+
+    @Test
     fun rebindingSameFileCannotStopRunningFileSession() {
         val service = source("src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt")
         val main = source("src/main/java/com/oai/geminilivetranslate/MainActivity.kt")

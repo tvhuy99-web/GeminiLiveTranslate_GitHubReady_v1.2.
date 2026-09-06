@@ -1,0 +1,120 @@
+name: R18.30 Background Resync
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - tools/r1830_background_resync_patch.py
+      - .github/workflows/r1830-background-resync.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.30 patch
+        run: python3 tools/r1830_background_resync_patch.py
+
+      - name: Verify R18.30 source markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXEC=app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          LIVE=app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt
+          SERVICE=app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -F 'r12.11-background-resync' "$EXEC"
+          grep -F 'R38_WATCHDOG_BACKGROUND_DEFER' "$EXEC"
+          grep -F 'R38_TIMEOUT_RESYNC' "$EXEC"
+          grep -F 'R38_STT_TIMEOUT_RESYNC' "$EXEC"
+          grep -F 'R38_ATTACHMENT_TIMEOUT_CONFIRMED' "$EXEC"
+          grep -F 'r8-background-resync' "$LIVE"
+          grep -F 'R38_LIVE_BACKGROUND_DEFER' "$LIVE"
+          grep -F 'R38_LIVE_SCHEDULER_GAP' "$LIVE"
+          grep -F 'R38_SUBTITLE_BACKGROUND_OWNED' "$SERVICE"
+          grep -F 'FOREGROUND_SERVICE_DATA_SYNC' app/src/main/AndroidManifest.xml
+          grep -F '"tag","STT_RUN"' "$EXEC"
+          grep -F '"role","stt-run"' "$EXEC"
+          ! grep -F 'performAccessibilityAction' "$EXEC"
+
+      - name: Repository checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .github/workflows/android-pr-checks.yml
+
+      - name: Test assemble lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee /tmp/apksigner.txt
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' /tmp/apksigner.txt
+          grep -F 'Verified using v3 scheme (APK Signature Scheme v3): true' /tmp/apksigner.txt
+          sha256sum "$APK" | tee /tmp/apk.sha256
+          stat -c '%s bytes' "$APK"
+
+      - name: Commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -- gradlew
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            app/src/main/AndroidManifest.xml \
+            app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt \
+            app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt \
+            app/src/main/java/com/oai/geminilivetranslate/service/NotificationController.kt \
+            app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt \
+            app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionExecutorSourceTest.kt \
+            app/src/test/java/com/oai/geminilivetranslate/network/AiStudioBackgroundTimingSourceTest.kt \
+            app/src/test/java/com/oai/geminilivetranslate/service/TranslationServiceBackgroundSourceTest.kt
+          git diff --cached --check
+          git commit -m 'R18.30: resync AI Studio background timing across modes'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Package artifact metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/GeminiLiveTranslate-R18.30-background-resync.apk
+          sha256sum artifact/GeminiLiveTranslate-R18.30-background-resync.apk > artifact/SHA256SUMS.txt
+          cp /tmp/apksigner.txt artifact/APKSIGNER.txt
+          printf 'source_workflow_trigger=%s\n' "$GITHUB_SHA" > artifact/BUILD.txt
+          printf 'verified_source_commit=%s\n' "$(git rev-parse HEAD)" >> artifact/BUILD.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.30-background-resync
+          path: artifact/
+          if-no-files-found: error

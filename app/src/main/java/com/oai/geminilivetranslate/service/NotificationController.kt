@@ -38,6 +38,15 @@ class NotificationController(private val context: Context) {
         ServiceCompat.startForeground(service, NOTIFICATION_ID, build(state), type)
     }
 
+    fun startDataSync(service: TranslationService, state: SessionUiState) {
+        ServiceCompat.startForeground(
+            service,
+            NOTIFICATION_ID,
+            build(state),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
+    }
+
     fun update(state: SessionUiState) {
         manager.notify(NOTIFICATION_ID, build(state))
     }
@@ -71,18 +80,19 @@ class NotificationController(private val context: Context) {
             SourceMode.MICROPHONE -> "Microphone"
             SourceMode.INTERNAL -> "Âm thanh nội bộ"
         }
-        return NotificationCompat.Builder(context, channel)
+        val active = state.running || state.subtitleTranslationInProgress
+        val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_app)
             .setContentTitle("Gemini Live Translate")
             .setContentText(if (state.running) "$mode → ${state.currentLanguage}: ${state.status}" else state.status)
             .setContentIntent(contentIntent)
-            .setOngoing(state.running)
+            .setOngoing(active)
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .addAction(0, pauseLabel, pauseIntent)
-            .addAction(0, "Dừng", stopIntent)
-            .build()
+        if (state.running) builder.addAction(0, pauseLabel, pauseIntent)
+        builder.addAction(0, "Dừng", stopIntent)
+        return builder.build()
     }
 
     companion object {

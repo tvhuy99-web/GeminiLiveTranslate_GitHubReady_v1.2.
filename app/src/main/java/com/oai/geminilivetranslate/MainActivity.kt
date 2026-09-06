@@ -131,14 +131,7 @@ class MainActivity : AppCompatActivity() {
         }
         val name = displayName(uri)
         logger.log(2, "UI", "Đã chọn tệp name=${name ?: uri.lastPathSegment} uriScheme=${uri.scheme}")
-        val service = translationService
-        if (service != null) {
-            service.setSelectedFile(uri, name)
-        } else {
-            pendingSelectedUri = uri
-            pendingSelectedFileName = name
-        }
-        binding.selectFileButton.text = name ?: "Tệp đã chọn"
+        rememberSelectedFile(uri, name)
         toast("Đã chọn: ${name ?: uri.lastPathSegment}")
     }
 
@@ -245,10 +238,14 @@ class MainActivity : AppCompatActivity() {
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
                 syncFileSpeedUi(selectedFilePlaybackSpeed)
             }
-            pendingSelectedUri?.let { uri ->
-                translationService?.setSelectedFile(uri, pendingSelectedFileName)
-                pendingSelectedUri = null
-                pendingSelectedFileName = null
+            val activeSession = translationService?.state?.value?.running == true
+            restorePersistedSelectedFile("service-connected", applyToService = !activeSession)
+            if (activeSession) {
+                logger.log(
+                    2,
+                    "Service",
+                    "R37_SERVICE_REBIND_ACTIVE preserved=true transcriptChars=${translationService?.state?.value?.transcript?.length ?: 0}",
+                )
             }
             pendingHistorySessionId?.let { historyId ->
                 pendingHistorySessionId = null
@@ -295,6 +292,7 @@ class MainActivity : AppCompatActivity() {
         resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
         logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x playbackReturn=${resumeHistoryAfterPlaybackId ?: "none"}")
         setupUi()
+        restorePersistedSelectedFile("create", applyToService = false)
         requestNotificationPermissionIfNeeded()
     }
 
@@ -322,6 +320,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         restorePreferencesUi()
+        restorePersistedSelectedFile("resume", applyToService = false)
     }
 
     private fun setupUi() = with(binding) {
@@ -660,6 +659,9 @@ class MainActivity : AppCompatActivity() {
             pendingStartMode = mode
             ensureServiceStarted()
             return
+        }
+        if (mode == SourceMode.FILE) {
+            restorePersistedSelectedFile("before-start", applyToService = true)
         }
         service.setSourceMode(mode)
         service.setProcessingMode(preferences.loadProcessingMode())
@@ -1086,6 +1088,62 @@ class MainActivity : AppCompatActivity() {
         if (it.moveToFirst()) it.getString(0) else null
     }
 
+    private fun rememberSelectedFile(uri: Uri, name: String?) {
+        pendingSelectedUri = uri
+        pendingSelectedFileName = name
+        uiPrefs.edit()
+            .putString(KEY_SELECTED_FILE_URI, uri.toString())
+            .putString(KEY_SELECTED_FILE_NAME, name)
+            .apply()
+        translationService?.setSelectedFile(uri, name)
+        binding.selectFileButton.text = name ?: displayName(uri) ?: "Tệp đã chọn"
+        logger.log(
+            2,
+            "UI",
+            "R33_SELECTED_FILE_PERSISTED name=${name ?: uri.lastPathSegment ?: "unknown"} uriScheme=${uri.scheme}",
+        )
+    }
+
+    private fun restorePersistedSelectedFile(reason: String, applyToService: Boolean): Boolean {
+        val raw = uiPrefs.getString(KEY_SELECTED_FILE_URI, null)?.takeIf(String::isNotBlank)
+            ?: return false
+        val uri = runCatching { Uri.parse(raw) }.getOrNull() ?: return false
+        val storedName = uiPrefs.getString(KEY_SELECTED_FILE_NAME, null)?.takeIf(String::isNotBlank)
+        val hasPersistedReadGrant = contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isReadPermission
+        }
+        val readable = hasPersistedReadGrant || runCatching {
+            contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false
+        }.getOrDefault(false)
+        if (!readable) {
+            uiPrefs.edit()
+                .remove(KEY_SELECTED_FILE_URI)
+                .remove(KEY_SELECTED_FILE_NAME)
+                .apply()
+            pendingSelectedUri = null
+            pendingSelectedFileName = null
+            logger.log(
+                1,
+                "UI",
+                "R33_SELECTED_FILE_RESTORE_FAILED reason=$reason uriScheme=${uri.scheme} persistedGrant=$hasPersistedReadGrant",
+            )
+            return false
+        }
+        val name = storedName ?: displayName(uri)
+        pendingSelectedUri = uri
+        pendingSelectedFileName = name
+        if (applyToService) translationService?.setSelectedFile(uri, name)
+        if (::binding.isInitialized) {
+            binding.selectFileButton.text = name ?: "Tệp đã chọn"
+        }
+        logger.log(
+            2,
+            "UI",
+            "R33_SELECTED_FILE_RESTORED reason=$reason applyToService=$applyToService name=${name ?: uri.lastPathSegment ?: "unknown"} uriScheme=${uri.scheme} persistedGrant=$hasPersistedReadGrant",
+        )
+        return true
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -1117,5 +1175,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SOURCE_MODE = "lastSourceMode"
         private const val STATE_PLAYBACK_RETURN_SESSION_ID = "state.playbackReturnSessionId"
         private const val KEY_FILE_PLAYBACK_SPEED = "filePlaybackSpeed"
+        private const val KEY_SELECTED_FILE_URI = "selectedFileUri"
+        private const val KEY_SELECTED_FILE_NAME = "selectedFileName"
     }
 }

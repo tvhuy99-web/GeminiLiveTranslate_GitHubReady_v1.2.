@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <queries>
         <intent>
@@ -30,31 +31,20 @@
         android:theme="@style/Theme.GeminiLiveTranslate"
         android:usesCleartextTraffic="false">
 
+        <activity android:name=".ui.HistoryActivity" android:exported="false" />
+        <activity android:name=".ui.SubtitlePlaybackActivity" android:exported="false" />
+        <activity android:name=".ui.LogViewerActivity" android:exported="false" />
+        <activity android:name=".ui.TtsSettingsActivity" android:exported="false" />
+        <activity android:name=".ui.ApiSettingsActivity" android:exported="false" />
         <activity
-            android:name=".ui.HistoryActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SubtitlePlaybackActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.LogViewerActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.TtsSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.ApiSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.SettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ui.MiniBrowserActivity"
+            android:name=".ui.AiStudioAccountActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize" />
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="Tài khoản Google / AI Studio" />
+        <activity android:name=".ui.SettingsActivity" android:exported="false" />
+        <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
+
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -64,7 +54,7 @@
         <service
             android:name=".service.TranslationService"
             android:exported="false"
-            android:foregroundServiceType="microphone|mediaProjection|mediaPlayback" />
+            android:foregroundServiceType="microphone|mediaProjection|mediaPlayback|dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

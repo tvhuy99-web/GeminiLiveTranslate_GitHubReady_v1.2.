@@ -1,0 +1,85 @@
+name: R18.29 Background Service
+
+on:
+  push:
+    branches:
+      - experiment/aistudio-r183-network-vi
+    paths:
+      - '.github/workflows/r1829-background-service.yml'
+      - 'tools/r1829_background_service_patch.py'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/aistudio-r183-network-vi
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply R18.29 patch
+        run: python3 tools/r1829_background_service_patch.py
+
+      - name: Verify R18.29 source markers
+        run: |
+          grep -q 'R37_BACKGROUND_SESSION_OWNED' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'R37_SELECTED_FILE_REAPPLY_IGNORED' app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          grep -q 'R37_SERVICE_REBIND_ACTIVE' app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          grep -q 'R37_WEBVIEW_BACKGROUND_POLICY' app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          grep -q 'TranslationServiceBackgroundSourceTest' app/src/test/java/com/oai/geminilivetranslate/service/TranslationServiceBackgroundSourceTest.kt
+
+      - name: Repository checks
+        run: |
+          python3 tools/check_no_secrets.py
+          python3 tools/verify_project.py
+
+      - name: Test assemble lint
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace clean testDebugUnitTest assembleDebug lintDebug
+
+      - name: Verify APK
+        run: |
+          python3 tools/verify_apk.py app/build/outputs/apk/debug/app-debug.apk
+          ${ANDROID_HOME}/build-tools/$(ls ${ANDROID_HOME}/build-tools | sort -V | tail -1)/apksigner verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Package artifact metadata
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk GeminiLiveTranslate-R18.29-background-service.apk
+          sha256sum GeminiLiveTranslate-R18.29-background-service.apk > sha256.txt
+
+      - name: Commit verified source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          git add app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebSessionExecutor.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionExecutorSourceTest.kt
+          git add app/src/test/java/com/oai/geminilivetranslate/service/TranslationServiceBackgroundSourceTest.kt
+          if ! git diff --cached --quiet; then
+            git commit -m 'R18.29: keep all active modes running in background'
+            git push origin HEAD:experiment/aistudio-r183-network-vi
+          fi
+          git rev-parse HEAD > source_commit.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeminiLiveTranslate-R18.29-background-service
+          path: |
+            GeminiLiveTranslate-R18.29-background-service.apk
+            sha256.txt
+            source_commit.txt
+          if-no-files-found: error

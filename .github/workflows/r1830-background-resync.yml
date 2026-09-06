@@ -6,6 +6,7 @@ on:
       - experiment/aistudio-r183-network-vi
     paths:
       - tools/r1830_background_resync_patch.py
+      - tools/r1830_background_resync_fixup.py
       - .github/workflows/r1830-background-resync.yml
   workflow_dispatch:
 
@@ -29,7 +30,9 @@ jobs:
           java-version: '17'
 
       - name: Apply R18.30 patch
-        run: python3 tools/r1830_background_resync_patch.py
+        run: |
+          python3 tools/r1830_background_resync_patch.py
+          python3 tools/r1830_background_resync_fixup.py
 
       - name: Verify R18.30 source markers
         shell: bash

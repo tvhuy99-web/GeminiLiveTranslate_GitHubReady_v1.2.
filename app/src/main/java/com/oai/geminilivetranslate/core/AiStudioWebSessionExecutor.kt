@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -799,6 +800,16 @@ class AiStudioWebSessionExecutor(
     }
 
     private fun configureWebView() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            webView.settings.offscreenPreRaster = true
+        }
+        events?.onLog(
+            "R37_WEBVIEW_BACKGROUND_POLICY",
+            "rendererPriority=important waiveWhenNotVisible=false offscreenPreRaster=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.M}",
+        )
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -881,7 +892,7 @@ class AiStudioWebSessionExecutor(
     }
 
     companion object {
-        const val VERSION = "2026-09-06-web-session-r12.9-json-completion-guard"
+        const val VERSION = "2026-09-06-web-session-r12.10-background-service"
         private const val JS_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"
         private const val NEW_CHAT_URL = "https://aistudio.google.com/prompts/new_chat"

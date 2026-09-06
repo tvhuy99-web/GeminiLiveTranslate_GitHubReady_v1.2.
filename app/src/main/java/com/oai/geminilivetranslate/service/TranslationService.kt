@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import com.oai.geminilivetranslate.audio.AudioSource
 import com.oai.geminilivetranslate.audio.FileAudioSource
@@ -206,6 +207,11 @@ class TranslationService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_SESSION_KEEP_ALIVE -> logger.log(
+                3,
+                "Service",
+                "R37_BACKGROUND_SERVICE_STARTED running=${_state.value.running} source=$currentMode processing=$processingMode",
+            )
             ACTION_PAUSE -> pause()
             ACTION_RESUME -> resume()
             ACTION_STOP -> stopTranslation()
@@ -272,13 +278,24 @@ class TranslationService : LifecycleService() {
     }
 
     fun setSelectedFile(uri: Uri, name: String?) {
+        val resolvedName = name ?: uri.lastPathSegment
+        if (_state.value.running && currentMode == SourceMode.FILE && selectedUri == uri) {
+            selectedFileName = resolvedName ?: selectedFileName
+            _state.update { it.copy(selectedUri = uri, selectedFileName = selectedFileName) }
+            logger.log(
+                2,
+                "Service",
+                "R37_SELECTED_FILE_REAPPLY_IGNORED running=true name=${selectedFileName ?: "unknown"}",
+            )
+            return
+        }
         if (_state.value.running && currentMode == SourceMode.FILE) {
             stopTranslation("Đã dừng do đổi tệp")
         } else {
             saveCurrentHistoryNow("before-file-change")
         }
         selectedUri = uri
-        selectedFileName = name ?: uri.lastPathSegment
+        selectedFileName = resolvedName
         _state.update { it.copy(selectedUri = uri, selectedFileName = selectedFileName) }
         beginHistorySession(SourceMode.FILE, "file-selected")
     }
@@ -399,6 +416,7 @@ class TranslationService : LifecycleService() {
             videoDescriptionMode = videoDescriptionMode,
         )
         _state.value = initialState
+        ensureStartedForActiveSession()
         notificationController.start(this, initialState)
 
         if (isVideoDescriptionMode()) {
@@ -2691,6 +2709,18 @@ class TranslationService : LifecycleService() {
         savedMediaVolume = null
     }
 
+    private fun ensureStartedForActiveSession() {
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, TranslationService::class.java).setAction(ACTION_SESSION_KEEP_ALIVE),
+        )
+        logger.log(
+            2,
+            "Service",
+            "R37_BACKGROUND_SESSION_OWNED source=$currentMode processing=$processingMode",
+        )
+    }
+
     private fun acquireWakeLock() {
         val manager = getSystemService(PowerManager::class.java)
         wakeLock = manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:translation").apply {
@@ -2829,6 +2859,7 @@ class TranslationService : LifecycleService() {
         private const val TRANSCRIBE_LIVE_ROTATE_MS = 9L * 60L * 1_000L
         private const val MAX_TRANSCRIBE_FILE_DURATION_MS = 30L * 60L * 1_000L
         private const val HISTORY_SAVE_DEBOUNCE_MS = 750L
+        const val ACTION_SESSION_KEEP_ALIVE = "com.oai.geminilivetranslate.SESSION_KEEP_ALIVE"
         const val ACTION_PAUSE = "com.oai.geminilivetranslate.PAUSE"
         const val ACTION_RESUME = "com.oai.geminilivetranslate.RESUME"
         const val ACTION_STOP = "com.oai.geminilivetranslate.STOP"

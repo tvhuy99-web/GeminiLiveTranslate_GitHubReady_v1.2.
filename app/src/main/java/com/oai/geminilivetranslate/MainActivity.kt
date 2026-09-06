@@ -238,7 +238,15 @@ class MainActivity : AppCompatActivity() {
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
                 syncFileSpeedUi(selectedFilePlaybackSpeed)
             }
-            restorePersistedSelectedFile("service-connected", applyToService = true)
+            val activeSession = translationService?.state?.value?.running == true
+            restorePersistedSelectedFile("service-connected", applyToService = !activeSession)
+            if (activeSession) {
+                logger.log(
+                    2,
+                    "Service",
+                    "R37_SERVICE_REBIND_ACTIVE preserved=true transcriptChars=${translationService?.state?.value?.transcript?.length ?: 0}",
+                )
+            }
             pendingHistorySessionId?.let { historyId ->
                 pendingHistorySessionId = null
                 translationService?.let { service ->

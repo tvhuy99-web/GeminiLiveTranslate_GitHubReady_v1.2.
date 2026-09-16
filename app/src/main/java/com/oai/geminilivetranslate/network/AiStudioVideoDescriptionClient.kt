@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.oai.geminilivetranslate.GeminiTranslateApp
+import com.oai.geminilivetranslate.core.AiStudioRequestGateway
 import com.oai.geminilivetranslate.core.AiStudioWebSessionExecutor
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.VideoDescriptionPromptDefaults
@@ -30,6 +31,7 @@ class AiStudioVideoDescriptionClient(
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var cancelled = false
     @Volatile private var executor: AiStudioWebSessionExecutor? = null
+    @Volatile private var requestGateway: AiStudioRequestGateway? = null
 
     fun describe(
         resolver: ContentResolver,
@@ -55,6 +57,7 @@ class AiStudioVideoDescriptionClient(
         onProgress("Đang mở phiên AI Studio đã đăng nhập...", 2)
 
         val exec = createAndAwaitReady()
+        installRequestGateway(exec)
         throwIfCancelled()
         onProgress("Đang chọn model mô tả video...", 8)
         selectModel(exec)
@@ -106,6 +109,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
                 onPartial(displayPartial)
             }
         }
+        logRequestGatewayStatus("after-generate")
         val output = webResult.modelText.trim()
         if (output.isBlank()) error("AI Studio không trả nội dung mô tả")
         if (includeOutputInLogs) logger.log(3, TAG, "Output preview=${output.replace('\n', ' ').take(2000)}")
@@ -145,6 +149,8 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
 
     fun cancel() {
         cancelled = true
+        requestGateway?.abortAll()
+        requestGateway = null
         val current = executor
         executor = null
         main.post { current?.destroy() }
@@ -180,7 +186,7 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
                     }
                     override fun onLog(name: String, detail: String) {
                         val level = when {
-                            name.startsWith("R35_") || name.startsWith("JS_R35_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") -> 2
+                            name.startsWith("R35_") || name.startsWith("JS_R35_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R19_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("REQUEST_GATEWAY_") || name.startsWith("JS_REQUEST_GATEWAY_") -> 2
                             name.contains("ERROR") || name.contains("TIMEOUT") -> 1
                             else -> 3
                         }
@@ -196,6 +202,37 @@ Cấu trúc chính xác: {"text":"Bản tường thuật tổng hợp bằng ti�
         throwIfCancelled()
         failure.get()?.let { error(it) }
         return holder.get() ?: error("Không tạo được AI Studio Web Session")
+    }
+
+    private fun installRequestGateway(exec: AiStudioWebSessionExecutor) {
+        val gateway = AiStudioRequestGateway(exec.webView)
+        requestGateway = gateway
+        val latch = CountDownLatch(1)
+        val statusRef = AtomicReference<AiStudioRequestGateway.Status?>()
+        gateway.install { status ->
+            statusRef.set(status)
+            latch.countDown()
+        }
+        if (!latch.await(5, TimeUnit.SECONDS)) {
+            logger.log(1, TAG, "REQUEST_GATEWAY_INSTALL_TIMEOUT")
+            return
+        }
+        val status = statusRef.get()
+        logger.log(
+            if (status?.available == true) 2 else 1,
+            TAG,
+            "REQUEST_GATEWAY_INSTALL available=${status?.available} version=${status?.version.orEmpty()} templateReady=${status?.templateReady} proofReady=${status?.proofReady} error=${status?.error.orEmpty().take(300)}",
+        )
+    }
+
+    private fun logRequestGatewayStatus(stage: String) {
+        requestGateway?.status { status ->
+            logger.log(
+                if (status.available) 2 else 1,
+                TAG,
+                "REQUEST_GATEWAY_STATUS stage=$stage available=${status.available} templateReady=${status.templateReady} model=${status.templateModel} fingerprint=${status.templateFingerprint} bodyChars=${status.templateBodyChars} proofReady=${status.proofReady} proofFunctionDetected=${status.proofFunctionDetected} active=${status.activeRequests} error=${status.error.take(300)}",
+            )
+        }
     }
 
     private fun selectModel(exec: AiStudioWebSessionExecutor) {

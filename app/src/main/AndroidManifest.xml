@@ -43,6 +43,10 @@
             android:label="Tài khoản Google / AI Studio" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
+        <activity
+            android:name=".ui.LiveVideoDescriptionActivity"
+            android:exported="false"
+            android:label="Mô tả video trực tiếp" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
@@ -55,6 +59,10 @@
             android:name=".service.TranslationService"
             android:exported="false"
             android:foregroundServiceType="microphone|mediaProjection|mediaPlayback|dataSync" />
+        <service
+            android:name=".service.LiveVideoDescriptionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|mediaPlayback" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

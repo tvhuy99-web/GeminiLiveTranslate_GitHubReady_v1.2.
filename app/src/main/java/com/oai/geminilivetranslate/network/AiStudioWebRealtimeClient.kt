@@ -161,9 +161,7 @@ internal class AiStudioWebRealtimeClient(
         if (closed.get()) return GeminiLiveClient.SendResult.CLOSED
         if (!setupDelivered.get()) return GeminiLiveClient.SendResult.NOT_READY
         val current = webView ?: return GeminiLiveClient.SendResult.NOT_READY
-        val now = SystemClock.elapsedRealtime()
-        lastInputAt = now
-        lastProgressAt = now
+        lastInputAt = SystemClock.elapsedRealtime()
         val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
         if (encoded.length > SCREEN_DESCRIPTION_MAX_BASE64_CHARS) {
             backpressureEvents.incrementAndGet()

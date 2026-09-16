@@ -8,7 +8,7 @@ package com.oai.geminilivetranslate.ui
  * shape is rejected instead of being rewritten heuristically.
  */
 object AiStudioRequestGatewayScript {
-    const val VERSION = "2026-09-16-request-gateway-v1"
+    const val VERSION = "2026-09-16-request-gateway-v1.1-safe-text-replay"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -42,7 +42,7 @@ object AiStudioRequestGatewayScript {
 
           function isGenerateUrl(raw) {
             const s = String(raw || '');
-            return /MakerSuiteService\/(?:GenerateContent|BidiGenerateContent)/i.test(s) || /\/GenerateContent(?:$|[/?])/i.test(s);
+            return /MakerSuiteService\/GenerateContent/i.test(s) || /\/GenerateContent(?:$|[/?])/i.test(s);
           }
 
           function normalizeModel(raw) {
@@ -86,6 +86,36 @@ object AiStudioRequestGatewayScript {
             } catch (e) {
               return {ok:false,error:'INVALID_JSON',detail:String(e||'').slice(0,300),fingerprint:''};
             }
+          }
+
+          function analyzeTextReplaySafety(contents) {
+            const out = {
+              safe:false,
+              contentCount:Array.isArray(contents)?contents.length:0,
+              userContentCount:0,
+              textPartCount:0,
+              nonTextPartCount:0
+            };
+            if (!Array.isArray(contents)) return out;
+            for (let i=0;i<contents.length;i++) {
+              const content = contents[i];
+              if (!Array.isArray(content) || !Array.isArray(content[0])) {
+                out.nonTextPartCount += 1;
+                continue;
+              }
+              if (content[1] === 'user') out.userContentCount += 1;
+              const parts = content[0];
+              for (let j=0;j<parts.length;j++) {
+                const part = parts[j];
+                const plainText = Array.isArray(part) && part.length >= 2 &&
+                  (part[0] === null || typeof part[0] === 'undefined') && typeof part[1] === 'string';
+                if (plainText) out.textPartCount += 1;
+                else out.nonTextPartCount += 1;
+              }
+            }
+            out.safe = out.contentCount === 1 && out.userContentCount === 1 &&
+              out.textPartCount === 1 && out.nonTextPartCount === 0;
+            return out;
           }
 
           function replaceLastUserText(contents, prompt) {
@@ -146,6 +176,7 @@ object AiStudioRequestGatewayScript {
               emit('REQUEST_GATEWAY_CAPTURE_REJECTED',{source:String(source||''),error:inspected.error,fingerprint:inspected.fingerprint||'',bodyChars:body.length});
               return;
             }
+            const textSafety = analyzeTextReplaySafety(inspected.root[CONTENTS_INDEX]);
             const key = templateKey(inspected.model);
             templates[key] = {
               source:String(source||''),
@@ -155,12 +186,19 @@ object AiStudioRequestGatewayScript {
               body:String(body),
               model:inspected.model,
               fingerprint:inspected.fingerprint,
+              textReplaySafe:!!textSafety.safe,
+              contentCount:Number(textSafety.contentCount||0),
+              textPartCount:Number(textSafety.textPartCount||0),
+              nonTextPartCount:Number(textSafety.nonTextPartCount||0),
               capturedAt:Date.now()
             };
             lastTemplateKey = key;
             emit('REQUEST_GATEWAY_TEMPLATE_CAPTURED',{
               source:String(source||''),model:inspected.model,fingerprint:inspected.fingerprint,
-              bodyChars:body.length,headerNames:Object.keys(templates[key].headers).slice(0,40)
+              bodyChars:body.length,textReplaySafe:!!textSafety.safe,
+              contentCount:Number(textSafety.contentCount||0),textPartCount:Number(textSafety.textPartCount||0),
+              nonTextPartCount:Number(textSafety.nonTextPartCount||0),
+              headerNames:Object.keys(templates[key].headers).slice(0,40)
             });
           }
 
@@ -232,8 +270,8 @@ object AiStudioRequestGatewayScript {
           }
 
           function chooseTemplate(model) {
-            const requested = templateKey(model);
-            if (templates[requested]) return templates[requested];
+            const requestedModel = normalizeModel(model);
+            if (requestedModel) return templates[templateKey(requestedModel)] || null;
             if (lastTemplateKey && templates[lastTemplateKey]) return templates[lastTemplateKey];
             const keys = Object.keys(templates);
             return keys.length ? templates[keys[keys.length-1]] : null;
@@ -271,8 +309,13 @@ object AiStudioRequestGatewayScript {
             const item = active[id];
             if (!item) return;
             try {
-              const template = chooseTemplate(args && args.model);
-              if (!template) throw new Error('NO_CAPTURED_TEMPLATE');
+              const requestedModel = normalizeModel(args && args.model);
+              if (!requestedModel) throw new Error('MODEL_REQUIRED');
+              const template = chooseTemplate(requestedModel);
+              if (!template) throw new Error('TEMPLATE_MODEL_NOT_CAPTURED');
+              if (normalizeModel(template.model) !== requestedModel) throw new Error('TEMPLATE_MODEL_MISMATCH');
+              if (!args || args.textOnly !== true) throw new Error('TEXT_REPLAY_FLAG_REQUIRED');
+              if (!template.textReplaySafe) throw new Error('TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE');
               const prompt = String(args && args.prompt || '');
               let snapshot = null;
               if (!args || args.refreshSnapshot !== false) snapshot = await generateSnapshot(prompt);
@@ -320,7 +363,7 @@ object AiStudioRequestGatewayScript {
                   phase:'gateway-'+kind,
                   error:status>=200&&status<300?'':('HTTP_'+status),
                   fingerprint:template.fingerprint,
-                  model:normalizeModel(args && args.model || template.model)
+                  model:requestedModel
                 };
                 emit('REQUEST_GATEWAY_REPLAY_DONE',{
                   id:id,ok:item.result.ok,status:status,responseChars:raw.length,
@@ -388,6 +431,10 @@ object AiStudioRequestGatewayScript {
               templateModel:tpl?tpl.model:'',
               templateFingerprint:tpl?tpl.fingerprint:'',
               templateBodyChars:tpl?tpl.body.length:0,
+              textReplaySafe:!!(tpl&&tpl.textReplaySafe),
+              templateContentCount:tpl?Number(tpl.contentCount||0):0,
+              templateTextPartCount:tpl?Number(tpl.textPartCount||0):0,
+              templateNonTextPartCount:tpl?Number(tpl.nonTextPartCount||0):0,
               proofHookInstalled:!!proofHookInstalled,
               proofReady:!!(proofService&&proofFunctionKey),
               proofFunctionDetected:!!proofFunctionKey,

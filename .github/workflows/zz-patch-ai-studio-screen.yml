@@ -21,6 +21,7 @@ jobs:
       - name: Apply source patch
         run: |
           sed -i 's/re.subn(pattern, new, text, count=1, flags=flags)/re.subn(pattern, lambda _m: new, text, count=1, flags=flags)/' .github/scripts/patch_ai_studio_screen.py
+          sed -i 's/STREAM_END_CARRIER_GRACE_MS = 1_500L/STREAM_END_CARRIER_GRACE_MS = 900L/' .github/scripts/patch_ai_studio_screen.py
           python3 .github/scripts/patch_ai_studio_screen.py
       - name: Commit source patch
         run: |

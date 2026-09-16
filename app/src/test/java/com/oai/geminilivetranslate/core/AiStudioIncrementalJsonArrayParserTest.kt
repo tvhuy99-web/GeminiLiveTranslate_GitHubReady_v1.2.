@@ -97,4 +97,60 @@ class AiStudioIncrementalJsonArrayParserTest {
         assertEquals("BUFFER_LIMIT_EXCEEDED", result.error)
         assertEquals(0, parser.bufferedChars())
     }
+
+    @Test
+    fun finishAcceptsCompleteStreamAndResetsParser() {
+        val parser = AiStudioIncrementalJsonArrayParser()
+
+        val result = parser.feed("[[[null,\"done\"]]]")
+        val finished = parser.finish()
+
+        assertTrue(result.ok)
+        assertEquals(1, result.frames.size)
+        assertTrue(finished.ok)
+        assertTrue(finished.reset)
+        assertEquals(0, parser.currentDepth())
+        assertEquals(0, parser.bufferedChars())
+    }
+
+    @Test
+    fun finishRejectsTruncatedStringAndResetsParser() {
+        val parser = AiStudioIncrementalJsonArrayParser()
+
+        val partial = parser.feed("[[[null,\"unfinished")
+        val finished = parser.finish()
+
+        assertTrue(partial.ok)
+        assertFalse(finished.ok)
+        assertTrue(finished.reset)
+        assertEquals("INCOMPLETE_STRING", finished.error)
+        assertEquals(0, parser.currentDepth())
+        assertEquals(0, parser.bufferedChars())
+    }
+
+    @Test
+    fun finishRejectsUnclosedOuterWrapperAfterValidFrame() {
+        val parser = AiStudioIncrementalJsonArrayParser()
+
+        val partial = parser.feed("[[[null,\"frame\"]]")
+        val finished = parser.finish()
+
+        assertTrue(partial.ok)
+        assertEquals(1, partial.frames.size)
+        assertFalse(finished.ok)
+        assertEquals("INCOMPLETE_JSON_STREAM", finished.error)
+        assertTrue(finished.reset)
+    }
+
+    @Test
+    fun finishRejectsFragmentedXssiPrefix() {
+        val parser = AiStudioIncrementalJsonArrayParser()
+
+        assertTrue(parser.feed(")]" ).ok)
+        val finished = parser.finish()
+
+        assertFalse(finished.ok)
+        assertEquals("INCOMPLETE_XSSI_PREFIX", finished.error)
+        assertTrue(finished.reset)
+    }
 }

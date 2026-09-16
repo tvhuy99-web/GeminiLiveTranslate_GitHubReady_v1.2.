@@ -521,7 +521,7 @@ internal class GeminiScreenDescriptionLiveClient(
 
     companion object {
         const val MODEL = "gemini-3.8-live"
-        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v5-resumption"
+        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v6-generation-config"
         private const val TAG = "LiveScreenDescription"
         private const val HOST = "generativelanguage.googleapis.com"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
@@ -531,9 +531,11 @@ internal class GeminiScreenDescriptionLiveClient(
             val sessionResumption = JSONObject().apply {
                 resumptionHandle?.takeIf(String::isNotBlank)?.let { put("handle", it) }
             }
+            val generationConfig = JSONObject()
+                .put("responseModalities", JSONArray().put("AUDIO"))
             val setup = JSONObject()
                 .put("model", "models/$MODEL")
-                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("generationConfig", generationConfig)
                 .put(
                     "systemInstruction",
                     JSONObject().put(

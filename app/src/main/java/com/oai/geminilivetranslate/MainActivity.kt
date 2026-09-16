@@ -26,16 +26,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.oai.geminilivetranslate.audio.FileAudioSource
+import com.oai.geminilivetranslate.core.AiApiSettingsStore
+import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SessionUiState
 import com.oai.geminilivetranslate.core.SourceMode
 import com.oai.geminilivetranslate.databinding.ActivityMainBinding
+import com.oai.geminilivetranslate.service.LiveVideoDescriptionService
 import com.oai.geminilivetranslate.service.TranslationService
 import com.oai.geminilivetranslate.ui.HistoryActivity
 import com.oai.geminilivetranslate.ui.LogViewerActivity
@@ -68,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
+    private var liveStateJob: Job? = null
+    private var lastLiveError: String? = null
     private var subtitleRenderEvents = 0L
     private var lastRenderedTranscriptChars = -1
     private var selectedFilePlaybackSpeed = 1f
@@ -109,10 +115,12 @@ class MainActivity : AppCompatActivity() {
     private val videoDescriptionModeValues = listOf(
         AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
         AppPreferences.VIDEO_DESCRIPTION_SUMMARY,
+        AppPreferences.VIDEO_DESCRIPTION_LIVE,
     )
     private val videoDescriptionModeLabels = listOf(
         "Mô tả theo thời gian",
         "Mô tả tổng hợp",
+        "Mô tả thời gian thực",
     )
 
     private var pendingExportText: String? = null
@@ -168,6 +176,25 @@ class MainActivity : AppCompatActivity() {
         } else toast("Bạn chưa cấp quyền thu âm thanh nội bộ")
     }
 
+    private val liveProjectionPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val projectionData = result.data
+        logger.log(
+            if (result.resultCode == Activity.RESULT_OK && projectionData != null) 2 else 1,
+            "Permission",
+            "Kết quả MediaProjection mô tả thời gian thực resultCode=${result.resultCode} hasData=${projectionData != null}",
+        )
+        if (result.resultCode == Activity.RESULT_OK && projectionData != null) {
+            val serviceIntent = Intent(this, LiveVideoDescriptionService::class.java).apply {
+                action = LiveVideoDescriptionService.ACTION_START
+                putExtra(LiveVideoDescriptionService.EXTRA_PROJECTION_RESULT_CODE, result.resultCode)
+                putExtra(LiveVideoDescriptionService.EXTRA_PROJECTION_DATA, projectionData)
+            }
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } else {
+            toast("Bạn chưa cấp quyền chia sẻ màn hình")
+        }
+    }
+
     private val historyLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
         val sessionId = result.data?.getStringExtra(HistoryActivity.EXTRA_SESSION_ID)
@@ -194,7 +221,7 @@ class MainActivity : AppCompatActivity() {
         logger.log(
             2,
             "History",
-            "Quay lại từ Nghe với phụ đề; phục hồi phiên id=$sessionId serviceBound=${translationService != null}",
+            "Quay lại từ Xem video với phụ đề; phục hồi phiên id=$sessionId serviceBound=${translationService != null}",
         )
         val service = translationService
         if (service != null) {
@@ -232,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                 val restoredMode = loadSourceMode()
                 service.setSourceMode(restoredMode)
                 service.setProcessingMode(preferences.loadProcessingMode())
-                service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
+                syncLegacyVideoDescriptionMode(service)
                 service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
                 selectedFilePlaybackSpeed = loadFilePlaybackSpeed()
                 service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
@@ -299,6 +326,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)
+        observeLiveSession()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -311,6 +339,8 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         stateJob?.cancel()
         stateJob = null
+        liveStateJob?.cancel()
+        liveStateJob = null
         if (bound) unbindService(connection)
         bound = false
         translationService = null
@@ -335,7 +365,7 @@ class MainActivity : AppCompatActivity() {
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         processingModeSpinner.onItemSelectedListener = simpleSelection { position ->
             if (!processingModeSpinnerReady) return@simpleSelection
-            if (translationService?.state?.value?.running == true) {
+            if (isAnySessionRunning()) {
                 restoreProcessingModeUi()
                 return@simpleSelection
             }
@@ -365,7 +395,7 @@ class MainActivity : AppCompatActivity() {
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         videoDescriptionModeSpinner.onItemSelectedListener = simpleSelection { position ->
             if (!videoDescriptionModeSpinnerReady) return@simpleSelection
-            if (translationService?.state?.value?.running == true) {
+            if (isAnySessionRunning()) {
                 restoreProcessingModeUi()
                 return@simpleSelection
             }
@@ -374,11 +404,21 @@ class MainActivity : AppCompatActivity() {
             }
             if (preferences.loadVideoDescriptionMode() == next) return@simpleSelection
             preferences.setVideoDescriptionMode(next)
-            translationService?.setVideoDescriptionMode(next)
+            if (next != AppPreferences.VIDEO_DESCRIPTION_LIVE) {
+                translationService?.setVideoDescriptionMode(next)
+            }
             logger.log(2, "UI", "Đổi kiểu mô tả video bằng dropdown mode=$next")
             restoreProcessingModeUi()
             updateModeUi(SourceMode.FILE, false)
         }
+
+        livePromptEditText.setText(preferences.loadLiveDescriptionPrompt())
+        livePromptEditText.doAfterTextChanged { text ->
+            if (!LiveVideoDescriptionService.uiState.value.running) {
+                preferences.setLiveDescriptionPrompt(text?.toString().orEmpty())
+            }
+        }
+
         speakerDiarizationSwitch.setOnCheckedChangeListener { _, checked ->
             if (speakerDiarizationSwitch.isPressed) {
                 preferences.setSpeakerDiarization(checked)
@@ -409,6 +449,14 @@ class MainActivity : AppCompatActivity() {
         selectFileButton.setOnClickListener { launchFilePicker() }
         miniBrowserButton.setOnClickListener { startActivity(Intent(this@MainActivity, MiniBrowserActivity::class.java)) }
         startButton.setOnClickListener {
+            if (isVideoDescriptionLiveSelected()) {
+                if (LiveVideoDescriptionService.uiState.value.running) {
+                    stopLiveDescription()
+                } else {
+                    startLiveDescription()
+                }
+                return@setOnClickListener
+            }
             val service = translationService
             if (service?.state?.value?.running == true) {
                 service.stopTranslation()
@@ -523,7 +571,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun observeLiveSession() {
+        liveStateJob?.cancel()
+        liveStateJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                LiveVideoDescriptionService.uiState.collect { state ->
+                    if (isVideoDescriptionLiveSelected()) renderLiveState(state)
+                    val error = state.lastError?.takeIf(String::isNotBlank)
+                    if (error != null && error != lastLiveError) {
+                        lastLiveError = error
+                        toast(error)
+                    } else if (error == null) {
+                        lastLiveError = null
+                    }
+                }
+            }
+        }
+    }
+
     private fun render(state: SessionUiState) = with(binding) {
+        if (isVideoDescriptionLiveSelected()) {
+            renderLiveState(LiveVideoDescriptionService.uiState.value)
+            return@with
+        }
         statusText.text = buildString {
             append("Trạng thái: ").append(state.status)
             if (state.health.isNotBlank()) append('\n').append(state.health)
@@ -609,7 +679,28 @@ class MainActivity : AppCompatActivity() {
         updateSubtitleActionUi(state)
     }
 
+    private fun renderLiveState(state: LiveVideoDescriptionService.UiState) = with(binding) {
+        startButton.text = if (state.running) "Dừng" else "Bắt đầu"
+        startButton.contentDescription = startButton.text
+        livePromptEditText.isEnabled = !state.running
+        subtitleText.text = state.transcript.ifBlank { "Chưa có nội dung mô tả" }
+        subtitleScroll.contentDescription = "Nội dung mô tả thời gian thực"
+        if (state.transcript.isNotBlank()) {
+            subtitleScroll.post { subtitleScroll.fullScroll(View.FOCUS_DOWN) }
+        }
+        updateModeUi(SourceMode.FILE, state.running)
+    }
+
     private fun updateSubtitleActionUi(state: SessionUiState) = with(binding) {
+        if (isVideoDescriptionLiveSelected()) {
+            subtitleActionLayout.isVisible = false
+            translateToVietnameseButton.isVisible = false
+            subtitlePlaybackButton.isVisible = true
+            subtitlePlaybackButton.isEnabled = true
+            subtitlePlaybackButton.text = "Xem video với phụ đề"
+            return@with
+        }
+        subtitleActionLayout.isVisible = true
         val transcribe = isTranscribeSelected()
         val videoDescription = isVideoDescriptionSelected()
         val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
@@ -642,6 +733,24 @@ class MainActivity : AppCompatActivity() {
         exportButton.contentDescription = exportButton.text
     }
 
+    private fun startLiveDescription() {
+        preferences.setLiveDescriptionPrompt(binding.livePromptEditText.text?.toString().orEmpty())
+        val keyState = ApiKeyStore(this).load()
+        if (keyState.keys.isEmpty()) {
+            toast("Chưa có Gemini API Key")
+            return
+        }
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        liveProjectionPermission.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun stopLiveDescription() {
+        startService(
+            Intent(this, LiveVideoDescriptionService::class.java)
+                .setAction(LiveVideoDescriptionService.ACTION_STOP),
+        )
+    }
+
     private fun startMode(mode: SourceMode) {
         saveSourceMode(mode)
         logger.log(2, "UI", "Yêu cầu bắt đầu source=$mode serviceBound=${translationService != null}")
@@ -665,7 +774,7 @@ class MainActivity : AppCompatActivity() {
         }
         service.setSourceMode(mode)
         service.setProcessingMode(preferences.loadProcessingMode())
-        service.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
+        syncLegacyVideoDescriptionMode(service)
         service.setSpeakerDiarization(preferences.loadSpeakerDiarization())
         if (mode == SourceMode.FILE && !isTranscribeSelected() && !isVideoDescriptionSelected()) {
             service.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
@@ -702,16 +811,47 @@ class MainActivity : AppCompatActivity() {
         val transcribe = isTranscribeSelected()
         val videoDescription = isVideoDescriptionSelected()
         val videoSummary = videoDescription && isVideoDescriptionSummarySelected()
+        val videoLive = videoDescription && isVideoDescriptionLiveSelected()
+        val effectiveRunning = if (videoLive) LiveVideoDescriptionService.uiState.value.running else running
         val fileMode = mode == SourceMode.FILE
         val micMode = mode == SourceMode.MICROPHONE
 
-        processingModeSpinner.isEnabled = !running
+        processingModeSpinner.isEnabled = !effectiveRunning
         videoDescriptionModeLayout.isVisible = videoDescription
-        videoDescriptionModeSpinner.isEnabled = !running
+        videoDescriptionModeSpinner.isEnabled = !effectiveRunning
+        livePromptLayout.isVisible = videoLive
+        livePromptEditText.isEnabled = !effectiveRunning
 
+        if (videoLive) {
+            audioSourceLayout.isVisible = false
+            speakerDiarizationSwitch.isVisible = false
+            selectFileButton.isVisible = false
+            miniBrowserButton.isVisible = false
+            fileControls.isVisible = false
+            fileSpeedLayout.isVisible = false
+            progressSeekBar.isVisible = false
+            originalVolumeSeekBar.isVisible = false
+            translatedVolumeLabel.isVisible = false
+            translatedVolumeSeekBar.isVisible = false
+            aiVoiceSwitch.isVisible = false
+            aiAudioStreamLayout.isVisible = false
+            autoDuckingSwitch.isVisible = false
+            micLanguageLayout.isVisible = false
+            nextLanguageButton.isVisible = false
+            statusText.isVisible = false
+            subtitleScroll.isVisible = true
+            subtitleActionLayout.isVisible = false
+            subtitlePlaybackButton.isVisible = true
+            subtitlePlaybackButton.isEnabled = true
+            subtitlePlaybackButton.text = "Xem video với phụ đề"
+            startButton.text = if (effectiveRunning) "Dừng" else "Bắt đầu"
+            return@with
+        }
+
+        statusText.isVisible = true
+        subtitleActionLayout.isVisible = true
         if (videoDescription) {
-            audioSourceLabel.isVisible = false
-            audioSourceSpinner.isVisible = false
+            audioSourceLayout.isVisible = false
             speakerDiarizationSwitch.isVisible = false
             selectFileButton.isVisible = true
             selectFileButton.isEnabled = !running
@@ -739,8 +879,7 @@ class MainActivity : AppCompatActivity() {
             return@with
         }
 
-        audioSourceLabel.isVisible = true
-        audioSourceSpinner.isVisible = true
+        audioSourceLayout.isVisible = true
         speakerDiarizationSwitch.isVisible = transcribe && fileMode
         speakerDiarizationSwitch.isEnabled = !running
         selectFileButton.isVisible = fileMode
@@ -782,7 +921,7 @@ class MainActivity : AppCompatActivity() {
         audioSourceSpinner.post { spinnerReady = true }
         translationService?.setSourceMode(restoredMode)
         translationService?.setProcessingMode(preferences.loadProcessingMode())
-        translationService?.setVideoDescriptionMode(preferences.loadVideoDescriptionMode())
+        translationService?.let(::syncLegacyVideoDescriptionMode)
         translationService?.setSpeakerDiarization(preferences.loadSpeakerDiarization())
         translationService?.setFilePlaybackSpeed(selectedFilePlaybackSpeed)
         originalVolumeSeekBar.progress = settings.originalVolume
@@ -793,12 +932,17 @@ class MainActivity : AppCompatActivity() {
         aiAudioStreamSpinner.post { aiStreamSpinnerReady = true }
         autoDuckingSwitch.isChecked = settings.autoDucking
         speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
+        if (!livePromptEditText.hasFocus()) {
+            val savedPrompt = preferences.loadLiveDescriptionPrompt()
+            if (livePromptEditText.text?.toString() != savedPrompt) livePromptEditText.setText(savedPrompt)
+        }
         exportButton.text = if (settings.exportFormat == "txt") "Xuất văn bản (.txt)" else "Xuất phụ đề (.srt)"
         settingsButton.text = if (settings.uiMode == "simple") "Cài đặt" else "Cài đặt nâng cao"
         syncFileSpeedUi(selectedFilePlaybackSpeed)
         restoreMicLanguageSpinner()
         restoreProcessingModeUi()
-        updateModeUi(restoredMode, translationService?.state?.value?.running == true)
+        updateModeUi(restoredMode, if (isVideoDescriptionLiveSelected()) LiveVideoDescriptionService.uiState.value.running else translationService?.state?.value?.running == true)
+        if (isVideoDescriptionLiveSelected()) renderLiveState(LiveVideoDescriptionService.uiState.value)
         applyUiMode()
     }
 
@@ -827,6 +971,7 @@ class MainActivity : AppCompatActivity() {
         val simple = preferences.load().uiMode == "simple"
         val transcribe = isTranscribeSelected()
         val videoDescription = isVideoDescriptionSelected()
+        val videoLive = videoDescription && isVideoDescriptionLiveSelected()
         val fileMode = audioSourceSpinner.selectedItemPosition == SourceMode.FILE.ordinal
         logButton.isVisible = !simple
         if (videoDescription) {
@@ -839,7 +984,7 @@ class MainActivity : AppCompatActivity() {
             translatedVolumeLabel.isVisible = false
             translatedVolumeSeekBar.isVisible = false
             aiVoiceSwitch.isVisible = false
-            progressSeekBar.isVisible = true
+            progressSeekBar.isVisible = !videoLive
             progressSeekBar.isEnabled = false
             return@with
         }
@@ -873,6 +1018,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openSubtitlePlayback() {
+        if (isVideoDescriptionLiveSelected()) {
+            resumeHistoryAfterPlaybackId = null
+            subtitlePlaybackLauncher.launch(
+                Intent(this, SubtitlePlaybackActivity::class.java).apply {
+                    putExtra(SubtitlePlaybackActivity.EXTRA_QUEUE_SUBTITLE_TTS, false)
+                },
+            )
+            return
+        }
+
         val service = translationService
         val state = service?.state?.value
         resumeHistoryAfterPlaybackId = service?.currentHistorySessionId()
@@ -1009,6 +1164,21 @@ class MainActivity : AppCompatActivity() {
     private fun isVideoDescriptionSummarySelected(): Boolean =
         preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_SUMMARY
 
+    private fun isVideoDescriptionLiveSelected(): Boolean =
+        isVideoDescriptionSelected() &&
+            preferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
+
+    private fun isAnySessionRunning(): Boolean =
+        translationService?.state?.value?.running == true || LiveVideoDescriptionService.uiState.value.running
+
+    private fun syncLegacyVideoDescriptionMode(service: TranslationService) {
+        when (val mode = preferences.loadVideoDescriptionMode()) {
+            AppPreferences.VIDEO_DESCRIPTION_TIMELINE,
+            AppPreferences.VIDEO_DESCRIPTION_SUMMARY -> service.setVideoDescriptionMode(mode)
+            AppPreferences.VIDEO_DESCRIPTION_LIVE -> Unit
+        }
+    }
+
     private fun restoreProcessingModeUi() = with(binding) {
         val transcribe = isTranscribeSelected()
         val videoDescription = isVideoDescriptionSelected()
@@ -1031,6 +1201,7 @@ class MainActivity : AppCompatActivity() {
         }
         videoDescriptionModeSpinner.post { videoDescriptionModeSpinnerReady = true }
         videoDescriptionModeLayout.isVisible = videoDescription
+        livePromptLayout.isVisible = videoDescription && isVideoDescriptionLiveSelected()
 
         speakerDiarizationSwitch.isChecked = preferences.loadSpeakerDiarization()
         val mode = if (videoDescription) {

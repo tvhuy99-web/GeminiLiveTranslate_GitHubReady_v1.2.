@@ -19,7 +19,7 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertTrue(facade.contains("PROOF_NOT_READY"))
         assertTrue(facade.contains(".put(\"textOnly\", true)"))
 
-        assertTrue(script.contains("request-gateway-v1.2-cancellable-text-replay"))
+        assertTrue(script.contains("request-gateway-v1.3-trusted-host-cancellable"))
         assertTrue(script.contains("function analyzeTextReplaySafety(contents)"))
         assertTrue(script.contains("if (requestedModel) return templates[templateKey(requestedModel)] || null"))
         assertTrue(script.contains("TEMPLATE_MODEL_NOT_CAPTURED"))
@@ -27,6 +27,17 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertTrue(script.contains("TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE"))
         assertTrue(script.contains("textReplaySafe:!!(tpl&&tpl.textReplaySafe)"))
         assertFalse(script.contains("MakerSuiteService\\/(?:GenerateContent|BidiGenerateContent)"))
+    }
+
+    @Test
+    fun captureAndReplayAreRestrictedToGoogleOwnedHosts() {
+        val script = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioRequestGatewayScript.kt")
+
+        assertTrue(script.contains("function isTrustedGenerateHost(raw)"))
+        assertTrue(script.contains("host === 'aistudio.google.com'"))
+        assertTrue(script.contains("host.endsWith('.google.com')"))
+        assertTrue(script.contains("host.endsWith('.googleapis.com')"))
+        assertTrue(script.contains("if (!isTrustedGenerateHost(raw)) return false"))
     }
 
     @Test

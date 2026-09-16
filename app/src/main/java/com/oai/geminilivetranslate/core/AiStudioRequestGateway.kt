@@ -4,11 +4,12 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.webkit.WebView
+import com.oai.geminilivetranslate.ui.AiStudioRequestGatewayScript
 import org.json.JSONObject
 import org.json.JSONTokener
 
 /**
- * Native facade for [com.oai.geminilivetranslate.ui.AiStudioRequestGatewayScript].
+ * Native facade for [AiStudioRequestGatewayScript].
  *
  * The raw captured request, request headers and Google session credentials remain inside WebView.
  * Native code sends semantic rewrite instructions and polls only sanitized result/progress objects.
@@ -43,31 +44,17 @@ class AiStudioRequestGateway(
     private val main = Handler(Looper.getMainLooper())
     private val activeIds = LinkedHashSet<String>()
 
-    fun status(callback: (Status) -> Unit) {
+    /** Install the browser hooks before the first GenerateContent request that should be captured. */
+    fun install(callback: (Status) -> Unit = {}) {
         main.post {
-            evalJson(
-                "JSON.stringify(window.__AIS_REQUEST_GATEWAY__ ? window.__AIS_REQUEST_GATEWAY__.status() : ({ok:false,error:'GATEWAY_NOT_INSTALLED'}))",
-            ) { obj ->
-                if (obj == null) {
-                    callback(Status(available = false, error = "INVALID_STATUS"))
-                    return@evalJson
-                }
-                callback(
-                    Status(
-                        available = obj.optBoolean("ok", false),
-                        version = obj.optString("version"),
-                        templateReady = obj.optBoolean("templateReady", false),
-                        templateModel = obj.optString("templateModel"),
-                        templateFingerprint = obj.optString("templateFingerprint"),
-                        templateBodyChars = obj.optInt("templateBodyChars", 0),
-                        proofReady = obj.optBoolean("proofReady", false),
-                        proofFunctionDetected = obj.optBoolean("proofFunctionDetected", false),
-                        activeRequests = obj.optInt("activeRequests", 0),
-                        error = obj.optString("error"),
-                    ),
-                )
+            webView.evaluateJavascript(AiStudioRequestGatewayScript.DOCUMENT_START) {
+                readStatus(callback)
             }
         }
+    }
+
+    fun status(callback: (Status) -> Unit) {
+        main.post { readStatus(callback) }
     }
 
     /**
@@ -133,6 +120,31 @@ class AiStudioRequestGateway(
             webView.evaluateJavascript(
                 "Boolean(window.__AIS_REQUEST_GATEWAY__ && window.__AIS_REQUEST_GATEWAY__.clearTemplates())",
             ) { raw -> callback(raw == "true") }
+        }
+    }
+
+    private fun readStatus(callback: (Status) -> Unit) {
+        evalJson(
+            "JSON.stringify(window.__AIS_REQUEST_GATEWAY__ ? window.__AIS_REQUEST_GATEWAY__.status() : ({ok:false,error:'GATEWAY_NOT_INSTALLED'}))",
+        ) { obj ->
+            if (obj == null) {
+                callback(Status(available = false, error = "INVALID_STATUS"))
+                return@evalJson
+            }
+            callback(
+                Status(
+                    available = obj.optBoolean("ok", false),
+                    version = obj.optString("version"),
+                    templateReady = obj.optBoolean("templateReady", false),
+                    templateModel = obj.optString("templateModel"),
+                    templateFingerprint = obj.optString("templateFingerprint"),
+                    templateBodyChars = obj.optInt("templateBodyChars", 0),
+                    proofReady = obj.optBoolean("proofReady", false),
+                    proofFunctionDetected = obj.optBoolean("proofFunctionDetected", false),
+                    activeRequests = obj.optInt("activeRequests", 0),
+                    error = obj.optString("error"),
+                ),
+            )
         }
     }
 

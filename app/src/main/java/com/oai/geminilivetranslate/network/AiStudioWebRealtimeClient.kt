@@ -626,7 +626,7 @@ internal class AiStudioWebRealtimeClient(
                     return
                 }
             }
-            if (!suppressTimeouts && setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
+            if (!screenDescription && !suppressTimeouts && setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
                 fail(IllegalStateException("AI_STUDIO_LIVE_CARRIER_STALE"))
                 return
             }
@@ -830,6 +830,34 @@ internal class AiStudioWebRealtimeClient(
                 logger.log(2, "AiStudioLanguage", "WAITING_TARGET_LANGUAGE target=$targetLanguage configured=$languageGuardConfigured verified=${language.optBoolean("targetLanguageVerified", false)} strategy=${safe(language.optString("lastStrategy", "none"), 120)} bidiRequests=${language.optLong("bidiRequests", 0L)} setupRequests=${language.optLong("setupRequests", 0L)} translateSetup=${language.optLong("translateSetupRequests", 0L)} fallbackCandidates=${language.optInt("lastFallbackCandidates", 0)}")
                 return
             }
+        }
+        if (screenDescription) {
+            val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
+            val videoReady = screen.optBoolean("videoTrackReady", false)
+            if (!videoReady) {
+                logger.log(
+                    2,
+                    "AiStudioScreenVideo",
+                    "WAITING_VIDEO_TRACK enabled=${screen.optBoolean("enabled", false)} " +
+                        "gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                        "displayRequests=${screen.optLong("displayRequests", 0L)}",
+                )
+                return
+            }
+            main.postDelayed({
+                if (closed.get() || setupDelivered.get()) return@postDelayed
+                setupDelivered.set(true)
+                lastProgressAt = SystemClock.elapsedRealtime()
+                logger.log(
+                    2,
+                    "AiStudioLive",
+                    "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage " +
+                        "transport=r19-video videoTrackReady=true gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                        "displayRequests=${screen.optLong("displayRequests", 0L)} hidden=false debugVisible=true isolatedLiveHost=true",
+                )
+                listener.onSetupComplete()
+            }, ARM_SETTLE_MS)
+            return
         }
         val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
         val template = direct.optBoolean("templateObserved", false)

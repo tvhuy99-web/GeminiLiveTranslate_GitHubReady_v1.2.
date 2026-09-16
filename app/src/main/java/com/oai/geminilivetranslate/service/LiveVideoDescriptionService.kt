@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.oai.geminilivetranslate.MainActivity
 import com.oai.geminilivetranslate.R
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.core.ApiKeyStore
@@ -20,19 +21,13 @@ import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.network.GeminiScreenDescriptionLiveClient
-import com.oai.geminilivetranslate.ui.LiveVideoDescriptionActivity
 import com.oai.geminilivetranslate.video.ScreenFrameCapture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Foreground owner for the real-time visual description session.
- *
- * This service intentionally never requests RECORD_AUDIO and never creates AudioRecord. Its only
- * input is MediaProjection -> JPEG screen frames. Audio exists only on the model-output side.
- */
+/** Foreground owner for a visual-only Gemini Live screen-description session. */
 class LiveVideoDescriptionService : Service() {
     private lateinit var preferences: AppPreferences
     private lateinit var logger: SessionLogger
@@ -56,14 +51,14 @@ class LiveVideoDescriptionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopSession("Đã dừng mô tả trực tiếp")
+            ACTION_STOP -> stopSession("Đã dừng mô tả thời gian thực")
             ACTION_START -> startSession(intent)
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        stopSession("Đã dừng mô tả trực tiếp", stopSelfAfter = false)
+        stopSession("Đã dừng mô tả thời gian thực", stopSelfAfter = false)
         super.onDestroy()
     }
 
@@ -72,13 +67,13 @@ class LiveVideoDescriptionService : Service() {
         stopping.set(false)
         transcript.setLength(0)
         lastTranscriptChunk = ""
-        publish("Đang khởi động mô tả màn hình...", running = true, transcriptText = "", error = null)
-        startForegroundNow("Đang khởi động mô tả màn hình...")
+        publish("Đang khởi động...", running = true, transcriptText = "", error = null)
+        startForegroundNow("Đang khởi động...")
 
         val keyState = ApiKeyStore(this).load()
         val apiKey = keyState.selected?.takeIf { it in keyState.keys } ?: keyState.keys.firstOrNull()
         if (apiKey.isNullOrBlank()) {
-            failSession("Chưa có Gemini API Key. Chế độ mô tả trực tiếp dùng Gemini Live API native.")
+            failSession("Chưa có Gemini API Key")
             return
         }
 
@@ -109,6 +104,9 @@ class LiveVideoDescriptionService : Service() {
         projection.registerCallback(callback, null)
 
         val settings = preferences.load()
+        val customPrompt = preferences.loadLiveDescriptionPrompt()
+            .trim()
+            .takeIf(String::isNotBlank)
         val player = StreamingPcmPlayer(
             sampleRate = 24_000,
             bufferBytes = settings.translatedBufferBytes,
@@ -154,14 +152,13 @@ class LiveVideoDescriptionService : Service() {
                     if (stopping.get()) return
                     runCatching { capture.start() }
                         .onSuccess {
-                            publish(
-                                "Đang quan sát màn hình trực tiếp · microphone tắt",
-                                running = true,
-                            )
+                            publish("Đang mô tả thời gian thực", running = true)
                             logger.log(
                                 2,
                                 TAG,
-                                "LIVE_READY model=${GeminiScreenDescriptionLiveClient.MODEL} screen=true micInput=false audioOutput=true language=$outputLanguage",
+                                "LIVE_READY model=${GeminiScreenDescriptionLiveClient.MODEL} screen=true micInput=false " +
+                                    "audioOutput=true language=$outputLanguage promptSource=${if (customPrompt == null) "default" else "custom"} " +
+                                    "promptChars=${customPrompt?.length ?: 0}",
                             )
                         }
                         .onFailure {
@@ -194,12 +191,15 @@ class LiveVideoDescriptionService : Service() {
                     if (!stopping.get()) failSession("Gemini Live đã đóng: $reason")
                 }
             },
+            systemPrompt = customPrompt,
         )
         liveClient = client
         logger.log(
             2,
             TAG,
-            "START model=${GeminiScreenDescriptionLiveClient.MODEL} input=screen-jpeg maxFps=1 micInput=false audioOutput=true",
+            "START model=${GeminiScreenDescriptionLiveClient.MODEL} input=screen-jpeg maxFps=1 micInput=false " +
+                "audioOutput=true promptSource=${if (customPrompt == null) "default" else "custom"} " +
+                "promptChars=${customPrompt?.length ?: 0}",
         )
         client.connect()
     }
@@ -215,7 +215,7 @@ class LiveVideoDescriptionService : Service() {
             transcript.delete(0, transcript.length - MAX_TRANSCRIPT_CHARS)
         }
         publish(
-            "Đang quan sát màn hình trực tiếp · microphone tắt",
+            "Đang mô tả thời gian thực",
             running = true,
             transcriptText = transcript.toString(),
         )
@@ -300,13 +300,13 @@ class LiveVideoDescriptionService : Service() {
 
     private fun buildNotification(status: String) = NotificationCompat.Builder(this, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_app)
-        .setContentTitle("Mô tả màn hình trực tiếp")
+        .setContentTitle("Mô tả thời gian thực")
         .setContentText(status)
         .setContentIntent(
             PendingIntent.getActivity(
                 this,
                 4101,
-                Intent(this, LiveVideoDescriptionActivity::class.java)
+                Intent(this, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             ),
@@ -332,7 +332,7 @@ class LiveVideoDescriptionService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "Mô tả màn hình trực tiếp",
+                "Mô tả thời gian thực",
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )

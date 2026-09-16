@@ -120,7 +120,7 @@ object AiStudioRequestBuilderProbeScript {
                   return String(rawUrl).split(/[?#]/)[0];
                 }
               });
-              value = value.replace(/([?&](?:token|key|auth|code|session|sig)=)[^&\s)]+/ig, '$1<redacted>');
+              value = value.replace(/([?&](?:token|key|auth|code|session|sig)=)[^&\s)]+/ig, '${'$'}1<redacted>');
               return value.slice(0,280);
             }).filter(function(frame) { return frame.length > 0; });
           }

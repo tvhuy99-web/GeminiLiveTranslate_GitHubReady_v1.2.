@@ -45,6 +45,9 @@ internal class AiStudioWebRealtimeClient(
     private val logger: SessionLogger,
     private val listener: GeminiLiveClient.Listener,
     private val maxQueuedWireBytes: Long,
+    private val screenDescription: Boolean = false,
+    private val screenDescriptionModel: String = AiStudioWebSessionR17ProductionBootstrap.SCREEN_DESCRIPTION_MODEL,
+    private val screenDescriptionPrompt: String? = null,
 ) {
     private val appContext = GeminiTranslateApp.requireAppContext()
     private val main = Handler(Looper.getMainLooper())
@@ -145,6 +148,31 @@ internal class AiStudioWebRealtimeClient(
         }
         logger.log(3, "AiStudioInput", "STREAM_END result=$result queuedWire=${estimatedQueuedWireBytes()}")
         main.postDelayed({ maybeSilenceCarrier(force = true) }, STREAM_END_CARRIER_GRACE_MS)
+        return result.also { updateBackpressureHighWater() }
+    }
+
+    fun sendVideoFrame(jpeg: ByteArray): GeminiLiveClient.SendResult {
+        if (!screenDescription) return GeminiLiveClient.SendResult.FAILED
+        if (jpeg.isEmpty()) return GeminiLiveClient.SendResult.SENT
+        if (closed.get()) return GeminiLiveClient.SendResult.CLOSED
+        if (!setupDelivered.get()) return GeminiLiveClient.SendResult.NOT_READY
+        lastInputAt = SystemClock.elapsedRealtime()
+        setCarrierActive(true)
+        val result = when (inputClient?.sendVideoFrame(jpeg)) {
+            AiStudioWebLiveClient.SendResult.QUEUED -> GeminiLiveClient.SendResult.SENT
+            AiStudioWebLiveClient.SendResult.BACKPRESSURED -> {
+                backpressureEvents.incrementAndGet()
+                GeminiLiveClient.SendResult.BACKPRESSURED
+            }
+            AiStudioWebLiveClient.SendResult.NOT_ARMED, null -> GeminiLiveClient.SendResult.NOT_READY
+            AiStudioWebLiveClient.SendResult.CLOSED -> GeminiLiveClient.SendResult.CLOSED
+        }
+        logger.log(3, "AiStudioInput", "VIDEO_FRAME result=$result jpegBytes=${jpeg.size} syntheticCarrier=true micInput=false")
+        if (result == GeminiLiveClient.SendResult.SENT) {
+            main.postDelayed({
+                if (!closed.get() && screenDescription) setCarrierActive(false)
+            }, SCREEN_DESCRIPTION_CARRIER_PULSE_MS)
+        }
         return result.also { updateBackpressureHighWater() }
     }
 
@@ -654,23 +682,26 @@ internal class AiStudioWebRealtimeClient(
         val language = JSONObject.quote(targetLanguage)
         val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
         val transcribeJs = if (transcribe) "true" else "false"
-        val languageCall = if (transcribe) {
+        val screenJs = if (screenDescription) "true" else "false"
+        val requestedModel = JSONObject.quote(targetLiveModel())
+        val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
+        val languageCall = if (transcribe || screenDescription) {
             "null"
         } else {
             "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
         }
         current.evaluateJavascript(
-            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
             val bootstrap = root?.optJSONObject("bootstrap")
             val languageGuard = root?.optJSONObject("language")
             val bootstrapOk = bootstrap?.optBoolean("ok") == true
-            val languageOk = transcribe || languageGuard?.optBoolean("ok") == true
+            val languageOk = transcribe || screenDescription || languageGuard?.optBoolean("ok") == true
             if (bootstrapOk && languageOk) {
                 configured = true
-                languageGuardConfigured = !transcribe && languageOk
+                languageGuardConfigured = !transcribe && !screenDescription && languageOk
                 lastBootstrapState = bootstrap.toString()
                 if (!transcribe && languageGuard != null) lastLanguageGuardState = languageGuard.toString()
                 updateBootstrapProgress(bootstrap)
@@ -765,7 +796,7 @@ internal class AiStudioWebRealtimeClient(
 
     private fun maybeDeliverSetup() {
         if (closed.get() || setupDelivered.get() || !serverSetupSeen) return
-        if (operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
+        if (!screenDescription && operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
             val language = runCatching { JSONObject(lastLanguageGuardState) }.getOrNull() ?: return
             if (!languageGuardConfigured || !language.optBoolean("targetLanguageVerified", false)) {
                 logger.log(2, "AiStudioLanguage", "WAITING_TARGET_LANGUAGE target=$targetLanguage configured=$languageGuardConfigured verified=${language.optBoolean("targetLanguageVerified", false)} strategy=${safe(language.optString("lastStrategy", "none"), 120)} bidiRequests=${language.optLong("bidiRequests", 0L)} setupRequests=${language.optLong("setupRequests", 0L)} translateSetup=${language.optLong("translateSetupRequests", 0L)} fallbackCandidates=${language.optInt("lastFallbackCandidates", 0)}")
@@ -825,9 +856,13 @@ internal class AiStudioWebRealtimeClient(
         }
     }
 
-    private fun targetLiveModel(): String = when (operationMode) {
-        GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
-        GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+    private fun targetLiveModel(): String = if (screenDescription) {
+        screenDescriptionModel
+    } else {
+        when (operationMode) {
+            GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
+            GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+        }
     }
 
     private fun liveRouteUrl(): String = "$AI_STUDIO_LIVE?model=${Uri.encode(targetLiveModel())}"
@@ -854,6 +889,9 @@ internal class AiStudioWebRealtimeClient(
                 kind.startsWith("R17_") -> logger.log(3, "AiStudioBootstrap", "JS_$kind ${safe(text, 2800)}")
                 kind.startsWith("R183_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioLanguage", "JS_$kind ${safe(text, 2800)}")
                 kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||
+                    kind == "R14_VIDEO_QUEUE" ||
+                    kind == "R14_VIDEO_REPLACED" ||
+                    kind == "R14_MEDIA_REPLACED" ||
                     kind == "R14_INJECT_HTTP_2XX" ||
                     kind == "R14_INJECT_HTTP_ERROR" ||
                     kind == "R14_INJECT_ZERO_STATUS_END" ->
@@ -900,6 +938,7 @@ internal class AiStudioWebRealtimeClient(
         private const val ARM_SETTLE_MS = 180L
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
+        private const val SCREEN_DESCRIPTION_CARRIER_PULSE_MS = 850L
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
         private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2

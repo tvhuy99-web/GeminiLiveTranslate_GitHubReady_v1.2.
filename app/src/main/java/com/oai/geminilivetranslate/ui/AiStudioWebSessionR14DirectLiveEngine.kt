@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-03-web-session-r14.2-progress-2xx"
+    const val VERSION = "2026-09-16-web-session-r14.3-aistudio-video-carrier"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
@@ -11,11 +11,15 @@ object AiStudioWebSessionR14DirectLiveEngine {
   'use strict';
   if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-03-web-session-r14.2-progress-2xx';
+  const VERSION='2026-09-16-web-session-r14.3-aistudio-video-carrier';
   const MAX_QUEUE=256;
   const state={
     armed:false,
     queue:[],
+    latestVideo:'',
+    videoEnqueued:0,
+    videoReplaced:0,
+    videoDropped:0,
     carrierRequests:0,
     carrierFrames:0,
     replacedFrames:0,
@@ -50,13 +54,18 @@ object AiStudioWebSessionR14DirectLiveEngine {
     if(s.length<4||s.length>12000||s.length%4!==0)return false;
     return /^[A-Za-z0-9+/]+={0,2}$/.test(s);
   }
+  function validVideo(v){
+    const s=String(v||'');
+    if(s.length<32||s.length>3000000||s.length%4!==0)return false;
+    return /^[A-Za-z0-9+/]+={0,2}$/.test(s);
+  }
   function findAudioSlot(node,path,depth){
     const d=depth||0;if(d>10||node==null)return null;
     try{
       if(Array.isArray(node)){
         for(let i=0;i+1<node.length;i++){
           if(typeof node[i]==='string'&&/^audio\/pcm(?:;|$)/i.test(node[i])&&typeof node[i+1]==='string'){
-            return {parent:node,key:i+1,mime:String(node[i]),path:(path||[]).concat([i+1]),chars:String(node[i+1]).length};
+            return {parent:node,key:i+1,mimeParent:node,mimeKey:i,mime:String(node[i]),path:(path||[]).concat([i+1]),chars:String(node[i+1]).length};
           }
         }
         for(let i=0;i<node.length;i++){const hit=findAudioSlot(node[i],(path||[]).concat([i]),d+1);if(hit)return hit;}
@@ -66,7 +75,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
           const k=keys[i];
           if((k==='mimeType'||k==='mime_type')&&typeof node[k]==='string'&&/^audio\/pcm(?:;|$)/i.test(node[k])){
             for(const dk of ['data','bytes','inlineData','inline_data']){
-              if(typeof node[dk]==='string')return {parent:node,key:dk,mime:String(node[k]),path:(path||[]).concat([dk]),chars:String(node[dk]).length};
+              if(typeof node[dk]==='string')return {parent:node,key:dk,mimeParent:node,mimeKey:k,mime:String(node[k]),path:(path||[]).concat([dk]),chars:String(node[dk]).length};
             }
           }
         }
@@ -79,9 +88,9 @@ object AiStudioWebSessionR14DirectLiveEngine {
     try{const parsed=JSON.parse(String(raw||''));const slot=findAudioSlot(parsed,[],0);return slot?{parsed:parsed,slot:slot}:null;}catch(_){return null;}
   }
   function rewriteEnvelope(body){
-    if(typeof body!=='string'||body.indexOf('req')<0||body.indexOf('=')<0)return {body:body,carrierFrames:0,replaced:0};
-    let sp;try{sp=new URLSearchParams(body);}catch(_){return {body:body,carrierFrames:0,replaced:0};}
-    let carrierFrames=0,replaced=0;
+    if(typeof body!=='string'||body.indexOf('req')<0||body.indexOf('=')<0)return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};
+    let sp;try{sp=new URLSearchParams(body);}catch(_){return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};}
+    let carrierFrames=0,replaced=0,videoReplaced=0;
     const names=[];sp.forEach(function(_,k){if(/^req\d+___data__$/.test(String(k||'')))names.push(String(k));});
     for(let i=0;i<names.length;i++){
       const name=names[i];const raw=sp.get(name);const p=parseReq(raw);if(!p)continue;
@@ -90,7 +99,14 @@ object AiStudioWebSessionR14DirectLiveEngine {
         state.templateObserved=true;state.templateMime=p.slot.mime;state.templatePayloadChars=p.slot.chars;
         emit('AUDIO_TEMPLATE_CAPTURED',{mime:p.slot.mime,payloadChars:p.slot.chars,pathDepth:p.slot.path.length});
       }
-      if(state.armed&&state.queue.length){
+      if(state.armed&&state.latestVideo){
+        const video=state.latestVideo;state.latestVideo='';
+        p.slot.parent[p.slot.key]=video;
+        p.slot.mimeParent[p.slot.mimeKey]='image/jpeg';
+        sp.set(name,JSON.stringify(p.parsed));
+        replaced++;videoReplaced++;state.videoReplaced++;state.lastReplaceAt=Date.now();
+        emit('VIDEO_REPLACED',{jpegBase64Chars:video.length,carrierFrames:carrierFrames,totalVideoReplaced:state.videoReplaced,requestOrdinal:state.carrierRequests+1});
+      }else if(state.armed&&state.queue.length){
         const next=state.queue.shift();
         p.slot.parent[p.slot.key]=next;
         sp.set(name,JSON.stringify(p.parsed));
@@ -100,13 +116,13 @@ object AiStudioWebSessionR14DirectLiveEngine {
     if(carrierFrames){state.carrierRequests++;state.carrierFrames+=carrierFrames;state.lastCarrierAt=Date.now();}
     if(replaced){
       state.injectedRequests++;
-      emit('AUDIO_REPLACED',{replaced:replaced,carrierFrames:carrierFrames,remaining:state.queue.length,totalReplaced:state.replacedFrames,requestOrdinal:state.carrierRequests});
-      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:replaced};
+      emit('MEDIA_REPLACED',{replaced:replaced,videoReplaced:videoReplaced,carrierFrames:carrierFrames,remaining:state.queue.length,totalReplaced:state.replacedFrames,totalVideoReplaced:state.videoReplaced,requestOrdinal:state.carrierRequests});
+      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:replaced,videoReplaced:videoReplaced};
     }
-    return {body:body,carrierFrames:carrierFrames,replaced:0};
+    return {body:body,carrierFrames:carrierFrames,replaced:0,videoReplaced:0};
   }
   function describe(){
-    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};
+    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,videoPending:!!state.latestVideo,videoEnqueued:state.videoEnqueued,videoReplaced:state.videoReplaced,videoDropped:state.videoDropped,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};
   }
   function enqueue(frames){
     const input=Array.isArray(frames)?frames:[frames];let accepted=0,rejected=0,dropped=0;
@@ -119,9 +135,10 @@ object AiStudioWebSessionR14DirectLiveEngine {
     if(accepted||rejected||dropped)emit('QUEUE',{accepted:accepted,rejected:rejected,dropped:dropped,queueDepth:state.queue.length});
     return {ok:true,accepted:accepted,rejected:rejected,dropped:dropped,queueDepth:state.queue.length,armed:state.armed};
   }
+  function enqueueVideo(frame){const s=String(frame||'');if(!validVideo(s)){state.videoDropped++;emit('VIDEO_QUEUE',{accepted:0,rejected:1,videoDropped:state.videoDropped});return {ok:false,accepted:0,rejected:1,videoPending:!!state.latestVideo};}if(state.latestVideo)state.videoDropped++;state.latestVideo=s;state.videoEnqueued++;emit('VIDEO_QUEUE',{accepted:1,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped});return {ok:true,accepted:1,rejected:0,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped};}
   function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}
   function clearQueue(){const n=state.queue.length;state.queue.length=0;emit('QUEUE_CLEARED',{cleared:n});return describe();}
-  function reset(){state.queue.length=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;emit('RESET',{version:VERSION});return describe();}
+  function reset(){state.queue.length=0;state.latestVideo='';state.videoEnqueued=0;state.videoReplaced=0;state.videoDropped=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;emit('RESET',{version:VERSION});return describe();}
 
   try{
     const X=window.XMLHttpRequest;
@@ -171,7 +188,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     }
   }catch(e){emit('HOOK_ERROR',{target:'XMLHttpRequest',name:String(e&&e.name||'Error')});}
 
-  window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,arm:arm,clearQueue:clearQueue,reset:reset};
+  window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,enqueueVideoBase64:enqueueVideo,arm:arm,clearQueue:clearQueue,reset:reset};
   emit('ENGINE_INSTALLED',{version:VERSION,frameBytes:1280,frameMs:40,maxQueue:MAX_QUEUE,host:safeUrl(location.href).host});
 })();
     """.trimIndent()

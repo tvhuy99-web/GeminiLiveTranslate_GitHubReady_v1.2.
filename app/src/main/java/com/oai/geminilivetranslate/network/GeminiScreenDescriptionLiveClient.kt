@@ -582,7 +582,7 @@ internal class GeminiScreenDescriptionLiveClient(
             )
             .toString()
 
-        private fun systemInstruction(outputLanguage: String): String = """
+        internal fun systemInstruction(outputLanguage: String): String = """
             Bạn là hệ thống thuyết minh hình ảnh theo thời gian thực dành cho người đang xem màn hình.
 
             MỤC TIÊU

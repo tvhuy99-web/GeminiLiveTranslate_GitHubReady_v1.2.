@@ -32,6 +32,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.oai.geminilivetranslate.audio.FileAudioSource
 import com.oai.geminilivetranslate.core.AiApiSettingsStore
+import com.oai.geminilivetranslate.core.AiConnectionModeStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
@@ -731,11 +732,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun startLiveDescription() {
         preferences.setLiveDescriptionPrompt(binding.livePromptEditText.text?.toString().orEmpty())
-        val keyState = ApiKeyStore(this).load()
-        if (keyState.keys.isEmpty()) {
-            toast("Chưa có Gemini API Key")
-            return
+        val connectionMode = AiConnectionModeStore(this).load()
+        if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            val keyState = ApiKeyStore(this).load()
+            if (keyState.keys.isEmpty()) {
+                toast("Chưa có Gemini API Key")
+                return
+            }
         }
+        logger.log(2, "UI", "Bắt đầu mô tả thời gian thực connectionMode=$connectionMode")
         val manager = getSystemService(MediaProjectionManager::class.java)
         liveProjectionPermission.launch(manager.createScreenCaptureIntent())
     }

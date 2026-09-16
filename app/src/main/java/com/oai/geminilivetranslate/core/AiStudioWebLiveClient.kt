@@ -116,6 +116,27 @@ class AiStudioWebLiveClient(
         return SendResult.QUEUED
     }
 
+    fun sendVideoFrame(jpeg: ByteArray): SendResult {
+        if (jpeg.isEmpty()) return SendResult.QUEUED
+        if (closed.get()) return SendResult.CLOSED
+        if (!armed.get()) return SendResult.NOT_ARMED
+        val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+        if (encoded.length > MAX_VIDEO_BASE64_CHARS) {
+            logger("R15_VIDEO_REJECT", "reason=too-large jpegBytes=${jpeg.size} base64Chars=${encoded.length}")
+            return SendResult.BACKPRESSURED
+        }
+        val quoted = JSONObject.quote(encoded)
+        webView.post {
+            if (closed.get() || !armed.get()) return@post
+            val js = "JSON.stringify(window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.enqueueVideoBase64($quoted):({ok:false,error:'r14-engine-not-installed'}))"
+            webView.evaluateJavascript(js) { raw ->
+                val decoded = decodeEvalValue(raw)
+                logger("R15_VIDEO_FRAME", "jpegBytes=${jpeg.size} result=${safe(decoded, 900)}")
+            }
+        }
+        return SendResult.QUEUED
+    }
+
     fun clear() {
         framer.reset()
         while (localQueue.poll() != null) Unit
@@ -307,5 +328,6 @@ class AiStudioWebLiveClient(
         private const val MAX_LOCAL_QUEUE_FRAMES = 192
         private const val MAX_FRAMES_PER_JS_BATCH = 12
         private const val PUMP_DELAY_MS = 8L
+        private const val MAX_VIDEO_BASE64_CHARS = 3_000_000
     }
 }

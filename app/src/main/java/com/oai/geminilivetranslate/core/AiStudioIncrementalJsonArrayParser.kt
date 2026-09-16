@@ -11,8 +11,8 @@ import org.json.JSONTokener
  * [chunkDepth]. Until device fixtures confirm that shape for every mode, callers must opt in.
  *
  * The parser keeps JSON string/escape state across network fragments, accepts a fragmented
- * XSSI prefix, and fails closed on malformed nesting, malformed frames, or an oversized active
- * frame instead of guessing where a frame ends.
+ * XSSI prefix, and fails closed on malformed nesting, malformed frames, an oversized active
+ * frame, or a stream that ends before its JSON structure is complete.
  */
 class AiStudioIncrementalJsonArrayParser(
     private val chunkDepth: Int = DEFAULT_CHUNK_DEPTH,
@@ -111,6 +111,36 @@ class AiStudioIncrementalJsonArrayParser(
 
         compactScannedPrefixIfSafe()
         return FeedResult(frames)
+    }
+
+    /**
+     * Marks the current transport response as complete.
+     *
+     * A successful [feed] only means every frame seen so far was structurally valid. The network
+     * can still terminate with an open wrapper, an unfinished frame, an unfinished JSON string, or
+     * even half of the XSSI preamble buffered. [finish] turns those silent truncations into explicit
+     * fail-closed errors and resets the parser for the next response.
+     */
+    fun finish(): FeedResult {
+        if (!preambleResolved) {
+            val current = buffer.toString()
+            if (current.isNotEmpty() && current.length < XSSI_PREFIX.length && XSSI_PREFIX.startsWith(current)) {
+                return fail("INCOMPLETE_XSSI_PREFIX", emptyList())
+            }
+            resolvePreamble()?.let { return it }
+        }
+
+        val error = when {
+            escaped -> "INCOMPLETE_ESCAPE"
+            inString -> "INCOMPLETE_STRING"
+            frameStart >= 0 -> "INCOMPLETE_JSON_FRAME"
+            depth != 0 -> "INCOMPLETE_JSON_STREAM"
+            else -> ""
+        }
+        if (error.isNotBlank()) return fail(error, emptyList())
+
+        reset()
+        return FeedResult(emptyList(), reset = true)
     }
 
     fun reset() {

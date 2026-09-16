@@ -8,7 +8,7 @@ import org.json.JSONObject
  *
  * The protocol is private and can change without notice. This codec therefore validates the
  * observed top-level shape before touching it and only rewrites fields that are explicitly known.
- * Unknown/opaque slots are preserved byte-for-byte at the JSON value level.
+ * Unknown/opaque JSON values are preserved semantically when the body is decoded and encoded again.
  */
 object AiStudioWireCodec {
     const val MODEL_INDEX = 0
@@ -18,6 +18,7 @@ object AiStudioWireCodec {
     const val SNAPSHOT_INDEX = 4
     const val SYSTEM_INSTRUCTION_INDEX = 5
     const val TOOLS_INDEX = 6
+    const val CACHED_CONTENT_INDEX = 11
 
     data class Shape(
         val valid: Boolean,
@@ -28,6 +29,19 @@ object AiStudioWireCodec {
         val hasGenerationConfig: Boolean = false,
         val hasSnapshotSlot: Boolean = false,
         val fingerprint: String = "",
+    )
+
+    /**
+     * Sanitized structural classification used for safe text-replay decisions.
+     *
+     * This deliberately exposes presence booleans only. It never returns the actual system
+     * instruction, tool payload or cached-content value.
+     */
+    data class ReplayEnvelope(
+        val safe: Boolean,
+        val systemInstructionPresent: Boolean,
+        val toolsPresent: Boolean,
+        val cachedContentPresent: Boolean,
     )
 
     data class Decoded(
@@ -109,6 +123,31 @@ object AiStudioWireCodec {
             hasGenerationConfig = generation is JSONArray,
             hasSnapshotSlot = true,
             fingerprint = fingerprint(root),
+        )
+    }
+
+    /**
+     * Mirrors AiStudioRequestGatewayScript.analyzeTextReplayEnvelope().
+     *
+     * Keeping this classification identical on Kotlin and browser sides prevents diagnostics and
+     * future protocol fixtures from describing the same request differently. Unknown wire shapes
+     * are rejected before any slot is interpreted.
+     */
+    fun inspectReplayEnvelope(rawBody: String): ReplayEnvelope {
+        val shape = inspect(rawBody)
+        require(shape.valid) { "Unsupported AI Studio wire shape: ${shape.error} (${shape.fingerprint})" }
+
+        val root = JSONArray(rawBody)
+        val systemInstructionPresent = slotPresent(root, SYSTEM_INSTRUCTION_INDEX)
+        val toolsValue = root.optOrNull(TOOLS_INDEX)
+        val toolsPresent = toolsValue != null && !(toolsValue is JSONArray && toolsValue.length() == 0)
+        val cachedContentPresent = slotPresent(root, CACHED_CONTENT_INDEX)
+
+        return ReplayEnvelope(
+            safe = !systemInstructionPresent && !toolsPresent && !cachedContentPresent,
+            systemInstructionPresent = systemInstructionPresent,
+            toolsPresent = toolsPresent,
+            cachedContentPresent = cachedContentPresent,
         )
     }
 
@@ -199,6 +238,13 @@ object AiStudioWireCodec {
     private fun newTextPart(prompt: String): JSONArray = JSONArray()
         .put(JSONObject.NULL)
         .put(prompt)
+
+    private fun slotPresent(root: JSONArray, index: Int): Boolean = root.optOrNull(index) != null
+
+    private fun JSONArray.optOrNull(index: Int): Any? {
+        if (index < 0 || index >= length()) return null
+        return opt(index)?.takeUnless { it === JSONObject.NULL }
+    }
 
     /** Keep labels identical to AiStudioRequestGatewayScript.typeOf for device-log parity. */
     private fun fingerprint(root: JSONArray): String {

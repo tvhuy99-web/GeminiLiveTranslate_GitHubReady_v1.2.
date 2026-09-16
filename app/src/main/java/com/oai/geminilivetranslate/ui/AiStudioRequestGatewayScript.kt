@@ -8,7 +8,7 @@ package com.oai.geminilivetranslate.ui
  * shape is rejected instead of being rewritten heuristically.
  */
 object AiStudioRequestGatewayScript {
-    const val VERSION = "2026-09-16-request-gateway-v1.3-trusted-host-cancellable"
+    const val VERSION = "2026-09-16-request-gateway-v1.4-safe-envelope"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -24,6 +24,9 @@ object AiStudioRequestGatewayScript {
           const CONTENTS_INDEX = 1;
           const GENERATION_CONFIG_INDEX = 3;
           const SNAPSHOT_INDEX = 4;
+          const SYSTEM_INSTRUCTION_INDEX = 5;
+          const TOOLS_INDEX = 6;
+          const CACHED_CONTENT_INDEX = 11;
           const templates = Object.create(null);
           const active = Object.create(null);
           let lastTemplateKey = '';
@@ -129,6 +132,22 @@ object AiStudioRequestGatewayScript {
             return out;
           }
 
+          function analyzeTextReplayEnvelope(root) {
+            const systemInstructionPresent = Array.isArray(root) && root.length > SYSTEM_INSTRUCTION_INDEX &&
+              root[SYSTEM_INSTRUCTION_INDEX] !== null && typeof root[SYSTEM_INSTRUCTION_INDEX] !== 'undefined';
+            const toolsValue = Array.isArray(root) && root.length > TOOLS_INDEX ? root[TOOLS_INDEX] : null;
+            const toolsPresent = toolsValue !== null && typeof toolsValue !== 'undefined' &&
+              !(Array.isArray(toolsValue) && toolsValue.length === 0);
+            const cachedContentPresent = Array.isArray(root) && root.length > CACHED_CONTENT_INDEX &&
+              root[CACHED_CONTENT_INDEX] !== null && typeof root[CACHED_CONTENT_INDEX] !== 'undefined';
+            return {
+              safe:!systemInstructionPresent && !toolsPresent && !cachedContentPresent,
+              systemInstructionPresent:!!systemInstructionPresent,
+              toolsPresent:!!toolsPresent,
+              cachedContentPresent:!!cachedContentPresent
+            };
+          }
+
           function replaceLastUserText(contents, prompt) {
             for (let i=contents.length-1;i>=0;i--) {
               const content = contents[i];
@@ -188,6 +207,8 @@ object AiStudioRequestGatewayScript {
               return;
             }
             const textSafety = analyzeTextReplaySafety(inspected.root[CONTENTS_INDEX]);
+            const envelopeSafety = analyzeTextReplayEnvelope(inspected.root);
+            const replaySafe = !!textSafety.safe && !!envelopeSafety.safe;
             const key = templateKey(inspected.model);
             templates[key] = {
               source:String(source||''),
@@ -197,18 +218,24 @@ object AiStudioRequestGatewayScript {
               body:String(body),
               model:inspected.model,
               fingerprint:inspected.fingerprint,
-              textReplaySafe:!!textSafety.safe,
+              textReplaySafe:replaySafe,
               contentCount:Number(textSafety.contentCount||0),
               textPartCount:Number(textSafety.textPartCount||0),
               nonTextPartCount:Number(textSafety.nonTextPartCount||0),
+              systemInstructionPresent:!!envelopeSafety.systemInstructionPresent,
+              toolsPresent:!!envelopeSafety.toolsPresent,
+              cachedContentPresent:!!envelopeSafety.cachedContentPresent,
               capturedAt:Date.now()
             };
             lastTemplateKey = key;
             emit('REQUEST_GATEWAY_TEMPLATE_CAPTURED',{
               source:String(source||''),model:inspected.model,fingerprint:inspected.fingerprint,
-              bodyChars:body.length,textReplaySafe:!!textSafety.safe,
+              bodyChars:body.length,textReplaySafe:replaySafe,
               contentCount:Number(textSafety.contentCount||0),textPartCount:Number(textSafety.textPartCount||0),
               nonTextPartCount:Number(textSafety.nonTextPartCount||0),
+              systemInstructionPresent:!!envelopeSafety.systemInstructionPresent,
+              toolsPresent:!!envelopeSafety.toolsPresent,
+              cachedContentPresent:!!envelopeSafety.cachedContentPresent,
               headerNames:Object.keys(templates[key].headers).slice(0,40)
             });
           }
@@ -460,6 +487,9 @@ object AiStudioRequestGatewayScript {
               templateContentCount:tpl?Number(tpl.contentCount||0):0,
               templateTextPartCount:tpl?Number(tpl.textPartCount||0):0,
               templateNonTextPartCount:tpl?Number(tpl.nonTextPartCount||0):0,
+              templateSystemInstructionPresent:!!(tpl&&tpl.systemInstructionPresent),
+              templateToolsPresent:!!(tpl&&tpl.toolsPresent),
+              templateCachedContentPresent:!!(tpl&&tpl.cachedContentPresent),
               proofHookInstalled:!!proofHookInstalled,
               proofReady:!!(proofService&&proofFunctionKey),
               proofFunctionDetected:!!proofFunctionKey,

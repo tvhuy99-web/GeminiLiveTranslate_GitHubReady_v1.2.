@@ -105,7 +105,7 @@ object AiStudioWireCodec {
             valid = true,
             topLevelSize = root.length(),
             model = model,
-            hasContents = contents.length() >= 0,
+            hasContents = true,
             hasGenerationConfig = generation is JSONArray,
             hasSnapshotSlot = true,
             fingerprint = fingerprint(root),
@@ -200,6 +200,7 @@ object AiStudioWireCodec {
         .put(JSONObject.NULL)
         .put(prompt)
 
+    /** Keep labels identical to AiStudioRequestGatewayScript.typeOf for device-log parity. */
     private fun fingerprint(root: JSONArray): String {
         val limit = minOf(root.length(), 14)
         return buildString {
@@ -217,7 +218,7 @@ object AiStudioWireCodec {
         value is JSONObject -> "object"
         value is String -> "string"
         value is Number -> "number"
-        value is Boolean -> "bool"
+        value is Boolean -> "boolean"
         else -> value.javaClass.simpleName
     }
 }

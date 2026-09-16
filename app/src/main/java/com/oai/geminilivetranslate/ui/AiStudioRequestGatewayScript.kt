@@ -8,7 +8,7 @@ package com.oai.geminilivetranslate.ui
  * shape is rejected instead of being rewritten heuristically.
  */
 object AiStudioRequestGatewayScript {
-    const val VERSION = "2026-09-16-request-gateway-v1.1-safe-text-replay"
+    const val VERSION = "2026-09-16-request-gateway-v1.2-cancellable-text-replay"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -307,7 +307,7 @@ object AiStudioRequestGatewayScript {
 
           async function runReplay(id, args) {
             const item = active[id];
-            if (!item) return;
+            if (!item || item.done || item.cancelled) return;
             try {
               const requestedModel = normalizeModel(args && args.model);
               if (!requestedModel) throw new Error('MODEL_REQUIRED');
@@ -319,7 +319,9 @@ object AiStudioRequestGatewayScript {
               const prompt = String(args && args.prompt || '');
               let snapshot = null;
               if (!args || args.refreshSnapshot !== false) snapshot = await generateSnapshot(prompt);
+              if (item.cancelled || item.done || !active[id]) return;
               const body = rewriteWire(template.body, args || {}, snapshot);
+              if (item.cancelled || item.done || !active[id]) return;
               const xhr = new NativeXHR();
               item.xhr = xhr;
               xhr.__aisRequestGatewayReplay = true;
@@ -386,13 +388,16 @@ object AiStudioRequestGatewayScript {
                 }
               };
               xhr.onabort = function(){
+                item.cancelled = true;
                 if (!item.done) {
                   item.done = true;
                   item.result = {id:id,ok:false,status:0,modelText:'',responseChars:0,phase:'gateway-abort',error:'ABORTED'};
                 }
               };
+              if (item.cancelled || item.done || !active[id]) return;
               xhr.send(body);
             } catch (e) {
+              if (item.cancelled || item.done || !active[id]) return;
               item.done = true;
               item.result = {id:id,ok:false,status:0,modelText:'',responseChars:0,phase:'gateway-prepare',error:String(e&&e.message||e||'UNKNOWN').slice(0,500)};
               emit('REQUEST_GATEWAY_REPLAY_ERROR',{id:id,error:item.result.error});
@@ -401,7 +406,7 @@ object AiStudioRequestGatewayScript {
 
           function startReplay(args) {
             const id = 'rg'+(nextRequestId++);
-            active[id] = {id:id,startedAt:Date.now(),done:false,result:null,progress:null,xhr:null};
+            active[id] = {id:id,startedAt:Date.now(),done:false,cancelled:false,result:null,progress:null,xhr:null};
             Promise.resolve().then(function(){ return runReplay(id,args||{}); });
             return {ok:true,id:id};
           }
@@ -418,7 +423,16 @@ object AiStudioRequestGatewayScript {
           function abort(id) {
             const item = active[String(id||'')];
             if (!item) return false;
-            try { if (item.xhr && item.xhr.readyState !== 4) item.xhr.abort(); } catch (_) {}
+            item.cancelled = true;
+            if (item.done) return true;
+            try {
+              if (item.xhr && item.xhr.readyState !== 4) {
+                item.xhr.abort();
+                return true;
+              }
+            } catch (_) {}
+            item.done = true;
+            item.result = {id:String(id||''),ok:false,status:0,modelText:'',responseChars:0,phase:'gateway-abort',error:'ABORTED'};
             return true;
           }
 

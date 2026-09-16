@@ -3,6 +3,12 @@ package com.oai.geminilivetranslate.ui
 object AiStudioWebSessionLabScripts {
     const val VERSION = "2026-09-02-web-session-r3"
 
+    /**
+     * The passive request gateway is appended to the existing network laboratory hook so it is
+     * installed in the same document-start slot, before the later R11 request rewriter. This order
+     * matters: R11 can rewrite a GenerateContent body and then call the gateway-wrapped send(), so
+     * the gateway captures the effective body that is actually handed to the underlying XHR.
+     */
     val DOCUMENT_START: String = """
         (function() {
           'use strict';
@@ -260,7 +266,7 @@ object AiStudioWebSessionLabScripts {
                   m.bestResponseType = snapshot.type;
                   m.bestContentType = xhrContentType(xhr);
                   m.progressCount += 1;
-                  const progress = recordProgress('xhr',status,text,snapshot.type,m.bestContentType,eventName+'-rs3');
+                  recordProgress('xhr',status,text,snapshot.type,m.bestContentType,eventName+'-rs3');
                 };
 
                 const finish = function(eventName) {
@@ -332,6 +338,5 @@ object AiStudioWebSessionLabScripts {
           window.__AIS_WEB_SESSION__=state;
           emit('DOCUMENT_START_INSTALLED',{version:state.version,href:location.href});
         })();
-    """.trimIndent()
-
+    """.trimIndent() + "\n" + AiStudioRequestGatewayScript.DOCUMENT_START
 }

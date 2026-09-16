@@ -19,7 +19,7 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertTrue(facade.contains("PROOF_NOT_READY"))
         assertTrue(facade.contains(".put(\"textOnly\", true)"))
 
-        assertTrue(script.contains("request-gateway-v1.1-safe-text-replay"))
+        assertTrue(script.contains("request-gateway-v1.2-cancellable-text-replay"))
         assertTrue(script.contains("function analyzeTextReplaySafety(contents)"))
         assertTrue(script.contains("if (requestedModel) return templates[templateKey(requestedModel)] || null"))
         assertTrue(script.contains("TEMPLATE_MODEL_NOT_CAPTURED"))
@@ -27,6 +27,17 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertTrue(script.contains("TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE"))
         assertTrue(script.contains("textReplaySafe:!!(tpl&&tpl.textReplaySafe)"))
         assertFalse(script.contains("MakerSuiteService\\/(?:GenerateContent|BidiGenerateContent)"))
+    }
+
+    @Test
+    fun replayCancellationPersistsWhileProofIsStillPending() {
+        val script = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioRequestGatewayScript.kt")
+
+        assertTrue(script.contains("done:false,cancelled:false"))
+        assertTrue(script.contains("if (!item || item.done || item.cancelled) return"))
+        assertTrue(script.contains("if (item.cancelled || item.done || !active[id]) return"))
+        assertTrue(script.contains("item.cancelled = true"))
+        assertTrue(script.contains("phase:'gateway-abort',error:'ABORTED'"))
     }
 
     @Test

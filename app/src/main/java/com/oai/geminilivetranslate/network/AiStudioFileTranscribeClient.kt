@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.oai.geminilivetranslate.GeminiTranslateApp
+import com.oai.geminilivetranslate.core.AiStudioRequestGateway
 import com.oai.geminilivetranslate.core.AiStudioWebSessionExecutor
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
@@ -24,6 +25,7 @@ class AiStudioFileTranscribeClient(
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var cancelled = false
     @Volatile private var executor: AiStudioWebSessionExecutor? = null
+    @Volatile private var requestGateway: AiStudioRequestGateway? = null
 
     fun transcribe(
         resolver: ContentResolver,
@@ -40,12 +42,14 @@ class AiStudioFileTranscribeClient(
         logger.log(2, TAG, "START backend=aistudio-file model=$model name=$displayName mime=$mimeType bytes=$size live=false")
         onProgress("Đang mở AI Studio cho chép lời tệp...", 2)
         val exec = createAndAwaitReady()
+        installRequestGateway(exec)
         onProgress("Đang đưa tệp vào trang chép lời AI Studio và chờ trang đọc xong...", 8)
         attachAndWait(exec, uri, displayName, mimeType, size)
         logger.log(2, TAG, "CONFIG model=$model prompt=false autoLanguage=true diarizationRequested=$speakerDiarization transport=aistudio-stt-direct-page manualRun=false autoSubmit=true")
         onProgress("Tệp đã tải/xử lý xong. Ứng dụng đang tự nhấn Run để bắt đầu chép lời...", 55)
         logger.log(2, TAG, "R24_FILE_TRANSCRIBE_AUTO_SUBMIT_START model=$model prompt=false fileOnly=true")
         val result = generateFileOnly(exec)
+        logRequestGatewayStatus("after-generate")
         val parsed = parsePlainTranscript(result.modelText)
         logger.log(2, TAG, "DONE backend=aistudio-file model=$model chars=${parsed.text.length} words=${parsed.words.size} elapsedMs=${SystemClock.elapsedRealtime()-startedAt}")
         onProgress("Đang tạo kết quả...", 98)
@@ -54,6 +58,8 @@ class AiStudioFileTranscribeClient(
 
     fun cancel() {
         cancelled = true
+        requestGateway?.abortAll()
+        requestGateway = null
         val current = executor
         executor = null
         main.post {
@@ -82,7 +88,7 @@ class AiStudioFileTranscribeClient(
                     }
                 }
                 override fun onLog(name: String, detail: String) {
-                    val level = if (name.startsWith("R29_") || name.startsWith("JS_R29_") || name.startsWith("R28_") || name.startsWith("JS_R28_") || name.startsWith("R27_") || name.startsWith("JS_R27_") || name.startsWith("R26_") || name.startsWith("JS_R26_") || name.startsWith("R25_") || name.startsWith("JS_R25_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
+                    val level = if (name.startsWith("R29_") || name.startsWith("JS_R29_") || name.startsWith("R28_") || name.startsWith("JS_R28_") || name.startsWith("R27_") || name.startsWith("JS_R27_") || name.startsWith("R26_") || name.startsWith("JS_R26_") || name.startsWith("R25_") || name.startsWith("JS_R25_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_") || name.startsWith("REQUEST_GATEWAY_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
                     logger.log(level, TAG, "$name ${detail.take(5000)}")
                 }
             })
@@ -97,6 +103,37 @@ class AiStudioFileTranscribeClient(
         if (!latch.await(45, TimeUnit.SECONDS)) error("AI Studio file transcribe chưa sẵn sàng")
         failure.get()?.let { error(it) }
         return holder.get() ?: error("Không tạo được AI Studio file session")
+    }
+
+    private fun installRequestGateway(exec: AiStudioWebSessionExecutor) {
+        val gateway = AiStudioRequestGateway(exec.webView)
+        requestGateway = gateway
+        val latch = CountDownLatch(1)
+        val statusRef = AtomicReference<AiStudioRequestGateway.Status?>()
+        gateway.install { status ->
+            statusRef.set(status)
+            latch.countDown()
+        }
+        if (!latch.await(5, TimeUnit.SECONDS)) {
+            logger.log(1, TAG, "REQUEST_GATEWAY_INSTALL_TIMEOUT")
+            return
+        }
+        val status = statusRef.get()
+        logger.log(
+            if (status?.available == true) 2 else 1,
+            TAG,
+            "REQUEST_GATEWAY_INSTALL available=${status?.available} version=${status?.version.orEmpty()} templateReady=${status?.templateReady} proofReady=${status?.proofReady} error=${status?.error.orEmpty().take(300)}",
+        )
+    }
+
+    private fun logRequestGatewayStatus(stage: String) {
+        requestGateway?.status { status ->
+            logger.log(
+                if (status.available) 2 else 1,
+                TAG,
+                "REQUEST_GATEWAY_STATUS stage=$stage available=${status.available} templateReady=${status.templateReady} model=${status.templateModel} fingerprint=${status.templateFingerprint} bodyChars=${status.templateBodyChars} proofReady=${status.proofReady} proofFunctionDetected=${status.proofFunctionDetected} active=${status.activeRequests} error=${status.error.take(300)}",
+            )
+        }
     }
 
     private fun attachAndWait(exec: AiStudioWebSessionExecutor, uri: Uri, name: String, mime: String, size: Long) {

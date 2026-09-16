@@ -83,15 +83,35 @@
                     android:minHeight="48dp" />
             </LinearLayout>
 
-            <com.oai.geminilivetranslate.ui.LiveVideoDescriptionButton
-                android:id="@+id/liveVideoDescriptionButton"
+            <LinearLayout
+                android:id="@+id/livePromptLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="Mô tả trực tiếp màn hình (Gemini 3.8 Live)" />
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/livePromptLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:labelFor="@id/livePromptEditText"
+                    android:text="Lời nhắc"
+                    android:textSize="16sp" />
+
+                <EditText
+                    android:id="@+id/livePromptEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="top|start"
+                    android:inputType="textCapSentences|textMultiLine"
+                    android:maxLength="20000"
+                    android:minHeight="96dp"
+                    android:padding="8dp" />
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/audioSourceLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
@@ -364,7 +384,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
-            android:text="Nghe với phụ đề"
+            android:text="Xem video với phụ đề"
             android:visibility="gone" />
 
         <Button

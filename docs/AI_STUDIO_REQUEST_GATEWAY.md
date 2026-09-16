@@ -22,6 +22,7 @@ The Gemini Live audio path is explicitly out of scope for this migration and mus
 7. File/video upload remains on the existing trusted file-chooser/upload path during the first migration stages.
 8. `BidiGenerateContent` is not handled by this gateway. The existing Live transport remains separate.
 9. Video/STT production code must not call `replayText`; their gateway integration remains passive until their captured wire shapes are understood.
+10. Structural stream parsing must call `finish()` when the HTTP response ends; a successful `feed()` alone does not prove the stream was complete.
 
 ## Added components
 
@@ -37,17 +38,20 @@ Runs inside the authenticated AI Studio WebView. It:
 - captures valid `GenerateContent` request templates in memory, keyed by model;
 - deliberately ignores `BidiGenerateContent`;
 - records only safe template metadata to diagnostics;
+- classifies whether the captured request contains simple text only and whether the surrounding envelope contains system instruction, tools or cached content;
 - discovers/hooks the AI Studio snapshot/proof function when available;
 - can generate a fresh proof for a rewritten simple-text request;
 - can replay through XHR with `withCredentials=true`;
 - keeps raw replay response text inside WebView and exposes normalized output/progress through a small result API;
-- rejects unsupported body shapes and media-bearing templates on the text replay path.
+- rejects unsupported body shapes and media-bearing/non-clean-envelope templates on the text replay path.
 
 The gateway script is appended to `AiStudioWebSessionLabScripts.DOCUMENT_START`. Because that document-start hook is registered before `AiStudioWebSessionR11RequestFix`, the gateway wraps the lower XHR layer first. R11 can then rewrite the request and call downward, allowing the gateway to observe the effective body that is actually sent instead of an earlier pre-rewrite body.
 
 ### `AiStudioRequestGateway`
 
 Kotlin facade over the WebView gateway. It exposes safe status metadata, text-laboratory replay/polling, partial output, cancellation and template invalidation.
+
+The native facade receives only sanitized metadata such as counts, booleans and structural fingerprints. It now exposes whether the most recently observed template has a system instruction, tools or cached content, but never their raw values.
 
 The JavaScript layer owns authoritative per-model template checks because it owns the complete template cache. Native status intentionally exposes only diagnostic metadata for the most recently selected template and therefore must not be used to decide whether another model is cached.
 
@@ -60,7 +64,8 @@ A fail-closed Kotlin parser for incremental AI Studio array-framed stream data. 
 - escaped quotes/backslashes across fragments;
 - brackets occurring inside quoted text;
 - multiple frames inside the outer stream wrapper;
-- malformed nesting and oversized active frames by resetting with an explicit error.
+- malformed nesting and oversized active frames by resetting with an explicit error;
+- transport completion via `finish()`, which rejects an unfinished XSSI marker, escape, string, frame or outer wrapper instead of silently accepting a truncated response.
 
 This parser is **not connected to production response handling yet**. The default frame depth is based on the currently observed GenerateContent shape and must be verified against sanitized device fixtures before replacing the existing response extractor.
 
@@ -77,7 +82,7 @@ Expected diagnostics after a successful GenerateContent request include:
 - `REQUEST_GATEWAY_STATUS ... templateReady=true`
 - `proofReady=true` when the snapshot service was successfully observed
 
-No raw body, header value, cookie or snapshot token should appear in those logs.
+Safe status metadata can include content/text/non-text counts and booleans for system-instruction/tools/cached-content presence. No raw body, header value, cookie, system instruction, tool payload, cached content or snapshot token should appear in those logs.
 
 ## Migration stages
 
@@ -100,6 +105,7 @@ Status: foundation implemented, not used by production video/STT paths.
 - Browser-side dispatch requires an exact template for that model.
 - Browser-side dispatch requires an explicitly marked text-only replay.
 - Captured template must contain exactly one simple user text part and no media/non-text parts.
+- Captured text replay envelope must not contain system instruction, tools or cached content until proof hashing for those fields is verified.
 - R11 model conflict is rejected while that compatibility layer remains installed.
 - No silent protocol fallback sends a second network request.
 
@@ -127,10 +133,12 @@ Status: pending device evidence.
 
 ### G4 - Structural stream parser
 
-Status: parser and synthetic fragmentation tests implemented; production integration pending fixtures.
+Status: parser and synthetic fragmentation/truncation tests implemented; production integration pending fixtures.
 
 - `AiStudioIncrementalJsonArrayParser` exists independently of the current response path.
 - Tests cover fragmented strings, fragmented XSSI, escaping, quoted brackets, multiple frames and fail-closed recovery.
+- Tests also cover transport termination with an unfinished string, unfinished outer wrapper and partial XSSI marker.
+- Any future shadow/production integration must call `feed(fragment)` for network fragments and then `finish()` exactly once when the response ends.
 - Next requirement is sanitized stream fixtures captured from the app itself.
 - Only after fixture parity should the regex-only response interpretation be replaced.
 
@@ -151,6 +159,8 @@ For video and STT separately capture safe metadata for:
 - template model;
 - structural fingerprint;
 - body length;
+- content/text/non-text part counts;
+- whether system instruction, tools or cached content are present;
 - simple-text/media safety classification;
 - whether proof function is detected and proof is ready;
 - HTTP status of the production request;

@@ -95,6 +95,9 @@ class LiveVideoDescriptionService : Service() {
         }.getOrElse {
             failSession("Không tạo được phiên chia sẻ màn hình: ${it.message ?: it.javaClass.simpleName}", it)
             return
+        } ?: run {
+            failSession("Android không trả về phiên chia sẻ màn hình")
+            return
         }
         mediaProjection = projection
         val callback = object : MediaProjection.Callback() {

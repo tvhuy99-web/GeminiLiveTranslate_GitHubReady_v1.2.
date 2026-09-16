@@ -37,6 +37,7 @@ internal class GeminiScreenDescriptionLiveClient(
     private val outputLanguage: String,
     private val logger: SessionLogger,
     private val listener: Listener,
+    private val systemPrompt: String? = null,
     private val maxQueuedWireBytes: Long = DEFAULT_MAX_QUEUED_WIRE_BYTES,
 ) {
     interface Listener {
@@ -127,7 +128,7 @@ internal class GeminiScreenDescriptionLiveClient(
                         "WebSocket đã mở generation=$generation; gửi setup visual-only " +
                             "resume=${!resumptionHandle.isNullOrBlank()}",
                     )
-                    if (!webSocket.send(createSetupMessage(outputLanguage, resumptionHandle))) {
+                    if (!webSocket.send(createSetupMessage(outputLanguage, resumptionHandle, systemPrompt))) {
                         deliverError(IllegalStateException("Không gửi được cấu hình Gemini Live"))
                     }
                 }
@@ -521,18 +522,26 @@ internal class GeminiScreenDescriptionLiveClient(
 
     companion object {
         const val MODEL = "gemini-3.8-live"
-        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v6-generation-config"
+        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v7-custom-prompt"
         private const val TAG = "LiveScreenDescription"
         private const val HOST = "generativelanguage.googleapis.com"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
         private const val MIN_QUEUED_WIRE_BYTES = 64L * 1024L
 
-        internal fun createSetupMessage(outputLanguage: String, resumptionHandle: String? = null): String {
+        internal fun createSetupMessage(
+            outputLanguage: String,
+            resumptionHandle: String? = null,
+            customPrompt: String? = null,
+        ): String {
             val sessionResumption = JSONObject().apply {
                 resumptionHandle?.takeIf(String::isNotBlank)?.let { put("handle", it) }
             }
             val generationConfig = JSONObject()
                 .put("responseModalities", JSONArray().put("AUDIO"))
+            val instruction = customPrompt
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+                ?: systemInstruction(outputLanguage)
             val setup = JSONObject()
                 .put("model", "models/$MODEL")
                 .put("generationConfig", generationConfig)
@@ -540,7 +549,7 @@ internal class GeminiScreenDescriptionLiveClient(
                     "systemInstruction",
                     JSONObject().put(
                         "parts",
-                        JSONArray().put(JSONObject().put("text", systemInstruction(outputLanguage))),
+                        JSONArray().put(JSONObject().put("text", instruction)),
                     ),
                 )
                 .put("outputAudioTranscription", JSONObject())

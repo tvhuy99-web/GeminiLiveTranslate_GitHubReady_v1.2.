@@ -1,7 +1,6 @@
 package com.oai.geminilivetranslate.network
 
 import android.os.SystemClock
-import android.util.Base64
 import com.oai.geminilivetranslate.core.SessionLogger
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
@@ -12,6 +11,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -218,7 +218,7 @@ internal class GeminiScreenDescriptionLiveClient(
                         val mime = inline.optString("mimeType").lowercase()
                         val data = inline.optString("data")
                         if (data.isNotBlank() && (mime.isBlank() || mime.startsWith("audio/"))) {
-                            runCatching { Base64.decode(data, Base64.DEFAULT) }
+                            runCatching { Base64.getDecoder().decode(data) }
                                 .onSuccess { decoded ->
                                     if (decoded.isNotEmpty()) {
                                         audioChunks.incrementAndGet()
@@ -288,7 +288,7 @@ internal class GeminiScreenDescriptionLiveClient(
         internal fun createVideoMessage(jpeg: ByteArray): String {
             val video = JSONObject()
                 .put("mimeType", "image/jpeg")
-                .put("data", Base64.encodeToString(jpeg, Base64.NO_WRAP))
+                .put("data", Base64.getEncoder().encodeToString(jpeg))
             return JSONObject()
                 .put("realtimeInput", JSONObject().put("video", video))
                 .toString()

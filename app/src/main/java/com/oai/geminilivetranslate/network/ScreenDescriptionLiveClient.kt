@@ -5,7 +5,6 @@ import com.oai.geminilivetranslate.core.AiConnectionModeStore
 import com.oai.geminilivetranslate.core.SessionLogger
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Connection-mode aware facade for real-time visual description.
@@ -45,11 +44,9 @@ internal class ScreenDescriptionLiveClient(
     private val connectionMode = AiConnectionModeStore(appContext).load()
     private val closed = AtomicBoolean(false)
     private val studioSetupComplete = AtomicBoolean(false)
-    private val studioTurnInFlight = AtomicBoolean(false)
-    private val studioLatestFrame = AtomicReference<ByteArray?>(null)
     private val studioAcceptedFrames = AtomicLong(0L)
     private val studioSubmittedFrames = AtomicLong(0L)
-    private val studioReplacedPendingFrames = AtomicLong(0L)
+    private val studioBackpressuredFrames = AtomicLong(0L)
     private val studioTurnCompletes = AtomicLong(0L)
 
     @Volatile private var apiBackend: GeminiScreenDescriptionLiveClient? = null
@@ -88,8 +85,6 @@ internal class ScreenDescriptionLiveClient(
     fun close(graceful: Boolean = true) {
         if (!closed.compareAndSet(false, true)) return
         studioSetupComplete.set(false)
-        studioTurnInFlight.set(false)
-        studioLatestFrame.set(null)
         apiBackend?.close(graceful)
         apiBackend = null
         studioBackend?.close(graceful)
@@ -99,7 +94,7 @@ internal class ScreenDescriptionLiveClient(
                 2,
                 TAG,
                 "CLOSE backend=ai_studio acceptedFrames=${studioAcceptedFrames.get()} " +
-                    "submittedFrames=${studioSubmittedFrames.get()} replacedPending=${studioReplacedPendingFrames.get()} " +
+                    "submittedFrames=${studioSubmittedFrames.get()} backpressured=${studioBackpressuredFrames.get()} " +
                     "turnCompletes=${studioTurnCompletes.get()} micInput=false",
             )
         }
@@ -145,15 +140,13 @@ internal class ScreenDescriptionLiveClient(
                 override fun onSetupComplete() {
                     if (closed.get()) return
                     studioSetupComplete.set(true)
-                    studioTurnInFlight.set(false)
                     logger.log(
                         2,
                         TAG,
                         "AI_STUDIO_SETUP_COMPLETE model=${GeminiScreenDescriptionLiveClient.MODEL} " +
-                            "promptChars=${resolvedPrompt.length} micInput=false",
+                            "promptChars=${resolvedPrompt.length} micInput=false frameFlow=continuous-latest",
                     )
                     listener.onSetupComplete()
-                    drainStudioLatestFrame()
                 }
 
                 override fun onText(text: String) {
@@ -164,26 +157,16 @@ internal class ScreenDescriptionLiveClient(
 
                 override fun onTurnComplete() {
                     studioTurnCompletes.incrementAndGet()
-                    studioTurnInFlight.set(false)
                     listener.onTurnComplete()
-                    drainStudioLatestFrame()
                 }
 
                 override fun onInterrupted() {
                     listener.onInterrupted()
                 }
 
-                override fun onError(error: Throwable) {
-                    studioTurnInFlight.set(false)
-                    studioLatestFrame.set(null)
-                    listener.onError(error)
-                }
+                override fun onError(error: Throwable) = listener.onError(error)
 
-                override fun onClosed(reason: String) {
-                    studioTurnInFlight.set(false)
-                    studioLatestFrame.set(null)
-                    listener.onClosed(reason)
-                }
+                override fun onClosed(reason: String) = listener.onClosed(reason)
             },
             maxQueuedWireBytes = DEFAULT_MAX_QUEUED_WIRE_BYTES,
             screenDescription = true,
@@ -197,22 +180,9 @@ internal class ScreenDescriptionLiveClient(
     private fun sendStudioVideoFrame(jpeg: ByteArray): SendResult {
         if (jpeg.isEmpty()) return SendResult.SENT
         studioAcceptedFrames.incrementAndGet()
-        val previous = studioLatestFrame.getAndSet(jpeg)
-        if (previous != null) studioReplacedPendingFrames.incrementAndGet()
         if (!studioSetupComplete.get()) return SendResult.NOT_READY
-        return drainStudioLatestFrame()
-    }
 
-    private fun drainStudioLatestFrame(): SendResult {
-        if (closed.get()) return SendResult.CLOSED
-        if (!studioSetupComplete.get()) return SendResult.NOT_READY
-        if (!studioTurnInFlight.compareAndSet(false, true)) return SendResult.SENT
-        val frame = studioLatestFrame.getAndSet(null)
-        if (frame == null) {
-            studioTurnInFlight.set(false)
-            return SendResult.SENT
-        }
-        val result = when (studioBackend?.sendVideoFrame(frame)) {
+        val result = when (studioBackend?.sendVideoFrame(jpeg)) {
             GeminiLiveClient.SendResult.SENT -> SendResult.SENT
             GeminiLiveClient.SendResult.NOT_READY -> SendResult.NOT_READY
             GeminiLiveClient.SendResult.BACKPRESSURED -> SendResult.BACKPRESSURED
@@ -220,18 +190,20 @@ internal class ScreenDescriptionLiveClient(
             GeminiLiveClient.SendResult.FAILED -> SendResult.FAILED
             null -> SendResult.NOT_READY
         }
-        if (result == SendResult.SENT) {
-            val sent = studioSubmittedFrames.incrementAndGet()
-            if (sent == 1L || sent % 20L == 0L) {
-                logger.log(
-                    3,
-                    TAG,
-                    "AI_STUDIO_VIDEO_SUBMITTED count=$sent accepted=${studioAcceptedFrames.get()} jpegBytes=${frame.size}",
-                )
+
+        when (result) {
+            SendResult.SENT -> {
+                val sent = studioSubmittedFrames.incrementAndGet()
+                if (sent == 1L || sent % 20L == 0L) {
+                    logger.log(
+                        3,
+                        TAG,
+                        "AI_STUDIO_VIDEO_SUBMITTED count=$sent accepted=${studioAcceptedFrames.get()} jpegBytes=${jpeg.size}",
+                    )
+                }
             }
-        } else {
-            studioTurnInFlight.set(false)
-            studioLatestFrame.compareAndSet(null, frame)
+            SendResult.BACKPRESSURED -> studioBackpressuredFrames.incrementAndGet()
+            else -> Unit
         }
         return result
     }

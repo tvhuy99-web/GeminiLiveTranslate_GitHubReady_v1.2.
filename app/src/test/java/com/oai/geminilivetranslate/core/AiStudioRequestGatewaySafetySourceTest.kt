@@ -30,6 +30,18 @@ class AiStudioRequestGatewaySafetySourceTest {
     }
 
     @Test
+    fun nativeFacadeDoesNotExportCapturedRequestSecrets() {
+        val facade = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioRequestGateway.kt")
+
+        assertFalse(facade.contains("data class CapturedRequest"))
+        assertFalse(facade.contains("val headers:"))
+        assertFalse(facade.contains("val body:"))
+        assertFalse(facade.contains("val cookie:"))
+        assertFalse(facade.contains("val cookies:"))
+        assertFalse(facade.contains("val snapshot:"))
+    }
+
+    @Test
     fun productionVideoAndSttRemainPassiveGatewayObservers() {
         val video = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioVideoDescriptionClient.kt")
         val stt = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioFileTranscribeClient.kt")

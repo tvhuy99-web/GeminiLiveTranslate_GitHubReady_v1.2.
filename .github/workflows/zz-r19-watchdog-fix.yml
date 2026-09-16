@@ -1,0 +1,43 @@
+name: One-time R19 watchdog fix
+
+"on":
+  push:
+    branches:
+      - fix/live-screen-description-ai-studio
+    paths:
+      - .github/workflows/zz-r19-watchdog-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/live-screen-description-ai-studio
+      - name: Keep watchdog network-grounded
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt')
+          s = p.read_text()
+          old = '''        val now = SystemClock.elapsedRealtime()
+        lastInputAt = now
+        lastProgressAt = now
+        val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+'''
+          new = '''        lastInputAt = SystemClock.elapsedRealtime()
+        val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'watchdog block count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt
+          git commit -m "Keep screen Live watchdog network-grounded"
+          git push origin HEAD:fix/live-screen-description-ai-studio

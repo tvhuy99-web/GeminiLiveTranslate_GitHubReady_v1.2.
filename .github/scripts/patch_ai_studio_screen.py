@@ -1,0 +1,491 @@
+from pathlib import Path
+import re
+
+
+def read(path):
+    return Path(path).read_text()
+
+
+def write(path, text):
+    Path(path).write_text(text)
+
+
+def rep(text, old, new, label):
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 exact match, got {count}")
+    return text.replace(old, new, 1)
+
+
+def rx(text, pattern, new, label, flags=re.S):
+    out, count = re.subn(pattern, new, text, count=1, flags=flags)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 regex match, got {count}")
+    return out
+
+
+# 1) Expose the same resolved default instruction to the AI Studio routed backend.
+p = 'app/src/main/java/com/oai/geminilivetranslate/network/GeminiScreenDescriptionLiveClient.kt'
+s = read(p)
+s = rep(
+    s,
+    '        private fun systemInstruction(outputLanguage: String): String = """',
+    '        internal fun systemInstruction(outputLanguage: String): String = """',
+    'screen default prompt visibility',
+)
+write(p, s)
+
+# 2) Main UI: Studio mode must not be blocked by absence of an API key.
+p = 'app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt'
+s = read(p)
+s = rep(
+    s,
+    'import com.oai.geminilivetranslate.core.AiApiSettingsStore\n',
+    'import com.oai.geminilivetranslate.core.AiApiSettingsStore\nimport com.oai.geminilivetranslate.core.AiConnectionModeStore\n',
+    'main import connection mode',
+)
+old = '''    private fun startLiveDescription() {
+        preferences.setLiveDescriptionPrompt(binding.livePromptEditText.text?.toString().orEmpty())
+        val keyState = ApiKeyStore(this).load()
+        if (keyState.keys.isEmpty()) {
+            toast("Chưa có Gemini API Key")
+            return
+        }
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        liveProjectionPermission.launch(manager.createScreenCaptureIntent())
+    }
+'''
+new = '''    private fun startLiveDescription() {
+        preferences.setLiveDescriptionPrompt(binding.livePromptEditText.text?.toString().orEmpty())
+        val connectionMode = AiConnectionModeStore(this).load()
+        if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            val keyState = ApiKeyStore(this).load()
+            if (keyState.keys.isEmpty()) {
+                toast("Chưa có Gemini API Key")
+                return
+            }
+        }
+        logger.log(2, "UI", "Bắt đầu mô tả thời gian thực connectionMode=$connectionMode")
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        liveProjectionPermission.launch(manager.createScreenCaptureIntent())
+    }
+'''
+s = rep(s, old, new, 'main start live route')
+write(p, s)
+
+# 3) Android -> AI Studio WebView input client: add JPEG injection entry point.
+p = 'app/src/main/java/com/oai/geminilivetranslate/core/AiStudioWebLiveClient.kt'
+s = read(p)
+marker = '''    fun clear() {
+'''
+method = '''    fun sendVideoFrame(jpeg: ByteArray): SendResult {
+        if (jpeg.isEmpty()) return SendResult.QUEUED
+        if (closed.get()) return SendResult.CLOSED
+        if (!armed.get()) return SendResult.NOT_ARMED
+        val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+        if (encoded.length > MAX_VIDEO_BASE64_CHARS) {
+            logger("R15_VIDEO_REJECT", "reason=too-large jpegBytes=${jpeg.size} base64Chars=${encoded.length}")
+            return SendResult.BACKPRESSURED
+        }
+        val quoted = JSONObject.quote(encoded)
+        webView.post {
+            if (closed.get() || !armed.get()) return@post
+            val js = "JSON.stringify(window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.enqueueVideoBase64($quoted):({ok:false,error:'r14-engine-not-installed'}))"
+            webView.evaluateJavascript(js) { raw ->
+                val decoded = decodeEvalValue(raw)
+                logger("R15_VIDEO_FRAME", "jpegBytes=${jpeg.size} result=${safe(decoded, 900)}")
+            }
+        }
+        return SendResult.QUEUED
+    }
+
+'''
+s = rep(s, marker, method + marker, 'web live client video method')
+s = rep(
+    s,
+    '        private const val PUMP_DELAY_MS = 8L\n',
+    '        private const val PUMP_DELAY_MS = 8L\n        private const val MAX_VIDEO_BASE64_CHARS = 3_000_000\n',
+    'web live video max',
+)
+write(p, s)
+
+# 4) R14 authenticated WebChannel carrier: latest JPEG replaces one outgoing realtime media blob.
+p = 'app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR14DirectLiveEngine.kt'
+s = read(p)
+s = s.replace('2026-09-03-web-session-r14.2-progress-2xx', '2026-09-16-web-session-r14.3-aistudio-video-carrier')
+s = rep(
+    s,
+    '''    armed:false,
+    queue:[],
+    carrierRequests:0,
+''',
+    '''    armed:false,
+    queue:[],
+    latestVideo:'',
+    videoEnqueued:0,
+    videoReplaced:0,
+    videoDropped:0,
+    carrierRequests:0,
+''',
+    'r14 state video',
+)
+s = rep(
+    s,
+    "  function validFrame(v){\n    const s=String(v||'');\n    if(s.length<4||s.length>12000||s.length%4!==0)return false;\n    return /^[A-Za-z0-9+/]+={0,2}$/.test(s);\n  }\n",
+    "  function validFrame(v){\n    const s=String(v||'');\n    if(s.length<4||s.length>12000||s.length%4!==0)return false;\n    return /^[A-Za-z0-9+/]+={0,2}$/.test(s);\n  }\n  function validVideo(v){\n    const s=String(v||'');\n    if(s.length<32||s.length>3000000||s.length%4!==0)return false;\n    return /^[A-Za-z0-9+/]+={0,2}$/.test(s);\n  }\n",
+    'r14 valid video',
+)
+s = rep(
+    s,
+    "return {parent:node,key:i+1,mime:String(node[i]),path:(path||[]).concat([i+1]),chars:String(node[i+1]).length};",
+    "return {parent:node,key:i+1,mimeParent:node,mimeKey:i,mime:String(node[i]),path:(path||[]).concat([i+1]),chars:String(node[i+1]).length};",
+    'r14 array mime locator',
+)
+s = rep(
+    s,
+    "return {parent:node,key:dk,mime:String(node[k]),path:(path||[]).concat([dk]),chars:String(node[dk]).length};",
+    "return {parent:node,key:dk,mimeParent:node,mimeKey:k,mime:String(node[k]),path:(path||[]).concat([dk]),chars:String(node[dk]).length};",
+    'r14 object mime locator',
+)
+rewrite = r'''  function rewriteEnvelope(body){
+    if(typeof body!=='string'||body.indexOf('req')<0||body.indexOf('=')<0)return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};
+    let sp;try{sp=new URLSearchParams(body);}catch(_){return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};}
+    let carrierFrames=0,replaced=0,videoReplaced=0;
+    const names=[];sp.forEach(function(_,k){if(/^req\d+___data__$/.test(String(k||'')))names.push(String(k));});
+    for(let i=0;i<names.length;i++){
+      const name=names[i];const raw=sp.get(name);const p=parseReq(raw);if(!p)continue;
+      carrierFrames++;
+      if(!state.templateObserved){
+        state.templateObserved=true;state.templateMime=p.slot.mime;state.templatePayloadChars=p.slot.chars;
+        emit('AUDIO_TEMPLATE_CAPTURED',{mime:p.slot.mime,payloadChars:p.slot.chars,pathDepth:p.slot.path.length});
+      }
+      if(state.armed&&state.latestVideo){
+        const video=state.latestVideo;state.latestVideo='';
+        p.slot.parent[p.slot.key]=video;
+        p.slot.mimeParent[p.slot.mimeKey]='image/jpeg';
+        sp.set(name,JSON.stringify(p.parsed));
+        replaced++;videoReplaced++;state.videoReplaced++;state.lastReplaceAt=Date.now();
+        emit('VIDEO_REPLACED',{jpegBase64Chars:video.length,carrierFrames:carrierFrames,totalVideoReplaced:state.videoReplaced,requestOrdinal:state.carrierRequests+1});
+      }else if(state.armed&&state.queue.length){
+        const next=state.queue.shift();
+        p.slot.parent[p.slot.key]=next;
+        sp.set(name,JSON.stringify(p.parsed));
+        replaced++;state.replacedFrames++;state.lastReplaceAt=Date.now();
+      }
+    }
+    if(carrierFrames){state.carrierRequests++;state.carrierFrames+=carrierFrames;state.lastCarrierAt=Date.now();}
+    if(replaced){
+      state.injectedRequests++;
+      emit('MEDIA_REPLACED',{replaced:replaced,videoReplaced:videoReplaced,carrierFrames:carrierFrames,remaining:state.queue.length,totalReplaced:state.replacedFrames,totalVideoReplaced:state.videoReplaced,requestOrdinal:state.carrierRequests});
+      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:replaced,videoReplaced:videoReplaced};
+    }
+    return {body:body,carrierFrames:carrierFrames,replaced:0,videoReplaced:0};
+  }
+'''
+s = rx(s, r"  function rewriteEnvelope\(body\)\{.*?\n  \}\n  function describe\(\)\{", rewrite + "  function describe(){", 'r14 rewrite envelope')
+s = rep(
+    s,
+    "return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};",
+    "return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,videoPending:!!state.latestVideo,videoEnqueued:state.videoEnqueued,videoReplaced:state.videoReplaced,videoDropped:state.videoDropped,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};",
+    'r14 describe video stats',
+)
+enqueue_marker = "  function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}\n"
+enqueue_video = "  function enqueueVideo(frame){const s=String(frame||'');if(!validVideo(s)){state.videoDropped++;emit('VIDEO_QUEUE',{accepted:0,rejected:1,videoDropped:state.videoDropped});return {ok:false,accepted:0,rejected:1,videoPending:!!state.latestVideo};}if(state.latestVideo)state.videoDropped++;state.latestVideo=s;state.videoEnqueued++;emit('VIDEO_QUEUE',{accepted:1,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped});return {ok:true,accepted:1,rejected:0,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped};}\n"
+s = rep(s, enqueue_marker, enqueue_video + enqueue_marker, 'r14 enqueue video')
+s = rep(
+    s,
+    "function reset(){state.queue.length=0;state.armed=false;state.carrierRequests=0;",
+    "function reset(){state.queue.length=0;state.latestVideo='';state.videoEnqueued=0;state.videoReplaced=0;state.videoDropped=0;state.armed=false;state.carrierRequests=0;",
+    'r14 reset video',
+)
+s = rep(
+    s,
+    "window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,arm:arm,clearQueue:clearQueue,reset:reset};",
+    "window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,enqueueVideoBase64:enqueueVideo,arm:arm,clearQueue:clearQueue,reset:reset};",
+    'r14 expose video',
+)
+write(p, s)
+
+# 5) R17 setup guard: explicit 3.8 Live model + visual system instruction in authenticated Studio session.
+p = 'app/src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR17ProductionBootstrap.kt'
+s = read(p)
+s = rep(
+    s,
+    '    const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"\n',
+    '    const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"\n    const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"\n',
+    'r17 kotlin screen model',
+)
+s = rep(
+    s,
+    "  const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';\n",
+    "  const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';\n  const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';\n",
+    'r17 js screen model',
+)
+s = rep(
+    s,
+    "    configured:false,transcribeOnly:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,echoTargetLanguage:false,\n",
+    "    configured:false,transcribeOnly:false,screenDescription:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,echoTargetLanguage:false,systemPrompt:'',\n",
+    'r17 state screen',
+)
+helper_and_rewrite = r'''  function patchScreenDescriptionTree(node,depth){
+    const d=depth||0;if(d>12||node==null||typeof node!=='object')return {changed:0,seen:0};let changed=0,seen=0;
+    if(Array.isArray(node)){for(let i=0;i<node.length;i++){const r=patchScreenDescriptionTree(node[i],d+1);changed+=r.changed;seen+=r.seen;}return {changed:changed,seen:seen};}
+    const model=typeof node.model==='string'?String(node.model).toLowerCase().replace(/^models\//,''):'';
+    if(model&&model===String(state.targetModel||'').toLowerCase().replace(/^models\//,'')){
+      seen++;
+      const gk=Object.prototype.hasOwnProperty.call(node,'generation_config')?'generation_config':'generationConfig';let gc=node[gk];
+      if(!gc||typeof gc!=='object'||Array.isArray(gc)){gc={};node[gk]=gc;changed++;}
+      const rk=Object.prototype.hasOwnProperty.call(gc,'response_modalities')?'response_modalities':'responseModalities';gc[rk]=['AUDIO'];changed++;
+      for(const k of ['translationConfig','translation_config']){if(Object.prototype.hasOwnProperty.call(gc,k)){delete gc[k];changed++;}}
+      const sk=Object.prototype.hasOwnProperty.call(node,'system_instruction')?'system_instruction':'systemInstruction';
+      node[sk]={parts:[{text:String(state.systemPrompt||'')}]};changed++;
+      const ok=Object.prototype.hasOwnProperty.call(node,'output_audio_transcription')?'output_audio_transcription':'outputAudioTranscription';node[ok]={};changed++;
+      for(const k of ['inputAudioTranscription','input_audio_transcription']){if(Object.prototype.hasOwnProperty.call(node,k)){delete node[k];changed++;}}
+      const ck=Object.prototype.hasOwnProperty.call(node,'context_window_compression')?'context_window_compression':'contextWindowCompression';
+      if(!node[ck]||typeof node[ck]!=='object'){node[ck]={slidingWindow:{}};changed++;}
+    }
+    const keys=Object.keys(node);for(let i=0;i<keys.length;i++){const r=patchScreenDescriptionTree(node[keys[i]],d+1);changed+=r.changed;seen+=r.seen;}
+    return {changed:changed,seen:seen};
+  }
+  function rewriteSetupBody(body){
+    try{
+      let params=null,asString=false;if(typeof body==='string'){params=new URLSearchParams(body);asString=true;}else if(body instanceof URLSearchParams){params=new URLSearchParams(body.toString());}else return body;
+      let anyChanged=false,modelRewrites=0,translationChanges=0,translationSeen=0,screenChanges=0,screenSeen=0,touched=false;const updates=[];
+      params.forEach(function(value,key){
+        const keyText=String(key);if(keyText.indexOf('req')!==0||keyText.indexOf('___data__')<0)return;if(String(value).indexOf('audio/pcm')>=0)return;
+        let next=String(value),changed=false;
+        if(next.toLowerCase().indexOf(state.targetModel.toLowerCase())>=0){state.modelSeen=true;state.modelVerified=true;}
+        else{
+          const replaced=next.replace(/(models\/)?gemini-[a-z0-9._-]*(?:live|translate|transcribe)[a-z0-9._-]*/ig,function(match,prefix){modelRewrites++;return (prefix?'models/':'')+state.targetModel;});
+          if(replaced!==next){next=replaced;changed=true;state.modelSeen=true;state.modelVerified=true;}
+        }
+        if(state.screenDescription){
+          touched=true;
+          try{const parsed=JSON.parse(next);const result=patchScreenDescriptionTree(parsed,0);screenChanges+=result.changed;screenSeen+=result.seen;if(result.seen>0){state.modelSeen=true;state.modelVerified=true;}if(result.changed>0){next=JSON.stringify(parsed);changed=true;}}catch(_){}
+        }else if(!state.transcribeOnly&&next.toLowerCase().indexOf(TRANSLATE_MODEL)>=0){
+          touched=true;state.translationGuardRequests++;
+          try{const parsed=JSON.parse(next);const result=patchTranslationTree(parsed,0);translationChanges+=result.changed;translationSeen+=result.seen;if(result.seen>0){state.translationConfigSeen=true;state.targetLanguageVerified=true;state.lastLanguageStrategy=result.changed>0?'named-config-rewrite':'named-config-already-correct';}if(result.changed>0){next=JSON.stringify(parsed);changed=true;}}catch(_){}
+        }
+        if(changed){updates.push([key,next]);anyChanged=true;}
+      });
+      for(let i=0;i<updates.length;i++)params.set(updates[i][0],updates[i][1]);
+      if(touched)state.modelGuardRequests++;if(modelRewrites>0){state.modelRewriteRequests++;state.modelRewriteCount+=modelRewrites;}if(translationChanges>0){state.targetLanguageRewriteRequests++;state.targetLanguageRewriteCount+=translationChanges;}
+      if(state.screenDescription&&touched)diag('SCREEN_SETUP_GUARD',{targetModel:state.targetModel,modelVerified:state.modelVerified,screenSeen:screenSeen,screenChanges:screenChanges,promptChars:String(state.systemPrompt||'').length});
+      if(!state.screenDescription&&touched)diag('TRANSLATION_CONFIG_GUARD',{targetLanguageCode:state.targetLanguage,verified:state.targetLanguageVerified,configSeen:state.translationConfigSeen,rewriteCount:state.targetLanguageRewriteCount,strategy:state.lastLanguageStrategy});
+      if(touched||modelRewrites>0)diag('MODEL_REQUEST_GUARD',{targetModel:state.targetModel,verified:state.modelVerified,rewriteCount:state.modelRewriteCount,screenDescription:state.screenDescription});
+      return anyChanged?(asString?params.toString():params):body;
+    }catch(_){return body;}
+  }
+'''
+s = rx(s, r"  function rewriteSetupBody\(body\)\{.*?\n  \}\n  function installModelGuard\(\)\{", helper_and_rewrite + "  function installModelGuard(){", 'r17 screen setup rewrite')
+old_config = '''  function configure(targetLanguage,transcribeOnly,echoTargetLanguage){
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.echoTargetLanguage=echoTargetLanguage===true;state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL;
+    state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly;
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage});tick();return describe();
+  }
+'''
+new_config = '''  function configure(targetLanguage,transcribeOnly,echoTargetLanguage,requestedModel,screenDescription,systemPrompt){
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.screenDescription=!!screenDescription;state.echoTargetLanguage=echoTargetLanguage===true;state.systemPrompt=String(systemPrompt||'').trim().slice(0,20000);
+    const requested=safeText(requestedModel||'',160).replace(/^models\\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
+    state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length});tick();return describe();
+  }
+'''
+s = rep(s, old_config, new_config, 'r17 configure screen')
+write(p, s)
+
+# 6) AI Studio realtime backend: screen mode uses R17 + R14 but keeps old translate/transcribe untouched.
+p = 'app/src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt'
+s = read(p)
+s = rep(
+    s,
+    '''    private val listener: GeminiLiveClient.Listener,
+    private val maxQueuedWireBytes: Long,
+) {
+''',
+    '''    private val listener: GeminiLiveClient.Listener,
+    private val maxQueuedWireBytes: Long,
+    private val screenDescription: Boolean = false,
+    private val screenDescriptionModel: String = AiStudioWebSessionR17ProductionBootstrap.SCREEN_DESCRIPTION_MODEL,
+    private val screenDescriptionPrompt: String? = null,
+) {
+''',
+    'studio realtime ctor screen',
+)
+stream_end_marker = '''    fun backpressureStats(): GeminiLiveClient.BackpressureStats {
+'''
+video_method = '''    fun sendVideoFrame(jpeg: ByteArray): GeminiLiveClient.SendResult {
+        if (!screenDescription) return GeminiLiveClient.SendResult.FAILED
+        if (jpeg.isEmpty()) return GeminiLiveClient.SendResult.SENT
+        if (closed.get()) return GeminiLiveClient.SendResult.CLOSED
+        if (!setupDelivered.get()) return GeminiLiveClient.SendResult.NOT_READY
+        lastInputAt = SystemClock.elapsedRealtime()
+        setCarrierActive(true)
+        val result = when (inputClient?.sendVideoFrame(jpeg)) {
+            AiStudioWebLiveClient.SendResult.QUEUED -> GeminiLiveClient.SendResult.SENT
+            AiStudioWebLiveClient.SendResult.BACKPRESSURED -> {
+                backpressureEvents.incrementAndGet()
+                GeminiLiveClient.SendResult.BACKPRESSURED
+            }
+            AiStudioWebLiveClient.SendResult.NOT_ARMED, null -> GeminiLiveClient.SendResult.NOT_READY
+            AiStudioWebLiveClient.SendResult.CLOSED -> GeminiLiveClient.SendResult.CLOSED
+        }
+        logger.log(3, "AiStudioInput", "VIDEO_FRAME result=$result jpegBytes=${jpeg.size} syntheticCarrier=true micInput=false")
+        if (result == GeminiLiveClient.SendResult.SENT) {
+            main.postDelayed({
+                if (!closed.get() && screenDescription) setCarrierActive(false)
+            }, SCREEN_DESCRIPTION_CARRIER_PULSE_MS)
+        }
+        return result.also { updateBackpressureHighWater() }
+    }
+
+'''
+s = rep(s, stream_end_marker, video_method + stream_end_marker, 'studio realtime video method')
+old_cfg = '''        val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
+        val transcribeJs = if (transcribe) "true" else "false"
+        val languageCall = if (transcribe) {
+            "null"
+        } else {
+            "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
+        }
+        current.evaluateJavascript(
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
+        ) { raw ->
+            val decoded = decodeEvalValue(raw)
+            val root = runCatching { JSONObject(decoded) }.getOrNull()
+            val bootstrap = root?.optJSONObject("bootstrap")
+            val languageGuard = root?.optJSONObject("language")
+            val bootstrapOk = bootstrap?.optBoolean("ok") == true
+            val languageOk = transcribe || languageGuard?.optBoolean("ok") == true
+            if (bootstrapOk && languageOk) {
+                configured = true
+                languageGuardConfigured = !transcribe && languageOk
+'''
+new_cfg = '''        val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
+        val transcribeJs = if (transcribe) "true" else "false"
+        val screenJs = if (screenDescription) "true" else "false"
+        val requestedModel = JSONObject.quote(targetLiveModel())
+        val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
+        val languageCall = if (transcribe || screenDescription) {
+            "null"
+        } else {
+            "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
+        }
+        current.evaluateJavascript(
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
+        ) { raw ->
+            val decoded = decodeEvalValue(raw)
+            val root = runCatching { JSONObject(decoded) }.getOrNull()
+            val bootstrap = root?.optJSONObject("bootstrap")
+            val languageGuard = root?.optJSONObject("language")
+            val bootstrapOk = bootstrap?.optBoolean("ok") == true
+            val languageOk = transcribe || screenDescription || languageGuard?.optBoolean("ok") == true
+            if (bootstrapOk && languageOk) {
+                configured = true
+                languageGuardConfigured = !transcribe && !screenDescription && languageOk
+'''
+s = rep(s, old_cfg, new_cfg, 'studio configure screen')
+s = rep(
+    s,
+    '        if (operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {\n',
+    '        if (!screenDescription && operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {\n',
+    'studio setup language gate',
+)
+old_target = '''    private fun targetLiveModel(): String = when (operationMode) {
+        GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
+        GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+    }
+'''
+new_target = '''    private fun targetLiveModel(): String = if (screenDescription) {
+        screenDescriptionModel
+    } else {
+        when (operationMode) {
+            GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
+            GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+        }
+    }
+'''
+s = rep(s, old_target, new_target, 'studio target screen model')
+s = rep(
+    s,
+    '                kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||\n',
+    '                kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||\n                    kind == "R14_VIDEO_QUEUE" ||\n                    kind == "R14_VIDEO_REPLACED" ||\n                    kind == "R14_MEDIA_REPLACED" ||\n',
+    'studio diagnostics video',
+)
+s = rep(
+    s,
+    '        private const val STREAM_END_CARRIER_GRACE_MS = 1_500L\n',
+    '        private const val STREAM_END_CARRIER_GRACE_MS = 1_500L\n        private const val SCREEN_DESCRIPTION_CARRIER_PULSE_MS = 850L\n',
+    'studio carrier pulse const',
+)
+write(p, s)
+
+# 7) Foreground screen service: route through the connection-mode aware facade.
+p = 'app/src/main/java/com/oai/geminilivetranslate/service/LiveVideoDescriptionService.kt'
+s = read(p)
+s = rep(
+    s,
+    'import com.oai.geminilivetranslate.core.ApiKeyStore\n',
+    'import com.oai.geminilivetranslate.core.AiConnectionModeStore\nimport com.oai.geminilivetranslate.core.ApiKeyStore\n',
+    'service import mode',
+)
+s = rep(
+    s,
+    'import com.oai.geminilivetranslate.network.GeminiScreenDescriptionLiveClient\n',
+    'import com.oai.geminilivetranslate.network.GeminiScreenDescriptionLiveClient\nimport com.oai.geminilivetranslate.network.ScreenDescriptionLiveClient\n',
+    'service import routed client',
+)
+s = rep(
+    s,
+    '    private var liveClient: GeminiScreenDescriptionLiveClient? = null\n',
+    '    private var liveClient: ScreenDescriptionLiveClient? = null\n',
+    'service client type',
+)
+old_key = '''        val keyState = ApiKeyStore(this).load()
+        val apiKey = keyState.selected?.takeIf { it in keyState.keys } ?: keyState.keys.firstOrNull()
+        if (apiKey.isNullOrBlank()) {
+            failSession("Chưa có Gemini API Key")
+            return
+        }
+'''
+new_key = '''        val connectionMode = AiConnectionModeStore(this).load()
+        val apiKey = if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            val keyState = ApiKeyStore(this).load()
+            keyState.selected?.takeIf { it in keyState.keys } ?: keyState.keys.firstOrNull()
+        } else {
+            null
+        }
+        if (connectionMode == AiConnectionModeStore.MODE_API_KEY && apiKey.isNullOrBlank()) {
+            failSession("Chưa có Gemini API Key")
+            return
+        }
+'''
+s = rep(s, old_key, new_key, 'service conditional api key')
+s = s.replace('GeminiScreenDescriptionLiveClient.SendResult.', 'ScreenDescriptionLiveClient.SendResult.')
+s = rep(
+    s,
+    '        val client = GeminiScreenDescriptionLiveClient(\n            apiKey = apiKey,\n            outputLanguage = outputLanguage,\n',
+    '        val client = ScreenDescriptionLiveClient(\n            context = this,\n            apiKey = apiKey,\n            outputLanguageCode = settings.targetLanguage,\n            outputLanguageDisplay = outputLanguage,\n',
+    'service routed constructor',
+)
+s = rep(
+    s,
+    '            listener = object : GeminiScreenDescriptionLiveClient.Listener {\n',
+    '            listener = object : ScreenDescriptionLiveClient.Listener {\n',
+    'service routed listener',
+)
+s = rep(
+    s,
+    '                                    "audioOutput=true language=$outputLanguage promptSource=${if (customPrompt == null) "default" else "custom"} " +\n',
+    '                                    "audioOutput=true language=$outputLanguage connectionMode=$connectionMode backend=${client.backendName} " +\n                                        "promptSource=${if (customPrompt == null) "default" else "custom"} " +\n',
+    'service ready route log',
+)
+s = rep(
+    s,
+    '                "audioOutput=true promptSource=${if (customPrompt == null) "default" else "custom"} " +\n',
+    '                "audioOutput=true connectionMode=$connectionMode backend=${client.backendName} " +\n                    "promptSource=${if (customPrompt == null) "default" else "custom"} " +\n',
+    'service start route log',
+)
+write(p, s)
+
+print('AI Studio screen-description integration patch applied')

@@ -257,9 +257,9 @@ internal class GeminiScreenDescriptionLiveClient(
             }
             val serverContent = root.optJSONObject("serverContent") ?: return@parse
             if (serverContent.optBoolean("interrupted", false)) {
-                turnInFlight.set(false)
+                // Gemini documents interrupted -> turnComplete. Flush stale output now, but keep the
+                // turn gate closed until turnComplete so a new heartbeat cannot race the old turn.
                 listener.onInterrupted()
-                drainPendingAfterTurn()
             }
 
             serverContent.optJSONObject("outputTranscription")
@@ -332,7 +332,7 @@ internal class GeminiScreenDescriptionLiveClient(
 
     companion object {
         const val MODEL = "gemini-3.8-live"
-        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v3"
+        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v4"
         private const val TAG = "LiveScreenDescription"
         private const val HOST = "generativelanguage.googleapis.com"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L

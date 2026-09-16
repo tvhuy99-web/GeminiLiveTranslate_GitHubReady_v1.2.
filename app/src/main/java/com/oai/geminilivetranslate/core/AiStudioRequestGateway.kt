@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.webkit.WebView
+import com.oai.geminilivetranslate.ui.AiStudioRequestBuilderProbeScript
 import com.oai.geminilivetranslate.ui.AiStudioRequestGatewayScript
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -51,11 +52,21 @@ class AiStudioRequestGateway(
     private val main = Handler(Looper.getMainLooper())
     private val activeIds = LinkedHashSet<String>()
 
-    /** Install the browser hooks on the current document if document-start has not already done so. */
+    /**
+     * Install the gateway and the runtime request-builder probe on the current document.
+     *
+     * The gateway itself is still installed at document start. The builder probe is intentionally
+     * added after the page/R11 hooks are live so its XHR.send wrapper can preserve the JavaScript
+     * caller stack that caused AI Studio to construct GenerateContent. It never blocks or rewrites
+     * traffic and exports only sanitized structural metadata/stack frames through the existing JS
+     * event bridge.
+     */
     fun install(callback: (Status) -> Unit = {}) {
         main.post {
             webView.evaluateJavascript(AiStudioRequestGatewayScript.DOCUMENT_START) {
-                readStatus(callback)
+                webView.evaluateJavascript(AiStudioRequestBuilderProbeScript.INSTALL) {
+                    readStatus(callback)
+                }
             }
         }
     }

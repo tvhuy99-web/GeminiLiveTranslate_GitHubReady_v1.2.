@@ -20,6 +20,25 @@ class GeminiScreenDescriptionLiveClientTest {
         assertTrue(setup.has("systemInstruction"))
         assertTrue(setup.has("outputAudioTranscription"))
         assertFalse(setup.has("inputAudioTranscription"))
+        assertTrue(setup.has("contextWindowCompression"))
+        assertTrue(setup.has("sessionResumption"))
+        assertFalse(setup.getJSONObject("sessionResumption").has("handle"))
+    }
+
+    @Test
+    fun resumedSetupCarriesOnlyTheProvidedSessionHandle() {
+        val handle = "resume-handle-123"
+        val setup = JSONObject(
+            GeminiScreenDescriptionLiveClient.createSetupMessage(
+                outputLanguage = "Tiếng Việt (vi)",
+                resumptionHandle = handle,
+            ),
+        ).getJSONObject("setup")
+
+        val resumption = setup.getJSONObject("sessionResumption")
+        assertEquals(handle, resumption.getString("handle"))
+        assertEquals(1, resumption.length())
+        assertFalse(setup.has("inputAudioTranscription"))
     }
 
     @Test

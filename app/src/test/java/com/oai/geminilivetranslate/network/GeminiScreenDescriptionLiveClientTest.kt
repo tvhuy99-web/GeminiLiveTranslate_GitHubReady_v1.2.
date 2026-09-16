@@ -1,12 +1,12 @@
 package com.oai.geminilivetranslate.network
 
-import android.util.Base64
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 class GeminiScreenDescriptionLiveClientTest {
     @Test
@@ -35,6 +35,6 @@ class GeminiScreenDescriptionLiveClientTest {
 
         val video = realtimeInput.getJSONObject("video")
         assertEquals("image/jpeg", video.getString("mimeType"))
-        assertArrayEquals(frame, Base64.decode(video.getString("data"), Base64.DEFAULT))
+        assertArrayEquals(frame, Base64.getDecoder().decode(video.getString("data")))
     }
 }

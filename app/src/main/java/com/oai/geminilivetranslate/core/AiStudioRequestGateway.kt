@@ -48,7 +48,7 @@ class AiStudioRequestGateway(
     private val main = Handler(Looper.getMainLooper())
     private val activeIds = LinkedHashSet<String>()
 
-    /** Install the browser hooks before the first GenerateContent request that should be captured. */
+    /** Install the browser hooks on the current document if document-start has not already done so. */
     fun install(callback: (Status) -> Unit = {}) {
         main.post {
             webView.evaluateJavascript(AiStudioRequestGatewayScript.DOCUMENT_START) {
@@ -68,9 +68,12 @@ class AiStudioRequestGateway(
      * is derived from the rewritten text content, so allowing a captured media request through this
      * path would pretend to support a proof shape that has not yet been verified on a device.
      *
-     * The captured template must also belong to the exact requested model and the browser must have
-     * observed the AI Studio proof service. Every check is repeated inside the JS gateway before the
-     * network request is sent, so a stale native status cannot weaken the safety boundary.
+     * Model/template/media-shape checks are authoritative inside the JS gateway because that layer
+     * owns the complete per-model template cache. Native status exposes only the most recent template
+     * for diagnostics, so using it to decide whether another model is cached can create false rejects.
+     * The browser-side gateway therefore repeats and owns TEMPLATE_MODEL_NOT_CAPTURED,
+     * TEMPLATE_MODEL_MISMATCH, TEXT_REPLAY_FLAG_REQUIRED and
+     * TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE immediately before network dispatch.
      */
     fun replayText(
         model: String,
@@ -87,12 +90,8 @@ class AiStudioRequestGateway(
             }
 
             readStatus { gatewayStatus ->
-                val capturedModel = gatewayStatus.templateModel.trim().removePrefix("models/")
                 val preflightError = when {
                     !gatewayStatus.available -> gatewayStatus.error.ifBlank { "GATEWAY_NOT_INSTALLED" }
-                    !gatewayStatus.templateReady -> "NO_CAPTURED_TEMPLATE"
-                    capturedModel != normalizedModel -> "TEMPLATE_MODEL_NOT_CAPTURED"
-                    !gatewayStatus.textReplaySafe -> "TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE"
                     !gatewayStatus.proofReady -> "PROOF_NOT_READY"
                     else -> ""
                 }
@@ -102,7 +101,6 @@ class AiStudioRequestGateway(
                             ok = false,
                             error = preflightError,
                             model = normalizedModel,
-                            fingerprint = gatewayStatus.templateFingerprint,
                         ),
                     )
                     return@readStatus
@@ -135,7 +133,6 @@ class AiStudioRequestGateway(
                                 ok = false,
                                 error = started?.optString("error").orEmpty().ifBlank { "GATEWAY_START_FAILED" },
                                 model = started?.optString("requestedModel").orEmpty().ifBlank { normalizedModel },
-                                fingerprint = gatewayStatus.templateFingerprint,
                             ),
                         )
                         return@evalJson

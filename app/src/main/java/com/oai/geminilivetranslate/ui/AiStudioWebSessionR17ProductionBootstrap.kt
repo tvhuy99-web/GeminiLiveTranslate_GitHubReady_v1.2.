@@ -140,7 +140,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       const rk=Object.prototype.hasOwnProperty.call(gc,'response_modalities')?'response_modalities':'responseModalities';gc[rk]=['AUDIO'];changed++;
       for(const k of ['translationConfig','translation_config']){if(Object.prototype.hasOwnProperty.call(gc,k)){delete gc[k];changed++;}}
       const sk=Object.prototype.hasOwnProperty.call(node,'system_instruction')?'system_instruction':'systemInstruction';
-      node[sk]={parts:[{text:String(state.systemPrompt||'')}]};changed++;
+      node[sk]={parts:[{text:String(state.systemPrompt||'')}]};state.instructionApplied=true;changed++;
       const ok=Object.prototype.hasOwnProperty.call(node,'output_audio_transcription')?'output_audio_transcription':'outputAudioTranscription';node[ok]={};changed++;
       for(const k of ['inputAudioTranscription','input_audio_transcription']){if(Object.prototype.hasOwnProperty.call(node,k)){delete node[k];changed++;}}
       const ck=Object.prototype.hasOwnProperty.call(node,'context_window_compression')?'context_window_compression':'contextWindowCompression';

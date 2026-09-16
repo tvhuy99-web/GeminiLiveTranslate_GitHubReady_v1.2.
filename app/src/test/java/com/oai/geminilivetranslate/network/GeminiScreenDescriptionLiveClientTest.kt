@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
@@ -25,6 +26,40 @@ class GeminiScreenDescriptionLiveClientTest {
         assertTrue(setup.has("contextWindowCompression"))
         assertTrue(setup.has("sessionResumption"))
         assertFalse(setup.getJSONObject("sessionResumption").has("handle"))
+    }
+
+    @Test
+    fun customPromptReplacesDefaultSystemInstruction() {
+        val custom = "Chỉ mô tả hành động và chữ quan trọng trên màn hình."
+        val setup = JSONObject(
+            GeminiScreenDescriptionLiveClient.createSetupMessage(
+                outputLanguage = "Tiếng Việt (vi)",
+                customPrompt = custom,
+            ),
+        ).getJSONObject("setup")
+
+        val instruction = setup.getJSONObject("systemInstruction")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
+        assertEquals(custom, instruction)
+    }
+
+    @Test
+    fun blankCustomPromptFallsBackToDefaultSystemInstruction() {
+        val setup = JSONObject(
+            GeminiScreenDescriptionLiveClient.createSetupMessage(
+                outputLanguage = "Tiếng Việt (vi)",
+                customPrompt = "   ",
+            ),
+        ).getJSONObject("setup")
+
+        val instruction = setup.getJSONObject("systemInstruction")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
+        assertTrue(instruction.contains("thuyết minh hình ảnh theo thời gian thực"))
+        assertNotEquals("", instruction)
     }
 
     @Test

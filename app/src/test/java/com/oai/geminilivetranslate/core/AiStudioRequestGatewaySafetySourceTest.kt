@@ -10,7 +10,7 @@ class AiStudioRequestGatewaySafetySourceTest {
         .firstOrNull(File::isFile)?.readText() ?: error("Không tìm thấy source: $path")
 
     @Test
-    fun textReplayIsFailClosedOnModelProofAndMediaShape() {
+    fun textReplayIsFailClosedOnModelProofMediaAndEnvelopeShape() {
         val facade = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioRequestGateway.kt")
         val script = source("src/main/java/com/oai/geminilivetranslate/ui/AiStudioRequestGatewayScript.kt")
 
@@ -19,8 +19,11 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertTrue(facade.contains("PROOF_NOT_READY"))
         assertTrue(facade.contains(".put(\"textOnly\", true)"))
 
-        assertTrue(script.contains("request-gateway-v1.3-trusted-host-cancellable"))
+        assertTrue(script.contains("request-gateway-v1.4-safe-envelope"))
         assertTrue(script.contains("function analyzeTextReplaySafety(contents)"))
+        assertTrue(script.contains("function analyzeTextReplayEnvelope(root)"))
+        assertTrue(script.contains("!systemInstructionPresent && !toolsPresent && !cachedContentPresent"))
+        assertTrue(script.contains("const replaySafe = !!textSafety.safe && !!envelopeSafety.safe"))
         assertTrue(script.contains("if (requestedModel) return templates[templateKey(requestedModel)] || null"))
         assertTrue(script.contains("TEMPLATE_MODEL_NOT_CAPTURED"))
         assertTrue(script.contains("TEXT_REPLAY_FLAG_REQUIRED"))

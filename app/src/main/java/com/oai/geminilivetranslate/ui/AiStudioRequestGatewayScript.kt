@@ -8,7 +8,7 @@ package com.oai.geminilivetranslate.ui
  * shape is rejected instead of being rewritten heuristically.
  */
 object AiStudioRequestGatewayScript {
-    const val VERSION = "2026-09-16-request-gateway-v1.2-cancellable-text-replay"
+    const val VERSION = "2026-09-16-request-gateway-v1.3-trusted-host-cancellable"
 
     val DOCUMENT_START: String = """
         (function() {
@@ -40,7 +40,18 @@ object AiStudioRequestGatewayScript {
             } catch (_) {}
           }
 
+          function isTrustedGenerateHost(raw) {
+            try {
+              const u = new URL(String(raw || ''), location.href);
+              const host = String(u.hostname || '').toLowerCase();
+              return host === 'aistudio.google.com' ||
+                host === 'google.com' || host.endsWith('.google.com') ||
+                host === 'googleapis.com' || host.endsWith('.googleapis.com');
+            } catch (_) { return false; }
+          }
+
           function isGenerateUrl(raw) {
+            if (!isTrustedGenerateHost(raw)) return false;
             const s = String(raw || '');
             return /MakerSuiteService\/GenerateContent/i.test(s) || /\/GenerateContent(?:$|[/?])/i.test(s);
           }

@@ -150,6 +150,7 @@ class LiveVideoDescriptionService : Service() {
         frameCapture = capture
 
         val outputLanguage = LanguageCatalog.displayName(settings.targetLanguage)
+        val selectedBackend = if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) "ai_studio" else "api_key"
         val client = ScreenDescriptionLiveClient(
             context = this,
             apiKey = apiKey,
@@ -166,7 +167,7 @@ class LiveVideoDescriptionService : Service() {
                                 2,
                                 TAG,
                                 "LIVE_READY model=${GeminiScreenDescriptionLiveClient.MODEL} screen=true micInput=false " +
-                                    "audioOutput=true language=$outputLanguage connectionMode=$connectionMode backend=${client.backendName} " +
+                                    "audioOutput=true language=$outputLanguage connectionMode=$connectionMode backend=$selectedBackend " +
                                         "promptSource=${if (customPrompt == null) "default" else "custom"} " +
                                     "promptChars=${customPrompt?.length ?: 0}",
                             )
@@ -208,7 +209,7 @@ class LiveVideoDescriptionService : Service() {
             2,
             TAG,
             "START model=${GeminiScreenDescriptionLiveClient.MODEL} input=screen-jpeg maxFps=1 micInput=false " +
-                "audioOutput=true connectionMode=$connectionMode backend=${client.backendName} " +
+                "audioOutput=true connectionMode=$connectionMode backend=$selectedBackend " +
                     "promptSource=${if (customPrompt == null) "default" else "custom"} " +
                 "promptChars=${customPrompt?.length ?: 0}",
         )

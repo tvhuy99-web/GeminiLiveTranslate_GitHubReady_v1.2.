@@ -39,4 +39,17 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertFalse(video.contains(".replayText("))
         assertFalse(stt.contains(".replayText("))
     }
+
+    @Test
+    fun liveTransportRemainsIndependentFromRequestGateway() {
+        val realtime = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
+        val liveClient = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebLiveClient.kt")
+        val liveOutput = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioWebLiveOutputBridge.kt")
+        val service = source("src/main/java/com/oai/geminilivetranslate/service/TranslationService.kt")
+
+        listOf(realtime, liveClient, liveOutput, service).forEach { liveSource ->
+            assertFalse(liveSource.contains("AiStudioRequestGateway"))
+            assertFalse(liveSource.contains("AiStudioIncrementalJsonArrayParser"))
+        }
+    }
 }

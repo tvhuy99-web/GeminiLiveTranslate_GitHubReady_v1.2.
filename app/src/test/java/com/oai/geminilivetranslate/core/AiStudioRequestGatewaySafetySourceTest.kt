@@ -55,8 +55,15 @@ class AiStudioRequestGatewaySafetySourceTest {
     }
 
     @Test
-    fun nativeFacadeDoesNotExportCapturedRequestSecrets() {
+    fun nativeFacadeExportsOnlySanitizedEnvelopeMetadata() {
         val facade = source("src/main/java/com/oai/geminilivetranslate/core/AiStudioRequestGateway.kt")
+
+        assertTrue(facade.contains("templateSystemInstructionPresent"))
+        assertTrue(facade.contains("templateToolsPresent"))
+        assertTrue(facade.contains("templateCachedContentPresent"))
+        assertTrue(facade.contains("optBoolean(\"templateSystemInstructionPresent\""))
+        assertTrue(facade.contains("optBoolean(\"templateToolsPresent\""))
+        assertTrue(facade.contains("optBoolean(\"templateCachedContentPresent\""))
 
         assertFalse(facade.contains("data class CapturedRequest"))
         assertFalse(facade.contains("val headers:"))
@@ -64,6 +71,9 @@ class AiStudioRequestGatewaySafetySourceTest {
         assertFalse(facade.contains("val cookie:"))
         assertFalse(facade.contains("val cookies:"))
         assertFalse(facade.contains("val snapshot:"))
+        assertFalse(facade.contains("val systemInstruction:"))
+        assertFalse(facade.contains("val tools:"))
+        assertFalse(facade.contains("val cachedContent:"))
     }
 
     @Test

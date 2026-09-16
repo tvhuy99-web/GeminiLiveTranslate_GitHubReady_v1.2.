@@ -119,16 +119,30 @@ class AppPreferences(context: Context) {
     fun loadVideoDescriptionMode(): String =
         prefs.getString(KEY_VIDEO_DESCRIPTION_MODE, VIDEO_DESCRIPTION_TIMELINE)
             .orEmpty()
-            .takeIf { it == VIDEO_DESCRIPTION_TIMELINE || it == VIDEO_DESCRIPTION_SUMMARY }
+            .takeIf {
+                it == VIDEO_DESCRIPTION_TIMELINE ||
+                    it == VIDEO_DESCRIPTION_SUMMARY ||
+                    it == VIDEO_DESCRIPTION_LIVE
+            }
             ?: VIDEO_DESCRIPTION_TIMELINE
 
     fun setVideoDescriptionMode(value: String) {
-        val safe = if (value == VIDEO_DESCRIPTION_SUMMARY) {
-            VIDEO_DESCRIPTION_SUMMARY
-        } else {
-            VIDEO_DESCRIPTION_TIMELINE
+        val safe = when (value) {
+            VIDEO_DESCRIPTION_SUMMARY -> VIDEO_DESCRIPTION_SUMMARY
+            VIDEO_DESCRIPTION_LIVE -> VIDEO_DESCRIPTION_LIVE
+            else -> VIDEO_DESCRIPTION_TIMELINE
         }
         prefs.edit().putString(KEY_VIDEO_DESCRIPTION_MODE, safe).apply()
+    }
+
+    fun loadLiveDescriptionPrompt(): String =
+        prefs.getString(KEY_LIVE_DESCRIPTION_PROMPT, "").orEmpty()
+            .take(MAX_LIVE_DESCRIPTION_PROMPT_CHARS)
+
+    fun setLiveDescriptionPrompt(value: String) {
+        prefs.edit()
+            .putString(KEY_LIVE_DESCRIPTION_PROMPT, value.take(MAX_LIVE_DESCRIPTION_PROMPT_CHARS))
+            .apply()
     }
 
     fun loadSpeakerDiarization(): Boolean = prefs.getBoolean(KEY_SPEAKER_DIARIZATION, false)
@@ -136,7 +150,6 @@ class AppPreferences(context: Context) {
     fun setSpeakerDiarization(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SPEAKER_DIARIZATION, enabled).apply()
     }
-
 
     fun loadAiStudioWebViewVisible(): Boolean = prefs.getBoolean(KEY_AI_STUDIO_WEBVIEW_VISIBLE, false)
 
@@ -158,6 +171,7 @@ class AppPreferences(context: Context) {
     companion object {
         const val DEFAULT_MODEL = "gemini-3.5-live-translate-preview"
         const val PREFS_NAME = "gemini_translate_prefs"
+        const val MAX_LIVE_DESCRIPTION_PROMPT_CHARS = 20_000
         private const val KEY_TARGET_LANGUAGE = "targetLanguage"
         private const val KEY_ECHO_TARGET = "echoTargetLanguage"
         private const val KEY_AI_VOICE = "useAIVoice"
@@ -194,6 +208,7 @@ class AppPreferences(context: Context) {
         private const val KEY_MIC_LANGUAGE_INDEX = "micLanguageIndex"
         private const val KEY_PROCESSING_MODE = "processingMode"
         private const val KEY_VIDEO_DESCRIPTION_MODE = "videoDescriptionMode"
+        private const val KEY_LIVE_DESCRIPTION_PROMPT = "liveDescriptionPrompt"
         private const val KEY_SPEAKER_DIARIZATION = "speakerDiarization"
         private const val KEY_AI_STUDIO_WEBVIEW_VISIBLE = "aiStudioWebViewVisible"
         const val PROCESSING_MODE_TRANSLATE = "translate"
@@ -201,6 +216,7 @@ class AppPreferences(context: Context) {
         const val PROCESSING_MODE_VIDEO_DESCRIPTION = "video_description"
         const val VIDEO_DESCRIPTION_TIMELINE = "timeline"
         const val VIDEO_DESCRIPTION_SUMMARY = "summary"
+        const val VIDEO_DESCRIPTION_LIVE = "live"
         const val TRANSCRIBE_FILE_MODEL = "gemini-3.5-transcribe"
         const val TRANSCRIBE_LIVE_MODEL = "gemini-3.5-transcribe-live"
         const val SUBTITLE_TRANSLATE_MODEL = "gemini-3.5-flash-lite"

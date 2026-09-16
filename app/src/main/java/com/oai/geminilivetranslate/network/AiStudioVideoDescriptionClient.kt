@@ -57,10 +57,10 @@ class AiStudioVideoDescriptionClient(
         onProgress("Đang mở phiên AI Studio đã đăng nhập...", 2)
 
         val exec = createAndAwaitReady()
-        installRequestGateway(exec)
         throwIfCancelled()
         onProgress("Đang chọn model mô tả video...", 8)
         selectModel(exec)
+        installRequestGateway(exec)
         throwIfCancelled()
         onProgress("Đang tải và chờ AI Studio xử lý nguyên video...", 12)
         attachVideo(exec, uri, displayName, mimeType, sourceBytes)

@@ -57,28 +57,61 @@
             android:id="@+id/videoDescriptionModeLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
+            android:orientation="vertical"
             android:visibility="gone">
 
-            <TextView
-                android:id="@+id/videoDescriptionModeLabel"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:labelFor="@id/videoDescriptionModeSpinner"
-                android:text="Kiểu mô tả:"
-                android:textSize="16sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <com.oai.geminilivetranslate.ui.AccessibleSpinner
-                android:id="@+id/videoDescriptionModeSpinner"
-                android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/videoDescriptionModeLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:labelFor="@id/videoDescriptionModeSpinner"
+                    android:text="Kiểu mô tả:"
+                    android:textSize="16sp" />
+
+                <com.oai.geminilivetranslate.ui.AccessibleSpinner
+                    android:id="@+id/videoDescriptionModeSpinner"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:contentDescription="Chọn kiểu mô tả video"
+                    android:minHeight="48dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/livePromptLayout"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:contentDescription="Chọn kiểu mô tả video"
-                android:minHeight="48dp" />
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/livePromptLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:labelFor="@id/livePromptEditText"
+                    android:text="Lời nhắc"
+                    android:textSize="16sp" />
+
+                <EditText
+                    android:id="@+id/livePromptEditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="top|start"
+                    android:inputType="textCapSentences|textMultiLine"
+                    android:maxLength="20000"
+                    android:minHeight="96dp"
+                    android:padding="8dp" />
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/audioSourceLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
@@ -351,7 +384,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
-            android:text="Nghe với phụ đề"
+            android:text="Xem video với phụ đề"
             android:visibility="gone" />
 
         <Button

@@ -102,6 +102,7 @@ class HistoryActivity : AppCompatActivity() {
                 text = session.title
                 contentDescription = buildDescription(index, session)
                 setOnClickListener {
+                    syncPersistedMediaWithHistory(session)
                     logger.log(
                         2,
                         TAG,
@@ -122,6 +123,37 @@ class HistoryActivity : AppCompatActivity() {
         }
 
         logger.log(2, TAG, "Hiển thị lịch sử count=${sessions.size}")
+    }
+
+    private fun syncPersistedMediaWithHistory(session: HistorySession) {
+        if (session.sourceMode != SourceMode.FILE.name) return
+
+        val mediaUri = session.mediaUri?.takeIf(String::isNotBlank)
+        val mediaName = session.mediaName?.takeIf(String::isNotBlank)
+        val editor = getSharedPreferences(AppPreferences.PREFS_NAME, Context.MODE_PRIVATE).edit()
+
+        if (mediaUri == null) {
+            editor
+                .remove(KEY_SELECTED_FILE_URI)
+                .remove(KEY_SELECTED_FILE_NAME)
+                .apply()
+            logger.log(
+                2,
+                TAG,
+                "HISTORY_MEDIA_SELECTED id=${session.id} hasMedia=false clearedStaleSelection=true",
+            )
+            return
+        }
+
+        editor.putString(KEY_SELECTED_FILE_URI, mediaUri)
+        if (mediaName == null) editor.remove(KEY_SELECTED_FILE_NAME)
+        else editor.putString(KEY_SELECTED_FILE_NAME, mediaName)
+        editor.apply()
+        logger.log(
+            2,
+            TAG,
+            "HISTORY_MEDIA_SELECTED id=${session.id} hasMedia=true mediaName=${mediaName ?: "unknown"}",
+        )
     }
 
     private fun buildDescription(index: Int, session: HistorySession): String {
@@ -174,6 +206,8 @@ class HistoryActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_SESSION_ID = "history.sessionId"
         private const val TAG = "History"
+        private const val KEY_SELECTED_FILE_URI = "selectedFileUri"
+        private const val KEY_SELECTED_FILE_NAME = "selectedFileName"
         private val DATE_FORMAT = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
     }
 }

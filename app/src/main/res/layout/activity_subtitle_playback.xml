@@ -18,9 +18,16 @@
             android:accessibilityHeading="true"
             android:gravity="center"
             android:padding="8dp"
-            android:text="Nghe với phụ đề"
+            android:text="Xem video với phụ đề"
             android:textSize="20sp"
             android:textStyle="bold" />
+
+        <VideoView
+            android:id="@+id/videoView"
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:contentDescription="Video"
+            android:keepScreenOn="true" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -51,7 +58,7 @@
             android:accessibilityLiveRegion="none"
             android:focusable="true"
             android:padding="8dp"
-            android:text="Trạng thái: Hãy chọn media và phụ đề"
+            android:text="Trạng thái: Hãy chọn video hoặc âm thanh"
             android:textSize="16sp" />
 
         <LinearLayout
@@ -156,7 +163,7 @@
             android:id="@+id/subtitleScroll"
             android:layout_width="match_parent"
             android:layout_height="200dp"
-            android:contentDescription="Phụ đề đang đọc"
+            android:contentDescription="Phụ đề"
             android:focusable="true">
 
             <TextView

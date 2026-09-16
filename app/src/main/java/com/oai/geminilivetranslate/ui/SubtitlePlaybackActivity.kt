@@ -1,6 +1,7 @@
 package com.oai.geminilivetranslate.ui
 
-import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.PlaybackParams
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -9,16 +10,12 @@ import android.widget.SeekBar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.oai.geminilivetranslate.audio.AudioSource
-import com.oai.geminilivetranslate.audio.FileAudioSource
 import com.oai.geminilivetranslate.audio.RobustTtsEngine
-import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.SrtParser
 import com.oai.geminilivetranslate.core.SubtitleStore
 import com.oai.geminilivetranslate.databinding.ActivitySubtitlePlaybackBinding
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -37,9 +34,8 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
     private var subtitleRaw: String = ""
     private var cues: List<SubtitleStore.Cue> = emptyList()
 
-    private var source: FileAudioSource? = null
-    private var player: StreamingPcmPlayer? = null
-    private var playbackJob: Job? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var progressJob: Job? = null
     private var duckRestoreJob: Job? = null
 
     private var ttsReady = false
@@ -91,7 +87,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         restorePreferences()
         setupUi()
         restoreSeedFromIntent()
-        ensureTtsReady(false)
+        if (cues.isNotEmpty()) ensureTtsReady(false)
         logger.log(
             2,
             TAG,
@@ -213,7 +209,8 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
     }
 
     private fun selectSubtitle(raw: String, name: String, fromSeed: Boolean) {
-        stopPlayback(resetPosition = true)
+        val wasPlaying = playing
+        if (wasPlaying) stopPlayback(resetPosition = true)
         val parsed = SrtParser.parse(raw)
         subtitleRaw = raw
         subtitleName = name
@@ -234,6 +231,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
                 "Phụ đề preview=${cues.take(5).joinToString(" | ") { "${it.index}:${it.text.replace(Regex("\\s+"), " ").take(120)}" }}",
             )
         }
+        if (cues.isNotEmpty()) ensureTtsReady(false)
         updateReadyStatus()
     }
 
@@ -242,13 +240,9 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             status("Hãy chọn video hoặc âm thanh")
             return
         }
-        if (cues.isEmpty()) {
-            status("Hãy chọn phụ đề SRT hợp lệ")
-            return
-        }
-        if (!ttsReady) {
+        if (cues.isNotEmpty() && !ttsReady) {
             pendingPlayAfterTts = true
-            status("Đang chuẩn bị TTS...")
+            status("Đang chuẩn bị phụ đề...")
             ensureTtsReady(true)
             return
         }
@@ -282,7 +276,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
                 processCue(currentPositionMs)
             } else if (!success && startWhenReady) {
                 pendingPlayAfterTts = false
-                status("Không khởi tạo được TTS")
+                startPlayback()
             } else {
                 updateReadyStatus()
             }
@@ -291,7 +285,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
 
     private fun startPlayback() {
         val uri = mediaUri ?: return
-        if (cues.isEmpty() || playing) return
+        if (playing) return
 
         completed = false
         paused = false
@@ -302,102 +296,82 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         cueEvents = 0L
         restoreDucking("start")
 
-        val settings = preferences.load()
-        val mediaPlayer = StreamingPcmPlayer(
-            sampleRate = 16_000,
-            bufferBytes = 64_000,
-            queueCapacity = 100,
-            initialJitterChunks = 1,
-            usage = AudioAttributes.USAGE_MEDIA,
-            logger = logger,
-            diagnosticName = "SubtitleMediaPlayer",
-        ).also {
-            it.start()
-            it.setVolume(settings.originalVolume)
-            it.setPlaybackSpeed(playbackSpeed)
+        binding.videoView.setOnPreparedListener { prepared ->
+            mediaPlayer = prepared
+            durationMs = prepared.duration.toLong().coerceAtLeast(0L)
+            applyPlaybackSpeedToPlayer()
+            applyOriginalVolume()
+            playing = true
+            paused = false
+            binding.videoView.start()
+            startProgressLoop()
+            updateButtons()
+            status("Đang phát")
+            val settings = preferences.load()
+            logger.log(
+                2,
+                TAG,
+                "Bắt đầu phát media=$mediaName subtitle=${subtitleName ?: "none"} cues=${cues.size} speed=${formatSpeed()}x originalVolume=${settings.originalVolume} ttsVolume=${settings.translatedVolume} autoDucking=${settings.autoDucking}",
+            )
         }
-        player = mediaPlayer
+        binding.videoView.setOnCompletionListener {
+            currentPositionMs = durationMs.coerceAtLeast(currentPositionMs)
+            completed = true
+            playing = false
+            paused = false
+            progressJob?.cancel()
+            progressJob = null
+            binding.progressSeekBar.progress = 100
+            if (cues.isNotEmpty()) {
+                binding.subtitleText.text = cues.lastOrNull()?.text ?: "Đã phát hết"
+            }
+            ttsEngine.stop()
+            restoreDucking("completed")
+            status("Đã phát hết")
+            updateButtons()
+            logger.log(
+                2,
+                TAG,
+                "Phát hoàn tất positionMs=$currentPositionMs durationMs=$durationMs cueEvents=$cueEvents",
+            )
+        }
+        binding.videoView.setOnErrorListener { _, what, extra ->
+            logger.log(0, TAG, "Phát media thất bại what=$what extra=$extra positionMs=$currentPositionMs")
+            status("Không phát được tệp media")
+            stopPlayback(resetPosition = false)
+            true
+        }
+        binding.videoView.setVideoURI(uri)
+        status("Đang mở video...")
+    }
 
-        val fileSource = FileAudioSource(
-            context = this,
-            uri = uri,
-            pacingEnabled = true,
-            leadMs = 0,
-            initialPlaybackSpeed = playbackSpeed,
-            logger = logger,
-        )
-        source = fileSource
-        playing = true
-        updateButtons()
-        status("Đang phát với phụ đề")
-        logger.log(
-            2,
-            TAG,
-            "Bắt đầu phát media=$mediaName subtitle=$subtitleName cues=${cues.size} speed=${formatSpeed()}x originalVolume=${settings.originalVolume} ttsVolume=${settings.translatedVolume} autoDucking=${settings.autoDucking} duckFactor=${settings.duckVolumeFactor} ttsEngine=${ttsEngine.currentEngine() ?: "DEFAULT"}",
-        )
-
-        playbackJob = lifecycleScope.launch(Dispatchers.IO) {
-            fileSource.run(object : AudioSource.Listener {
-                override fun onPcm16Mono16k(data: ByteArray) {
-                    if (!paused && playing) mediaPlayer.enqueue(data)
-                }
-
-                override fun onProgress(percent: Int, positionMs: Long, mediaDurationMs: Long) {
-                    currentPositionMs = positionMs
-                    durationMs = mediaDurationMs
-                    runOnUiThread {
-                        if (!binding.progressSeekBar.isPressed) {
-                            binding.progressSeekBar.progress = percent.coerceIn(0, 100)
-                        }
-                        binding.progressSeekBar.contentDescription =
-                            "Vị trí đang phát: ${percent.coerceIn(0, 100)}%"
-                        processCue(positionMs)
-                        logProgress(positionMs, mediaDurationMs, percent)
+    private fun startProgressLoop() {
+        progressJob?.cancel()
+        progressJob = lifecycleScope.launch {
+            while (playing) {
+                if (!paused) {
+                    currentPositionMs = binding.videoView.currentPosition.toLong().coerceAtLeast(0L)
+                    val currentDuration = binding.videoView.duration
+                    if (currentDuration > 0) durationMs = currentDuration.toLong()
+                    val percent = if (durationMs > 0L) {
+                        ((currentPositionMs * 100L) / durationMs).toInt().coerceIn(0, 100)
+                    } else {
+                        0
                     }
+                    if (!binding.progressSeekBar.isPressed) binding.progressSeekBar.progress = percent
+                    binding.progressSeekBar.contentDescription = "Vị trí đang phát: $percent%"
+                    processCue(currentPositionMs)
+                    logProgress(currentPositionMs, durationMs, percent)
                 }
-
-                override fun onCompleted() {
-                    runOnUiThread {
-                        currentPositionMs = durationMs.coerceAtLeast(currentPositionMs)
-                        completed = true
-                        playing = false
-                        paused = false
-                        source = null
-                        playbackJob = null
-                        binding.progressSeekBar.progress = 100
-                        binding.subtitleText.text = cues.lastOrNull()?.text ?: "Đã phát hết"
-                        status("Đã phát hết")
-                        updateButtons()
-                        val stats = mediaPlayer.stats()
-                        logger.log(
-                            2,
-                            TAG,
-                            "Phát hoàn tất positionMs=$currentPositionMs durationMs=$durationMs cueEvents=$cueEvents playerWrittenBytes=${stats.writtenBytes} dropped=${stats.droppedChunks}",
-                        )
-                        lifecycleScope.launch {
-                            delay(700)
-                            mediaPlayer.stop()
-                            if (player === mediaPlayer) player = null
-                        }
-                    }
-                }
-
-                override fun onError(error: Throwable) {
-                    runOnUiThread {
-                        logger.log(0, TAG, "Phát media thất bại positionMs=$currentPositionMs", error)
-                        status("Lỗi phát: ${error.message ?: error.javaClass.simpleName}")
-                        stopPlayback(resetPosition = false)
-                    }
-                }
-            })
+                delay(PROGRESS_POLL_MS)
+            }
         }
     }
 
     private fun pausePlayback() {
         if (!playing || paused) return
         paused = true
-        source?.pause()
-        player?.pause()
+        binding.videoView.pause()
         ttsEngine.stop()
         restoreDucking("pause")
         status("Đã tạm dừng")
@@ -408,28 +382,25 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
     private fun resumePlayback() {
         if (!playing || !paused) return
         paused = false
-        source?.resume()
-        player?.resume()
+        binding.videoView.start()
         ttsEngine.stop()
         restoreDucking("resume")
         lastCueListIndex = -1
-        status("Đang phát với phụ đề")
+        status("Đang phát")
         updateButtons()
         logger.log(2, TAG, "Tiếp tục positionMs=$currentPositionMs speed=${formatSpeed()}x")
     }
 
     private fun stopPlayback(resetPosition: Boolean) {
         pendingPlayAfterTts = false
-        source?.stop()
-        source = null
-        playbackJob?.cancel()
-        playbackJob = null
-        player?.stop()
-        player = null
+        progressJob?.cancel()
+        progressJob = null
+        if (::binding.isInitialized) runCatching { binding.videoView.stopPlayback() }
+        mediaPlayer = null
         ttsEngine.stop()
         duckRestoreJob?.cancel()
         duckRestoreJob = null
-        restoreDucking("stop")
+        ducking = false
         playing = false
         paused = false
         completed = false
@@ -444,28 +415,24 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
 
     private fun seekBy(deltaMs: Long) {
         if (!playing) return
-        logger.log(2, TAG, "Seek deltaMs=$deltaMs fromMs=$currentPositionMs")
+        val target = (currentPositionMs + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L))
+        logger.log(2, TAG, "Seek deltaMs=$deltaMs fromMs=$currentPositionMs targetMs=$target")
         prepareForSeek()
-        source?.seekBy(deltaMs)
-        if (!paused) source?.resume()
+        binding.videoView.seekTo(target.toInt())
+        currentPositionMs = target
     }
 
     private fun seekToPercent(percent: Int) {
-        if (!playing) return
+        if (!playing || durationMs <= 0L) return
         val safe = percent.coerceIn(0, 100)
-        logger.log(
-            2,
-            TAG,
-            "Seek percent=$safe fromMs=$currentPositionMs durationMs=$durationMs estimatedTargetMs=${if (durationMs > 0) durationMs * safe / 100L else -1}",
-        )
+        val target = durationMs * safe / 100L
+        logger.log(2, TAG, "Seek percent=$safe fromMs=$currentPositionMs durationMs=$durationMs targetMs=$target")
         prepareForSeek()
-        source?.seekToPercent(safe)
-        if (!paused) source?.resume()
+        binding.videoView.seekTo(target.toInt())
+        currentPositionMs = target
     }
 
     private fun prepareForSeek() {
-        source?.pause()
-        player?.flush()
         ttsEngine.stop()
         restoreDucking("seek")
         lastCueListIndex = -1
@@ -476,8 +443,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         if (kotlin.math.abs(playbackSpeed - safe) < 0.001f) return
         playbackSpeed = safe
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(KEY_SPEED, safe).apply()
-        source?.setPlaybackSpeed(safe)
-        player?.setPlaybackSpeed(safe)
+        applyPlaybackSpeedToPlayer()
         syncSpeedUi()
         logger.log(2, TAG, "Đổi tốc độ speed=${formatSpeed()}x positionMs=$currentPositionMs")
         if (playing && !paused) {
@@ -485,6 +451,18 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             restoreDucking("speed-change")
             lastCueListIndex = -1
             processCue(currentPositionMs)
+        }
+    }
+
+    private fun applyPlaybackSpeedToPlayer() {
+        val current = mediaPlayer ?: return
+        runCatching {
+            current.playbackParams = PlaybackParams()
+                .allowDefaults()
+                .setSpeed(playbackSpeed)
+                .setPitch(1f)
+        }.onFailure {
+            logger.log(1, TAG, "Không áp dụng được tốc độ ${formatSpeed()}x", it)
         }
     }
 
@@ -502,28 +480,29 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
 
         val lateMs = (positionMs - cue.startMs).coerceAtLeast(0L)
         val settings = preferences.load()
-        val spoken = ttsEngine.speak(
-            text = cue.text,
-            languageTag = "vi-VN",
-            rate = playbackSpeed,
-            pitch = 1f,
-            volume = settings.translatedVolume.coerceIn(0, 100) / 100f,
-            queue = queueSubtitleTts,
-        )
+        val spoken = if (ttsReady) {
+            ttsEngine.speak(
+                text = cue.text,
+                languageTag = "vi-VN",
+                rate = playbackSpeed,
+                pitch = 1f,
+                volume = settings.translatedVolume.coerceIn(0, 100) / 100f,
+                queue = queueSubtitleTts,
+            )
+        } else {
+            false
+        }
         val estimatedTtsMs = estimateTtsDurationMs(cue.text)
         if (spoken) applyDucking(estimatedTtsMs, cue.index)
         logger.log(
-            if (spoken) 2 else 1,
+            if (spoken || !ttsReady) 2 else 1,
             TAG_CUE,
             "cueEvent=$cueEvents cue=${cue.index}/${cues.size} startMs=${cue.startMs} endMs=${cue.endMs} positionMs=$positionMs lateMs=$lateMs chars=${cue.text.length} speed=${formatSpeed()}x ttsQueued=$spoken queueMode=$queueSubtitleTts estimatedTtsMs=$estimatedTtsMs autoDucking=${settings.autoDucking}",
         )
         if (settings.logIncludeTranscript) {
             logger.log(3, TAG_CUE, "cue=${cue.index} text=${cue.text.replace(Regex("\\s+"), " ").take(500)}")
         }
-        if (!spoken) {
-            ttsReady = false
-            ensureTtsReady(false)
-        }
+        if (!spoken && !ttsReady) ensureTtsReady(false)
     }
 
     private fun findCueIndex(positionMs: Long): Int {
@@ -573,8 +552,9 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             (settings.originalVolume * settings.duckVolumeFactor).roundToInt()
         } else {
             settings.originalVolume
-        }
-        player?.setVolume(percent.coerceIn(0, 100))
+        }.coerceIn(0, 100)
+        val volume = percent / 100f
+        mediaPlayer?.setVolume(volume, volume)
     }
 
     private fun estimateTtsDurationMs(text: String): Long =
@@ -594,10 +574,10 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
     private fun updateReadyStatus() {
         if (!::binding.isInitialized || playing) return
         when {
-            mediaUri == null && cues.isEmpty() -> status("Hãy chọn media và phụ đề")
+            mediaUri == null && cues.isEmpty() -> status("Hãy chọn video hoặc âm thanh")
             mediaUri == null -> status("Đã có phụ đề; hãy chọn video hoặc âm thanh")
-            cues.isEmpty() -> status("Đã có media; hãy chọn phụ đề SRT")
-            !ttsReady -> status("Đã có media và phụ đề; đang chuẩn bị TTS")
+            cues.isEmpty() -> status("Sẵn sàng phát")
+            !ttsReady -> status("Sẵn sàng phát; đang chuẩn bị phụ đề")
             else -> status("Sẵn sàng phát với phụ đề")
         }
         updateButtons()
@@ -610,7 +590,7 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
             completed -> "Phát lại"
             else -> "Phát"
         }
-        val ready = mediaUri != null && cues.isNotEmpty()
+        val ready = mediaUri != null
         playPauseButton.isEnabled = ready
         rewindButton.isEnabled = playing
         forwardButton.isEnabled = playing
@@ -668,5 +648,6 @@ class SubtitlePlaybackActivity : AppCompatActivity() {
         private const val TAG_CUE = "SubtitlePlaybackCue"
         private const val PREFS_NAME = "subtitle_playback_prefs"
         private const val KEY_SPEED = "speed"
+        private const val PROGRESS_POLL_MS = 100L
     }
 }

@@ -55,6 +55,10 @@
             android:name=".service.TranslationService"
             android:exported="false"
             android:foregroundServiceType="microphone|mediaProjection|mediaPlayback|dataSync" />
+        <service
+            android:name=".service.LiveVideoDescriptionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|mediaPlayback" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

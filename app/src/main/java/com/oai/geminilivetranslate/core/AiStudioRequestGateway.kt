@@ -24,6 +24,10 @@ class AiStudioRequestGateway(
         val templateModel: String = "",
         val templateFingerprint: String = "",
         val templateBodyChars: Int = 0,
+        val textReplaySafe: Boolean = false,
+        val templateContentCount: Int = 0,
+        val templateTextPartCount: Int = 0,
+        val templateNonTextPartCount: Int = 0,
         val proofReady: Boolean = false,
         val proofFunctionDetected: Boolean = false,
         val activeRequests: Int = 0,
@@ -58,15 +62,15 @@ class AiStudioRequestGateway(
     }
 
     /**
-     * Replays a captured GenerateContent template with a new model/prompt.
+     * Laboratory replay for a simple text-only GenerateContent template.
      *
-     * A fresh BotGuard snapshot is required by default. If the browser has not observed the
-     * AI Studio proof service yet, the request fails closed with PROOF_NOT_READY instead of
-     * sending a stale proof.
+     * This method intentionally refuses attachment/video/STT templates. The current proof refresh
+     * is derived from the rewritten text content, so allowing a captured media request through this
+     * path would pretend to support a proof shape that has not yet been verified on a device.
      *
-     * While the legacy R11 request rewriter remains installed, replay is also fail-closed when
-     * R11 has a different selected model. This prevents a replay from being silently rewritten
-     * to another model by the older compatibility layer.
+     * The captured template must also belong to the exact requested model and the browser must have
+     * observed the AI Studio proof service. Every check is repeated inside the JS gateway before the
+     * network request is sent, so a stale native status cannot weaken the safety boundary.
      */
     fun replayText(
         model: String,
@@ -81,44 +85,70 @@ class AiStudioRequestGateway(
                 callback(ReplayResult(ok = false, error = "MODEL_BLANK"))
                 return@post
             }
-            val args = JSONObject()
-                .put("model", normalizedModel)
-                .put("prompt", prompt)
-                .put("timeoutMs", timeoutMs.coerceIn(1_000L, 20 * 60_000L))
-                .put("refreshSnapshot", true)
-            val expression =
-                """
-                JSON.stringify((function(args){
-                  var r11=window.__AIS_R11_REQUEST_FIX__;
-                  var selected=String(r11&&r11.selectedModel||'').trim().replace(/^models\//i,'');
-                  if(selected && selected!==String(args.model||'')) {
-                    return {ok:false,error:'R11_MODEL_CONFLICT',selectedModel:selected,requestedModel:String(args.model||'')};
-                  }
-                  return window.__AIS_REQUEST_GATEWAY__
-                    ? window.__AIS_REQUEST_GATEWAY__.startReplay(args)
-                    : {ok:false,error:'GATEWAY_NOT_INSTALLED'};
-                })($args))
-                """.trimIndent()
-            evalJson(expression) { started ->
-                val id = started?.optString("id").orEmpty()
-                if (started?.optBoolean("ok") != true || id.isBlank()) {
+
+            readStatus { gatewayStatus ->
+                val capturedModel = gatewayStatus.templateModel.trim().removePrefix("models/")
+                val preflightError = when {
+                    !gatewayStatus.available -> gatewayStatus.error.ifBlank { "GATEWAY_NOT_INSTALLED" }
+                    !gatewayStatus.templateReady -> "NO_CAPTURED_TEMPLATE"
+                    capturedModel != normalizedModel -> "TEMPLATE_MODEL_NOT_CAPTURED"
+                    !gatewayStatus.textReplaySafe -> "TEXT_REPLAY_REQUIRES_SIMPLE_TEXT_TEMPLATE"
+                    !gatewayStatus.proofReady -> "PROOF_NOT_READY"
+                    else -> ""
+                }
+                if (preflightError.isNotBlank()) {
                     callback(
                         ReplayResult(
                             ok = false,
-                            error = started?.optString("error").orEmpty().ifBlank { "GATEWAY_START_FAILED" },
-                            model = started?.optString("requestedModel").orEmpty(),
+                            error = preflightError,
+                            model = normalizedModel,
+                            fingerprint = gatewayStatus.templateFingerprint,
                         ),
                     )
-                    return@evalJson
+                    return@readStatus
                 }
-                activeIds += id
-                pollResult(
-                    id = id,
-                    deadlineAt = SystemClock.uptimeMillis() + timeoutMs.coerceAtLeast(1_000L) + RESULT_GRACE_MS,
-                    previousPartialChars = 0,
-                    onPartial = onPartial,
-                    callback = callback,
-                )
+
+                val args = JSONObject()
+                    .put("model", normalizedModel)
+                    .put("prompt", prompt)
+                    .put("timeoutMs", timeoutMs.coerceIn(1_000L, 20 * 60_000L))
+                    .put("refreshSnapshot", true)
+                    .put("textOnly", true)
+                val expression =
+                    """
+                    JSON.stringify((function(args){
+                      var r11=window.__AIS_R11_REQUEST_FIX__;
+                      var selected=String(r11&&r11.selectedModel||'').trim().replace(/^models\//i,'');
+                      if(selected && selected!==String(args.model||'')) {
+                        return {ok:false,error:'R11_MODEL_CONFLICT',selectedModel:selected,requestedModel:String(args.model||'')};
+                      }
+                      return window.__AIS_REQUEST_GATEWAY__
+                        ? window.__AIS_REQUEST_GATEWAY__.startReplay(args)
+                        : {ok:false,error:'GATEWAY_NOT_INSTALLED'};
+                    })($args))
+                    """.trimIndent()
+                evalJson(expression) { started ->
+                    val id = started?.optString("id").orEmpty()
+                    if (started?.optBoolean("ok") != true || id.isBlank()) {
+                        callback(
+                            ReplayResult(
+                                ok = false,
+                                error = started?.optString("error").orEmpty().ifBlank { "GATEWAY_START_FAILED" },
+                                model = started?.optString("requestedModel").orEmpty().ifBlank { normalizedModel },
+                                fingerprint = gatewayStatus.templateFingerprint,
+                            ),
+                        )
+                        return@evalJson
+                    }
+                    activeIds += id
+                    pollResult(
+                        id = id,
+                        deadlineAt = SystemClock.uptimeMillis() + timeoutMs.coerceAtLeast(1_000L) + RESULT_GRACE_MS,
+                        previousPartialChars = 0,
+                        onPartial = onPartial,
+                        callback = callback,
+                    )
+                }
             }
         }
     }
@@ -160,6 +190,10 @@ class AiStudioRequestGateway(
                     templateModel = obj.optString("templateModel"),
                     templateFingerprint = obj.optString("templateFingerprint"),
                     templateBodyChars = obj.optInt("templateBodyChars", 0),
+                    textReplaySafe = obj.optBoolean("textReplaySafe", false),
+                    templateContentCount = obj.optInt("templateContentCount", 0),
+                    templateTextPartCount = obj.optInt("templateTextPartCount", 0),
+                    templateNonTextPartCount = obj.optInt("templateNonTextPartCount", 0),
                     proofReady = obj.optBoolean("proofReady", false),
                     proofFunctionDetected = obj.optBoolean("proofFunctionDetected", false),
                     activeRequests = obj.optInt("activeRequests", 0),

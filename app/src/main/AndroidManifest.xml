@@ -43,10 +43,6 @@
             android:label="Tài khoản Google / AI Studio" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.MiniBrowserActivity" android:exported="false" android:configChanges="orientation|screenSize" />
-        <activity
-            android:name=".ui.LiveVideoDescriptionActivity"
-            android:exported="false"
-            android:label="Mô tả video trực tiếp" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

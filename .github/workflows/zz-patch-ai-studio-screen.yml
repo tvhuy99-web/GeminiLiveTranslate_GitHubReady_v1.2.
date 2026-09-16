@@ -19,7 +19,9 @@ jobs:
           ref: fix/live-screen-description-ai-studio
           fetch-depth: 0
       - name: Apply source patch
-        run: python3 .github/scripts/patch_ai_studio_screen.py
+        run: |
+          sed -i 's/re.subn(pattern, new, text, count=1, flags=flags)/re.subn(pattern, lambda _m: new, text, count=1, flags=flags)/' .github/scripts/patch_ai_studio_screen.py
+          python3 .github/scripts/patch_ai_studio_screen.py
       - name: Commit source patch
         run: |
           git config user.name "github-actions[bot]"

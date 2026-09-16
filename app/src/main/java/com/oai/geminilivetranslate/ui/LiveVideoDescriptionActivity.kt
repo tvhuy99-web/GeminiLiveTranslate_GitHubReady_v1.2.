@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -64,7 +65,7 @@ class LiveVideoDescriptionActivity : AppCompatActivity() {
             textSize = 21f
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER_HORIZONTAL
-            isAccessibilityHeading = true
+            ViewCompat.setAccessibilityHeading(this, true)
             setPadding(0, dp(6), 0, dp(10))
         })
 

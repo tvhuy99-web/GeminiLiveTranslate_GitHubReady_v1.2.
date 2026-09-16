@@ -63,6 +63,10 @@ class AiStudioRequestGateway(
      * A fresh BotGuard snapshot is required by default. If the browser has not observed the
      * AI Studio proof service yet, the request fails closed with PROOF_NOT_READY instead of
      * sending a stale proof.
+     *
+     * While the legacy R11 request rewriter remains installed, replay is also fail-closed when
+     * R11 has a different selected model. This prevents a replay from being silently rewritten
+     * to another model by the older compatibility layer.
      */
     fun replayText(
         model: String,
@@ -72,13 +76,29 @@ class AiStudioRequestGateway(
         callback: (ReplayResult) -> Unit,
     ) {
         main.post {
+            val normalizedModel = model.trim().removePrefix("models/")
+            if (normalizedModel.isBlank()) {
+                callback(ReplayResult(ok = false, error = "MODEL_BLANK"))
+                return@post
+            }
             val args = JSONObject()
-                .put("model", model.trim().removePrefix("models/"))
+                .put("model", normalizedModel)
                 .put("prompt", prompt)
                 .put("timeoutMs", timeoutMs.coerceIn(1_000L, 20 * 60_000L))
                 .put("refreshSnapshot", true)
             val expression =
-                "JSON.stringify(window.__AIS_REQUEST_GATEWAY__ ? window.__AIS_REQUEST_GATEWAY__.startReplay(${args}) : ({ok:false,error:'GATEWAY_NOT_INSTALLED'}))"
+                """
+                JSON.stringify((function(args){
+                  var r11=window.__AIS_R11_REQUEST_FIX__;
+                  var selected=String(r11&&r11.selectedModel||'').trim().replace(/^models\//i,'');
+                  if(selected && selected!==String(args.model||'')) {
+                    return {ok:false,error:'R11_MODEL_CONFLICT',selectedModel:selected,requestedModel:String(args.model||'')};
+                  }
+                  return window.__AIS_REQUEST_GATEWAY__
+                    ? window.__AIS_REQUEST_GATEWAY__.startReplay(args)
+                    : {ok:false,error:'GATEWAY_NOT_INSTALLED'};
+                })($args))
+                """.trimIndent()
             evalJson(expression) { started ->
                 val id = started?.optString("id").orEmpty()
                 if (started?.optBoolean("ok") != true || id.isBlank()) {
@@ -86,6 +106,7 @@ class AiStudioRequestGateway(
                         ReplayResult(
                             ok = false,
                             error = started?.optString("error").orEmpty().ifBlank { "GATEWAY_START_FAILED" },
+                            model = started?.optString("requestedModel").orEmpty(),
                         ),
                     )
                     return@evalJson

@@ -72,7 +72,6 @@ class MainActivity : AppCompatActivity() {
     private var permissionPendingMode: SourceMode? = null
     private var legacyStoragePendingMode: SourceMode? = null
     private var stateJob: Job? = null
-    private var liveStateJob: Job? = null
     private var lastLiveError: String? = null
     private var subtitleRenderEvents = 0L
     private var lastRenderedTranscriptChars = -1
@@ -319,6 +318,7 @@ class MainActivity : AppCompatActivity() {
         resumeHistoryAfterPlaybackId = savedInstanceState?.getString(STATE_PLAYBACK_RETURN_SESSION_ID)
         logger.log(2, "UI", "MainActivity onCreate source=${loadSourceMode()} fileSpeed=${String.format(Locale.US, "%.1f", selectedFilePlaybackSpeed)}x playbackReturn=${resumeHistoryAfterPlaybackId ?: "none"}")
         setupUi()
+        observeLiveSession()
         restorePersistedSelectedFile("create", applyToService = false)
         requestNotificationPermissionIfNeeded()
     }
@@ -326,7 +326,6 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)
-        observeLiveSession()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -339,8 +338,6 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         stateJob?.cancel()
         stateJob = null
-        liveStateJob?.cancel()
-        liveStateJob = null
         if (bound) unbindService(connection)
         bound = false
         translationService = null
@@ -572,8 +569,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun observeLiveSession() {
-        liveStateJob?.cancel()
-        liveStateJob = lifecycleScope.launch {
+        lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 LiveVideoDescriptionService.uiState.collect { state ->
                     if (isVideoDescriptionLiveSelected()) renderLiveState(state)

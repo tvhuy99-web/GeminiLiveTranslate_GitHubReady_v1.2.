@@ -46,6 +46,39 @@ class AiStudioWireCodecTest {
     }
 
     @Test
+    fun inspectReplayEnvelope_acceptsCleanEnvelopeAndEmptyToolsArray() {
+        val root = basicRequest("hello")
+            .put(AiStudioWireCodec.SYSTEM_INSTRUCTION_INDEX, JSONObject.NULL)
+            .put(AiStudioWireCodec.TOOLS_INDEX, JSONArray())
+
+        val envelope = AiStudioWireCodec.inspectReplayEnvelope(root.toString())
+
+        assertTrue(envelope.safe)
+        assertFalse(envelope.systemInstructionPresent)
+        assertFalse(envelope.toolsPresent)
+        assertFalse(envelope.cachedContentPresent)
+    }
+
+    @Test
+    fun inspectReplayEnvelope_matchesBrowserRulesForSystemToolsAndCachedContent() {
+        val root = basicRequest("hello")
+        while (root.length() <= AiStudioWireCodec.CACHED_CONTENT_INDEX) root.put(JSONObject.NULL)
+        root.put(
+            AiStudioWireCodec.SYSTEM_INSTRUCTION_INDEX,
+            JSONArray().put(JSONArray().put(JSONObject.NULL).put("system")),
+        )
+        root.put(AiStudioWireCodec.TOOLS_INDEX, JSONArray().put(JSONArray()))
+        root.put(AiStudioWireCodec.CACHED_CONTENT_INDEX, "cachedContents/example")
+
+        val envelope = AiStudioWireCodec.inspectReplayEnvelope(root.toString())
+
+        assertFalse(envelope.safe)
+        assertTrue(envelope.systemInstructionPresent)
+        assertTrue(envelope.toolsPresent)
+        assertTrue(envelope.cachedContentPresent)
+    }
+
+    @Test
     fun rewrite_changesOnlyKnownFieldsAndPreservesOpaqueSlots() {
         val raw = "[\"models/old\",[[[[null,\"old prompt\"]],\"user\"]],[[1,2,3]],[null,null,null,128,0.5],\"old-snapshot\",[[[null,\"system\"]],\"user\"],[[[]]],null,null,null,77]"
 
@@ -102,4 +135,17 @@ class AiStudioWireCodecTest {
         assertEquals("snapshot", decoded.snapshot)
         assertTrue(decoded.shape.valid)
     }
+
+    private fun basicRequest(prompt: String): JSONArray = JSONArray()
+        .put("models/gemini-test")
+        .put(
+            JSONArray().put(
+                JSONArray()
+                    .put(JSONArray().put(JSONArray().put(JSONObject.NULL).put(prompt)))
+                    .put("user"),
+            ),
+        )
+        .put(JSONObject.NULL)
+        .put(JSONArray())
+        .put("snapshot")
 }

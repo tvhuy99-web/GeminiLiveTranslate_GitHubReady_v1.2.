@@ -88,7 +88,7 @@ class AiStudioFileTranscribeClient(
                     }
                 }
                 override fun onLog(name: String, detail: String) {
-                    val level = if (name.startsWith("R29_") || name.startsWith("JS_R29_") || name.startsWith("R28_") || name.startsWith("JS_R28_") || name.startsWith("R27_") || name.startsWith("JS_R27_") || name.startsWith("R26_") || name.startsWith("JS_R26_") || name.startsWith("R25_") || name.startsWith("JS_R25_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_") || name.startsWith("REQUEST_GATEWAY_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
+                    val level = if (name.startsWith("R29_") || name.startsWith("JS_R29_") || name.startsWith("R28_") || name.startsWith("JS_R28_") || name.startsWith("R27_") || name.startsWith("JS_R27_") || name.startsWith("R26_") || name.startsWith("JS_R26_") || name.startsWith("R25_") || name.startsWith("JS_R25_") || name.startsWith("R24_") || name.startsWith("JS_R24_") || name.startsWith("R23_") || name.startsWith("JS_R23_") || name.startsWith("R22_") || name.startsWith("JS_R22_") || name.startsWith("R21_") || name.startsWith("R20_") || name.startsWith("R18_ATTACHMENT") || name.startsWith("R19_") || name.startsWith("REQUEST_GATEWAY_") || name.startsWith("JS_REQUEST_GATEWAY_")) 2 else if (name.contains("ERROR") || name.contains("TIMEOUT")) 1 else 3
                     logger.log(level, TAG, "$name ${detail.take(5000)}")
                 }
             })

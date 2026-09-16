@@ -16,7 +16,9 @@ class GeminiScreenDescriptionLiveClientTest {
         ).getJSONObject("setup")
 
         assertEquals("models/gemini-3.8-live", setup.getString("model"))
-        assertEquals("AUDIO", setup.getJSONArray("responseModalities").getString(0))
+        assertFalse(setup.has("responseModalities"))
+        val generationConfig = setup.getJSONObject("generationConfig")
+        assertEquals("AUDIO", generationConfig.getJSONArray("responseModalities").getString(0))
         assertTrue(setup.has("systemInstruction"))
         assertTrue(setup.has("outputAudioTranscription"))
         assertFalse(setup.has("inputAudioTranscription"))
@@ -39,6 +41,13 @@ class GeminiScreenDescriptionLiveClientTest {
         assertEquals(handle, resumption.getString("handle"))
         assertEquals(1, resumption.length())
         assertFalse(setup.has("inputAudioTranscription"))
+        assertFalse(setup.has("responseModalities"))
+        assertEquals(
+            "AUDIO",
+            setup.getJSONObject("generationConfig")
+                .getJSONArray("responseModalities")
+                .getString(0),
+        )
     }
 
     @Test

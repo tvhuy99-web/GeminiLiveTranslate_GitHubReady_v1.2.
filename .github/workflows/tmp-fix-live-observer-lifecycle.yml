@@ -1,0 +1,70 @@
+name: Temporary fix live observer lifecycle
+
+on:
+  push:
+    branches:
+      - feature/live-screen-description-gemini-3.8
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Fix Live observer lifecycle'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Patch MainActivity lifecycle safely
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" clone "https://github.com/${REPO}.git" source
+          cd source
+          git checkout "$BRANCH"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt')
+          s = p.read_text()
+
+          replacements = [
+              (
+                  '    private var liveStateJob: Job? = null\n',
+                  '',
+              ),
+              (
+                  '        setupUi()\n        restorePersistedSelectedFile("create", applyToService = false)\n',
+                  '        setupUi()\n        observeLiveSession()\n        restorePersistedSelectedFile("create", applyToService = false)\n',
+              ),
+              (
+                  '        bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)\n        observeLiveSession()\n',
+                  '        bindService(Intent(this, TranslationService::class.java), connection, Context.BIND_AUTO_CREATE)\n',
+              ),
+              (
+                  '        stateJob?.cancel()\n        stateJob = null\n        liveStateJob?.cancel()\n        liveStateJob = null\n',
+                  '        stateJob?.cancel()\n        stateJob = null\n',
+              ),
+              (
+                  '    private fun observeLiveSession() {\n        liveStateJob?.cancel()\n        liveStateJob = lifecycleScope.launch {\n',
+                  '    private fun observeLiveSession() {\n        lifecycleScope.launch {\n',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one lifecycle pattern, found {count}: {old!r}')
+              s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/oai/geminilivetranslate/MainActivity.kt
+          git commit -m "Fix Live observer lifecycle"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" push origin "HEAD:${BRANCH}"

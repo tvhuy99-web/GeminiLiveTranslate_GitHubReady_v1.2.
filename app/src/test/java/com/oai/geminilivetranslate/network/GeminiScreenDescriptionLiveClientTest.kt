@@ -37,4 +37,16 @@ class GeminiScreenDescriptionLiveClientTest {
         assertEquals("image/jpeg", video.getString("mimeType"))
         assertArrayEquals(frame, Base64.getDecoder().decode(video.getString("data")))
     }
+
+    @Test
+    fun heartbeatTriggersVisualReasoningWithoutAudioInput() {
+        val realtimeInput = JSONObject(
+            GeminiScreenDescriptionLiveClient.createHeartbeatMessage(),
+        ).getJSONObject("realtimeInput")
+
+        assertTrue(realtimeInput.getString("text").isNotBlank())
+        assertFalse(realtimeInput.has("audio"))
+        assertFalse(realtimeInput.has("video"))
+        assertFalse(realtimeInput.has("audioStreamEnd"))
+    }
 }

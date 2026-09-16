@@ -21,6 +21,11 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Important invariant: this client has no audio-input API. The only realtime media input it can
  * send is an image frame under realtimeInput.video. Model audio output stays enabled.
+ *
+ * Video frames alone do not start a new reasoning turn. After a successfully queued frame this
+ * client sends a short text heartbeat only while the model is idle. While a model turn is active,
+ * incoming frames can continue updating visual context without sending another text trigger. This
+ * prevents a new heartbeat from cutting off audio that the model is still speaking.
  */
 internal class GeminiScreenDescriptionLiveClient(
     private val apiKey: String,
@@ -50,7 +55,10 @@ internal class GeminiScreenDescriptionLiveClient(
     private val explicitlyClosed = AtomicBoolean(false)
     private val terminalDelivered = AtomicBoolean(false)
     private val setupComplete = AtomicBoolean(false)
+    private val turnInFlight = AtomicBoolean(false)
     private val frameCount = AtomicLong(0L)
+    private val heartbeatCount = AtomicLong(0L)
+    private val framesWhileTurnActive = AtomicLong(0L)
     private val droppedByBackpressure = AtomicLong(0L)
     private val audioChunks = AtomicLong(0L)
     private val transcriptEvents = AtomicLong(0L)
@@ -95,6 +103,7 @@ internal class GeminiScreenDescriptionLiveClient(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 setupComplete.set(false)
+                turnInFlight.set(false)
                 if (!explicitlyClosed.get() && terminalDelivered.compareAndSet(false, true)) {
                     listener.onClosed("$code: $reason")
                 }
@@ -102,6 +111,7 @@ internal class GeminiScreenDescriptionLiveClient(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 setupComplete.set(false)
+                turnInFlight.set(false)
                 if (explicitlyClosed.get()) return
                 val error = if (response != null) {
                     GeminiLiveClient.GeminiApiException(
@@ -117,34 +127,59 @@ internal class GeminiScreenDescriptionLiveClient(
         })
     }
 
-    /** Sends exactly one JPEG screen frame. No audio input exists in this client. */
+    /**
+     * Sends one JPEG screen frame, then starts a visual reasoning turn only if the model is idle.
+     * There is intentionally no audio-input method in this client.
+     */
     fun sendVideoFrame(jpeg: ByteArray): SendResult {
         if (jpeg.isEmpty()) return SendResult.SENT
         val result = sendRealtimePayload(createVideoMessage(jpeg), dropOnBackpressure = true)
-        if (result == SendResult.SENT) {
-            val count = frameCount.incrementAndGet()
-            if (count == 1L || count % 30L == 0L) {
-                logger.log(3, TAG, "Đã gửi frame=$count jpegBytes=${jpeg.size} micInput=false")
-            }
+        if (result != SendResult.SENT) return result
+
+        val count = frameCount.incrementAndGet()
+        if (count == 1L || count % 30L == 0L) {
+            logger.log(3, TAG, "Đã gửi frame=$count jpegBytes=${jpeg.size} micInput=false")
         }
-        return result
+
+        maybeTriggerDescriptionTurn()
+        return SendResult.SENT
     }
 
     fun close(graceful: Boolean = true) {
         if (!explicitlyClosed.compareAndSet(false, true)) return
         terminalDelivered.set(true)
         setupComplete.set(false)
+        turnInFlight.set(false)
         val current = socket
         socket = null
         logger.log(
             2,
             TAG,
-            "Đóng Live visual-only frames=${frameCount.get()} droppedBackpressure=${droppedByBackpressure.get()} " +
+            "Đóng Live visual-only frames=${frameCount.get()} heartbeats=${heartbeatCount.get()} " +
+                "framesWhileTurnActive=${framesWhileTurnActive.get()} droppedBackpressure=${droppedByBackpressure.get()} " +
                 "audioChunks=${audioChunks.get()} transcriptEvents=${transcriptEvents.get()} maxQueued=${maxObservedWireBytes.get()}",
         )
         if (graceful) current?.close(1000, "client stop") else current?.cancel()
         httpClient.dispatcher.executorService.shutdown()
         httpClient.connectionPool.evictAll()
+    }
+
+    private fun maybeTriggerDescriptionTurn() {
+        if (!turnInFlight.compareAndSet(false, true)) {
+            framesWhileTurnActive.incrementAndGet()
+            return
+        }
+
+        val result = sendRealtimePayload(createHeartbeatMessage(), dropOnBackpressure = false)
+        if (result == SendResult.SENT) {
+            val count = heartbeatCount.incrementAndGet()
+            if (count == 1L || count % 20L == 0L) {
+                logger.log(3, TAG, "Heartbeat visual=$count; chờ turnComplete trước heartbeat kế tiếp")
+            }
+        } else {
+            turnInFlight.set(false)
+            logger.log(1, TAG, "Không gửi được heartbeat visual result=$result; frame kế tiếp sẽ thử lại")
+        }
     }
 
     private fun sendRealtimePayload(payload: String, dropOnBackpressure: Boolean): SendResult {
@@ -160,27 +195,12 @@ internal class GeminiScreenDescriptionLiveClient(
                 val previous = lastBackpressureLogAt.get()
                 if (dropped == 1L || now - previous >= 5_000L) {
                     lastBackpressureLogAt.set(now)
-                    logger.log(1, TAG, "Bỏ frame cũ do backpressure dropped=$dropped queuedBytes=$queued")
+                    logger.log(1, TAG, "Bỏ frame hiện tại do backpressure dropped=$dropped queuedBytes=$queued")
                 }
             }
             return SendResult.BACKPRESSURED
         }
         return if (current.send(payload)) SendResult.SENT else SendResult.FAILED
-    }
-
-    private fun sendActivationInstruction() {
-        val message = JSONObject()
-            .put(
-                "realtimeInput",
-                JSONObject().put(
-                    "text",
-                    "Bắt đầu quan sát màn hình ngay bây giờ. Không thông báo rằng bạn đã sẵn sàng. " +
-                        "Chỉ lên tiếng khi có thông tin hình ảnh mới đáng mô tả và tiếp tục theo dõi các khung hình sau.",
-                ),
-            )
-            .toString()
-        val result = sendRealtimePayload(message, dropOnBackpressure = false)
-        logger.log(3, TAG, "Gửi lệnh kích hoạt visual narrator result=$result")
     }
 
     private fun parseMessage(text: String) {
@@ -194,13 +214,16 @@ internal class GeminiScreenDescriptionLiveClient(
             }
             if (root.has("setupComplete")) {
                 setupComplete.set(true)
-                logger.log(2, TAG, "Setup hoàn tất; visual frames có thể bắt đầu, micInput=false")
+                turnInFlight.set(false)
+                logger.log(2, TAG, "Setup hoàn tất; chờ frame đầu tiên rồi mới heartbeat, micInput=false")
                 listener.onSetupComplete()
-                sendActivationInstruction()
                 return@parse
             }
             val serverContent = root.optJSONObject("serverContent") ?: return@parse
-            if (serverContent.optBoolean("interrupted", false)) listener.onInterrupted()
+            if (serverContent.optBoolean("interrupted", false)) {
+                turnInFlight.set(false)
+                listener.onInterrupted()
+            }
 
             serverContent.optJSONObject("outputTranscription")
                 ?.optString("text")
@@ -236,7 +259,8 @@ internal class GeminiScreenDescriptionLiveClient(
                         }
                 }
             }
-            if (serverContent.optBoolean("turnComplete", false) || serverContent.optBoolean("generationComplete", false)) {
+            if (serverContent.optBoolean("turnComplete", false)) {
+                turnInFlight.set(false)
                 listener.onTurnComplete()
             }
         }.onFailure {
@@ -246,6 +270,7 @@ internal class GeminiScreenDescriptionLiveClient(
     }
 
     private fun deliverError(error: Throwable) {
+        turnInFlight.set(false)
         if (!explicitlyClosed.get() && terminalDelivered.compareAndSet(false, true)) {
             listener.onError(error)
         }
@@ -260,7 +285,7 @@ internal class GeminiScreenDescriptionLiveClient(
 
     companion object {
         const val MODEL = "gemini-3.8-live"
-        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v1"
+        const val VERSION = "2026-09-16-gemini-3.8-live-visual-only-v2"
         private const val TAG = "LiveScreenDescription"
         private const val HOST = "generativelanguage.googleapis.com"
         private const val DEFAULT_MAX_QUEUED_WIRE_BYTES = 512L * 1024L
@@ -294,6 +319,18 @@ internal class GeminiScreenDescriptionLiveClient(
                 .toString()
         }
 
+        internal fun createHeartbeatMessage(): String = JSONObject()
+            .put(
+                "realtimeInput",
+                JSONObject().put(
+                    "text",
+                    "Quan sát hình ảnh mới nhất và diễn biến kể từ lần mô tả trước. " +
+                        "Nếu có thay đổi quan trọng chưa được mô tả, hãy mô tả ngay theo đúng quy tắc. " +
+                        "Nếu không có thay đổi đáng kể, không cần nói gì và hãy kết thúc lượt.",
+                ),
+            )
+            .toString()
+
         private fun systemInstruction(outputLanguage: String): String = """
             Bạn là hệ thống thuyết minh hình ảnh theo thời gian thực dành cho người đang xem màn hình.
 
@@ -320,8 +357,14 @@ internal class GeminiScreenDescriptionLiveClient(
             - Người hoặc vật thể vừa xuất hiện, biến mất, di chuyển hoặc tương tác.
             - Chuyển cảnh, thay đổi địa điểm, góc nhìn hoặc tình huống.
             - Sự kiện bất ngờ, nguy hiểm, cảnh báo hoặc thông tin cần chú ý ngay.
-            - Chữ, phụ đề, thông báo hoặc giao diện quan trọng đối với diễn biến; chỉ đọc/tóm tắt phần cần thiết.
+            - Chữ, phụ đề, thông báo hoặc giao diện quan trọng đối với diễn biến; chỉ đọc hoặc tóm tắt phần cần thiết.
             - Biểu cảm và cử chỉ chỉ khi chúng nhìn thấy đủ rõ và thực sự có ý nghĩa.
+
+            NHỊP THUYẾT MINH
+            - Mỗi yêu cầu kiểm tra hình ảnh chỉ là một nhịp quan sát, không phải yêu cầu bắt buộc phải nói.
+            - Nếu cảnh gần như không đổi so với mô tả gần nhất, hãy kết thúc lượt mà không tạo lời nói.
+            - Nếu đang có nhiều thay đổi, ưu tiên thông tin mới nhất và quan trọng nhất.
+            - Không kéo dài một mô tả cũ khi cảnh đã chuyển sang sự kiện mới.
 
             PHONG CÁCH
             Nói trực tiếp: “Người đàn ông bước vào phòng và nhìn quanh.”

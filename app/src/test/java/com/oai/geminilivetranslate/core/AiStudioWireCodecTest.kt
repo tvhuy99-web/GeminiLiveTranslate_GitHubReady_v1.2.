@@ -23,6 +23,19 @@ class AiStudioWireCodecTest {
     }
 
     @Test
+    fun inspect_usesSameBooleanTypeLabelAsBrowserGateway() {
+        val raw = "[\"models/gemini-test\",[[[[null,\"hello\"]],\"user\"]],true,[],\"snapshot\"]"
+
+        val shape = AiStudioWireCodec.inspect(raw)
+
+        assertTrue(shape.valid)
+        assertEquals(
+            "len=5:0=string,1=array,2=boolean,3=array,4=string",
+            shape.fingerprint,
+        )
+    }
+
+    @Test
     fun inspect_rejectsUnknownShapeInsteadOfGuessing() {
         val raw = "{\"model\":\"models/gemini-test\"}"
 

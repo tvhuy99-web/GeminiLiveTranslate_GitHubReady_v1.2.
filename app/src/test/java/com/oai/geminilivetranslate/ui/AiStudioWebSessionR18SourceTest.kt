@@ -157,12 +157,17 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("NATIVE_TAP_DEBOUNCE_MS = 1_200L"))
         assertFalse(nativeTap.contains("@Volatile private var lastTapAt = 0L"))
 
-        assertTrue(screenBridge.contains("r19.10-camera-retry-ready-gate"))
+        assertTrue(screenBridge.contains("r19.11-camera-retry-silent-audio"))
         assertTrue(screenBridge.contains("MAX_CAMERA_TAP_ATTEMPTS=2"))
         assertTrue(screenBridge.contains("CAMERA_RETRY_NO_GUM_MS=3000"))
         assertTrue(screenBridge.contains("'CAMERA_RETRY'"))
         assertTrue(screenBridge.contains("'CAMERA_RETRY_EXHAUSTED'"))
+        assertTrue(screenBridge.contains("SILENT_AUDIO_READY"))
+        assertTrue(screenBridge.contains("allowRealMicInput"))
+        assertTrue(screenBridge.contains("realAudio:false,silentAudio:true"))
 
+        assertTrue(realtime.contains(".configure(true,false)"))
+        assertTrue(realtime.contains("val allowRealMic = !screenDescription"))
         assertTrue(realtime.contains("WAITING_VIDEO_TRANSPORT"))
         assertTrue(realtime.contains("cameraTransportReady"))
         assertTrue(realtime.contains("gumVideoRequests <= 0L"))

@@ -12,8 +12,10 @@ class AiStudioWebSessionR20SourceTest {
         val forensic = File(root, "src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR20ForensicDiagnostics.kt").readText()
         val logs = File(root, "src/main/java/com/oai/geminilivetranslate/core/AppLogRepository.kt").readText()
 
-        assertTrue(nativeTap.contains("AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START"))
-        assertTrue(nativeTap.contains("r18.9-screen-forensic-r20"))
+        val forensicWire = nativeTap.indexOf("AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START")
+        val nativeTapScript = nativeTap.indexOf("window.__AIS_NATIVE_START_TAP__", forensicWire.coerceAtLeast(0))
+        assertTrue(forensicWire >= 0)
+        assertTrue(nativeTapScript > forensicWire)
         assertTrue(nativeTap.contains("gemini-3"))
         assertTrue(nativeTap.contains("8-live"))
         assertTrue(forensic.contains("XHR_ABORT_CALL"))

@@ -195,6 +195,7 @@ class AppLogRepository private constructor(context: Context) {
             appendLine("Bộ nhớ JVM: used=${(runtime.totalMemory() - runtime.freeMemory()) / 1_048_576}MB, max=${runtime.maxMemory() / 1_048_576}MB")
             appendLine("Dung lượng trống vùng log: ${freeStorage}MB")
             appendLine("Tệp log: $logSizes")
+            appendLine("Forensic retention: memory=$MAX_MEMORY_ENTRIES entries, files=${MAX_ROTATED_FILES + 1} x ${MAX_FILE_BYTES / (1024L * 1024L)}MB")
             appendLine()
             appendLine("--- Cài đặt đã khử dữ liệu nhạy cảm ---")
             appendLine("model=${settings.model}")
@@ -213,7 +214,7 @@ class AppLogRepository private constructor(context: Context) {
             appendLine("--- Trạng thái chạy gần nhất ---")
             DiagnosticContext.snapshot().forEach { (key, value) -> appendLine("$key=${redact(value)}") }
             appendLine()
-            appendLine("Lưu ý: API Key/token đã được che. Nội dung hội thoại chỉ xuất hiện khi tùy chọn ghi transcript được bật.")
+            appendLine("Lưu ý: API Key/token/credential phiên đã được che. Nội dung forensic khác có thể chứa dữ liệu cá nhân trong phiên kiểm tra.")
         }
     }
 
@@ -296,20 +297,20 @@ class AppLogRepository private constructor(context: Context) {
     }
 
     companion object {
-        private const val MAX_MEMORY_ENTRIES = 5_000
-        private const val MAX_MESSAGE_CHARS = 20_000
-        private const val MAX_THROWABLE_CHARS = 30_000
-        private const val MAX_STACK_FRAMES = 80
-        private const val MAX_FILE_BYTES = 2L * 1024L * 1024L
-        private const val MAX_ROTATED_FILES = 4
+        private const val MAX_MEMORY_ENTRIES = 30_000
+        private const val MAX_MESSAGE_CHARS = 64_000
+        private const val MAX_THROWABLE_CHARS = 64_000
+        private const val MAX_STACK_FRAMES = 120
+        private const val MAX_FILE_BYTES = 16L * 1024L * 1024L
+        private const val MAX_ROTATED_FILES = 7
         private const val SHARE_TTL_MS = 24L * 60L * 60L * 1_000L
         private const val MAX_SHARED_REPORTS = 5
 
         private val REDACTION_PATTERNS = listOf(
             Regex("AIza[0-9A-Za-z_-]{12,}") to "AIza[REDACTED]",
-            Regex("(?i)([?&](?:key|api_key|token|access_token)=)[^&\\s]+") to "${'$'}1[REDACTED]",
-            Regex("(?i)((?:authorization|x-goog-api-key)\\s*[:=]\\s*)(?:Bearer\\s+)?[^,;\\s]+") to "${'$'}1[REDACTED]",
-            Regex("(?i)(\\\"(?:key|apiKey|token|accessToken|authorization)\\\"\\s*:\\s*\\\")[^\\\"]+") to "${'$'}1[REDACTED]",
+            Regex("(?i)([?&](?:key|api_key|token|access_token|id_token|at|sid|hsid|ssid|apisid|sapisid|csrf|xsrf)=)[^&\\s]+") to "${'$'}1[REDACTED]",
+            Regex("(?i)((?:authorization|x-goog-api-key|cookie|set-cookie)\\s*[:=]\\s*)(?:Bearer\\s+)?[^\\r\\n]+") to "${'$'}1[REDACTED]",
+            Regex("(?i)(\\\"(?:key|apiKey|token|accessToken|idToken|authorization|at|sid|hsid|ssid|apisid|sapisid|csrf|xsrf)\\\"\\s*:\\s*\\\")[^\\\"]+") to "${'$'}1[REDACTED]",
             Regex("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*") to "${'$'}1[REDACTED]",
         )
 

@@ -97,7 +97,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(service.contains("FILE_TRANSCRIBE backend=aistudio-file"))
         assertTrue(fileClient.contains("AppPreferences.TRANSCRIBE_FILE_MODEL"))
         assertTrue(fileClient.contains("live=false"))
-        assertTrue(bootstrap.contains("r17.10-screen-camera-gate"))
+        assertTrue(bootstrap.contains("r17.11-start-before-camera-progress"))
         assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
         assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }
@@ -114,7 +114,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("START_ACK_TIMEOUT"))
         assertTrue(bootstrap.contains("waiting-start-ack"))
         assertTrue(bootstrap.contains("startProgressEvidence"))
-        assertTrue(bootstrap.contains("progress.progress?8000:10000"))
+        assertTrue(bootstrap.contains("progress.progress?12000:10000"))
         assertTrue(bootstrap.contains("modelVerified"))
         assertTrue(bootstrap.contains("targetLanguageVerified"))
         assertTrue(bootstrap.contains("setupObserved"))

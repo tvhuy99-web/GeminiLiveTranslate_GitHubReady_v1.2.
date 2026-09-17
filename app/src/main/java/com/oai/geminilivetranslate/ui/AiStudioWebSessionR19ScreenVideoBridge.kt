@@ -1,15 +1,16 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.8-camera-screen-transport"
+    const val VERSION = "2026-09-17-r19.9-start-progress-camera-diag"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.8-camera-screen-transport';
-  const CAMERA_RETRY_MS=2500;
+  const VERSION='2026-09-17-r19.9-start-progress-camera-diag';
+  const CAMERA_POST_START_MIN_MS=350;
+  const CAMERA_NO_GUM_REPORT_MS=3000;
   const MIC_PERMISSION_TIMEOUT_MS=15000;
   const PAGE_ERROR_SCAN_MS=900;
   const state={
@@ -40,13 +41,28 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     lastCameraLabel:'',
     cameraTransportReady:false,
     cameraTransportReadyAt:0,
+    cameraGateScans:0,
+    cameraGateReason:'waiting-start-live',
+    cameraBlockedByPageError:false,
+    cameraNoGumReported:false,
+    startObservedAt:0,
+    startAttemptSeen:0,
+    startNetworkBaseline:0,
+    startPositiveNetworkBaseline:0,
+    startRealAudioBaseline:0,
+    postStartProgress:false,
+    postStartProgressKind:'none',
+    postStartProgressAt:0,
     pageErrorCount:0,
     lastPageError:'',
     lastPageErrorAt:0,
     networkEvents:0,
+    positiveNetworkEvents:0,
     lastNetworkStatus:0,
+    lastNetworkReadyState:0,
     lastNetworkPath:'',
     lastNetworkError:'',
+    lastNetworkResponseError:'',
     lastNetworkAt:0,
     lastFrameAt:0,
     lastDrawSeq:0,
@@ -112,7 +128,8 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     const sig=kind+'|'+clean.toLowerCase();const now=Date.now();const previous=Number(pageErrorSignatures.get(sig)||0);
     if(previous&&now-previous<10000)return;
     pageErrorSignatures.set(sig,now);state.pageErrorCount++;state.lastPageError=clean;state.lastPageErrorAt=now;
-    diag(kind,Object.assign({count:state.pageErrorCount,text:clean},extra||{}));
+    if(state.startObservedAt>0)state.cameraBlockedByPageError=true;
+    diag(kind,Object.assign({count:state.pageErrorCount,text:clean,cameraBlocked:state.cameraBlockedByPageError},extra||{}));
   }
 
   function scanPageErrors(snapshot){
@@ -142,11 +159,55 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     const p=safeNetworkPath(url).toLowerCase();
     return p.indexOf('bidigeneratecontent')>=0||p.indexOf('/live')>=0||p.indexOf('streamgenerate')>=0||p.indexOf('generativelanguage')>=0;
   }
+  function extractErrorObject(node,depth){
+    const d=depth||0;if(d>8||node==null)return null;
+    if(Array.isArray(node)){for(let i=0;i<node.length&&i<24;i++){const found=extractErrorObject(node[i],d+1);if(found)return found;}return null;}
+    if(typeof node!=='object')return null;
+    if(Object.prototype.hasOwnProperty.call(node,'error')){
+      const e=node.error;
+      if(typeof e==='string')return {message:safe(e,240)};
+      if(e&&typeof e==='object')return {code:safe(e.code||'',60),status:safe(e.status||'',100),message:redact(e.message||e.reason||'',320)};
+    }
+    const keys=Object.keys(node);for(let i=0;i<keys.length&&i<40;i++){const found=extractErrorObject(node[keys[i]],d+1);if(found)return found;}
+    return null;
+  }
+  function responseErrorSummary(xhr){
+    try{
+      if(!xhr||Number(xhr.readyState||0)<4)return '';
+      let text='';try{text=String(xhr.responseText||'');}catch(_){return '';}
+      if(!text||text.length>200000)return '';
+      let parsed=null;try{parsed=JSON.parse(text);}catch(_){return '';}
+      const e=extractErrorObject(parsed,0);if(!e)return '';
+      return safe(['code='+safe(e.code||'',60),'status='+safe(e.status||'',100),'message='+redact(e.message||'',320)].filter(function(v){return v&&v.indexOf('=')<v.length-1;}).join(' '),520);
+    }catch(_){return '';}
+  }
+  function observeStart(){
+    try{
+      const r=window.__AIS_R17_PRODUCTION__;const d=r&&typeof r.describe==='function'?r.describe():null;
+      if(!d||!d.configured)return {started:false,age:-1,setup:false};
+      const attempts=Number(d.startAttempts||0),action=String(d.lastAction||''),stage=String(d.stage||''),age=Number(d.lastActionAgeMs||-1);
+      const started=attempts>0&&(action==='start-live'||stage==='start-clicked'||age>=0)||!!d.setupObserved;
+      if(started&&state.startObservedAt<=0){
+        state.startObservedAt=Date.now();state.startAttemptSeen=attempts;state.startNetworkBaseline=state.networkEvents;state.startPositiveNetworkBaseline=state.positiveNetworkEvents;state.startRealAudioBaseline=state.realAudioRequests;
+        diag('START_OBSERVED',{attempts:attempts,action:action,stage:stage,ageMs:age,networkBaseline:state.startNetworkBaseline,positiveNetworkBaseline:state.startPositiveNetworkBaseline,realAudioBaseline:state.startRealAudioBaseline});
+      }else if(started){state.startAttemptSeen=Math.max(state.startAttemptSeen,attempts);}
+      return {started:started,age:age,setup:!!d.setupObserved,action:action,stage:stage};
+    }catch(_){return {started:false,age:-1,setup:false};}
+  }
+  function markPostStartProgress(kind,extra){
+    const start=observeStart();if(!start.started)return;
+    if(!state.postStartProgress){
+      state.postStartProgress=true;state.postStartProgressKind=String(kind||'unknown');state.postStartProgressAt=Date.now();
+      diag('POST_START_PROGRESS',Object.assign({kind:state.postStartProgressKind,startAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1},extra||{}));
+    }
+  }
   function recordNetwork(kind,url,status,error,extra){
     if(!state.enabled||!networkRelevant(url))return;
-    const path=safeNetworkPath(url),code=Number(status||0),err=safe(error||'',220);
-    state.networkEvents++;state.lastNetworkStatus=code;state.lastNetworkPath=path;state.lastNetworkError=err;state.lastNetworkAt=Date.now();
-    diag(kind,Object.assign({count:state.networkEvents,path:path,status:code,error:err},extra||{}));
+    const path=safeNetworkPath(url),code=Number(status||0),err=safe(error||'',220),readyState=Number(extra&&extra.readyState||0),responseError=safe(extra&&extra.responseError||'',520);
+    state.networkEvents++;if(code>=200&&code<400)state.positiveNetworkEvents++;
+    state.lastNetworkStatus=code;state.lastNetworkReadyState=readyState;state.lastNetworkPath=path;state.lastNetworkError=err;state.lastNetworkResponseError=responseError;state.lastNetworkAt=Date.now();
+    if(code>=200&&code<400)markPostStartProgress('network-http-'+code,{path:path,readyState:readyState});
+    diag(kind,Object.assign({count:state.networkEvents,positiveCount:state.positiveNetworkEvents,path:path,status:code,readyState:readyState,error:err,responseError:responseError},extra||{}));
   }
 
   function installTransportDiagnostics(){
@@ -160,11 +221,16 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           try{
             if(networkRelevant(this.__aisR19Url)&&!this.__aisR19Observed){
               this.__aisR19Observed=true;
-              const xhr=this;
-              xhr.addEventListener('loadend',function(){recordNetwork('NETWORK_XHR',xhr.__aisR19Url,xhr.status,'',{method:safe(xhr.__aisR19Method,16),readyState:Number(xhr.readyState||0)});});
-              xhr.addEventListener('error',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-error',{method:safe(xhr.__aisR19Method,16)});});
-              xhr.addEventListener('abort',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-abort',{method:safe(xhr.__aisR19Method,16)});});
-              xhr.addEventListener('timeout',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-timeout',{method:safe(xhr.__aisR19Method,16)});});
+              const xhr=this;let lastReadyState=-1;
+              xhr.addEventListener('readystatechange',function(){
+                const rs=Number(xhr.readyState||0);if(rs<2||rs===lastReadyState)return;lastReadyState=rs;
+                const responseError=rs===4?responseErrorSummary(xhr):'';
+                recordNetwork('NETWORK_XHR_STATE',xhr.__aisR19Url,xhr.status,'',{method:safe(xhr.__aisR19Method,16),readyState:rs,responseError:responseError});
+              });
+              xhr.addEventListener('loadend',function(){recordNetwork('NETWORK_XHR',xhr.__aisR19Url,xhr.status,'',{method:safe(xhr.__aisR19Method,16),readyState:Number(xhr.readyState||0),responseError:responseErrorSummary(xhr)});});
+              xhr.addEventListener('error',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-error',{method:safe(xhr.__aisR19Method,16),readyState:Number(xhr.readyState||0),responseError:responseErrorSummary(xhr)});});
+              xhr.addEventListener('abort',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-abort',{method:safe(xhr.__aisR19Method,16),readyState:Number(xhr.readyState||0),responseError:responseErrorSummary(xhr)});});
+              xhr.addEventListener('timeout',function(){recordNetwork('NETWORK_XHR_ERROR',xhr.__aisR19Url,xhr.status,'xhr-timeout',{method:safe(xhr.__aisR19Method,16),readyState:Number(xhr.readyState||0),responseError:responseErrorSummary(xhr)});});
             }
           }catch(_){}
           return nativeSend.apply(this,arguments);
@@ -177,7 +243,13 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         const wrappedFetch=function(input,init){
           let url='';try{url=typeof input==='string'?input:String(input&&input.url||'');}catch(_){}
           const method=safe(init&&init.method||'GET',16);
-          return nativeFetch.apply(this,arguments).then(function(resp){recordNetwork('NETWORK_FETCH',url,resp&&resp.status||0,'',{method:method});return resp;},function(err){recordNetwork('NETWORK_FETCH_ERROR',url,0,String(err&&err.message||err||'fetch-error'),{method:method});throw err;});
+          return nativeFetch.apply(this,arguments).then(function(resp){
+            const status=Number(resp&&resp.status||0);recordNetwork('NETWORK_FETCH',url,status,'',{method:method,readyState:4});
+            if(status>=400&&resp&&typeof resp.clone==='function'){
+              try{resp.clone().text().then(function(text){let summary='';try{const parsed=JSON.parse(String(text||''));const e=extractErrorObject(parsed,0);if(e)summary=safe(['code='+safe(e.code||'',60),'status='+safe(e.status||'',100),'message='+redact(e.message||'',320)].filter(function(v){return v&&v.indexOf('=')<v.length-1;}).join(' '),520);}catch(_){}if(summary)recordNetwork('NETWORK_FETCH_BODY_ERROR',url,status,'',{method:method,readyState:4,responseError:summary});}).catch(function(){});}catch(_){}
+            }
+            return resp;
+          },function(err){recordNetwork('NETWORK_FETCH_ERROR',url,0,String(err&&err.message||err||'fetch-error'),{method:method,readyState:0});throw err;});
         };
         wrappedFetch.__aisR19Network=true;window.fetch=wrappedFetch;
       }
@@ -204,7 +276,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         }
       }catch(_){}
       installTransportDiagnostics();
-      diag('PAGE_DIAGNOSTICS_INSTALLED',{networkDiagnostics:true,redacted:true});
+      diag('PAGE_DIAGNOSTICS_INSTALLED',{networkDiagnostics:true,readyStateDiagnostics:true,responseErrorOnly:true,redacted:true});
     }catch(e){diag('PAGE_DIAGNOSTICS_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});}
   }
 
@@ -256,6 +328,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     const videos=stream&&stream.getVideoTracks?stream.getVideoTracks():[];
     if(!videos.length)return;
     state.cameraTransportReady=true;state.cameraTransportReadyAt=Date.now();
+    markPostStartProgress('camera-video-track',{source:source});
     diag('CAMERA_TRANSPORT_READY',{source:source,videoTracks:videos.length,readyState:String(videos[0]&&videos[0].readyState||''),gumVideoRequests:state.gumVideoRequests,displayRequests:state.displayRequests});
   }
 
@@ -298,15 +371,16 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           const c=constraints||{};
           if(state.enabled)diag('GUM_REQUEST',{audio:!!c.audio,video:!!c.video,constraints:safe(JSON.stringify(c),700)});
           if(state.enabled&&!!c.video){
-            state.gumVideoRequests++;if(!!c.audio)state.gumCombinedRequests++;
+            observeStart();state.gumVideoRequests++;if(!!c.audio)state.gumCombinedRequests++;
             const videoStream=syntheticVideoStream();
             if(!videoStream)return inherited(constraints);
             if(!!c.audio){
-              state.realAudioRequests++;
+              state.realAudioRequests++;markPostStartProgress('audio-gum-request',{combined:true});
               return waitForRealMicPermission().then(function(){
                 return platformGum({audio:c.audio,video:false});
               }).then(function(audioStream){
                 const combined=combineVideoAndRealAudio(videoStream,audioStream);
+                markPostStartProgress('real-mic-track',{combined:true,tracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0});
                 markCameraTransportReady('gum-combined',combined);
                 diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:true,realAudioTracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
                 return combined;
@@ -321,12 +395,12 @@ object AiStudioWebSessionR19ScreenVideoBridge {
             return Promise.resolve(videoStream);
           }
           if(state.enabled&&!!c.audio&&!c.video){
-            state.realAudioRequests++;
+            observeStart();state.realAudioRequests++;markPostStartProgress('audio-gum-request',{combined:false});
             return waitForRealMicPermission().then(function(){
               return platformGum(constraints);
             }).then(function(audioStream){
               const tracks=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
-              state.realAudioTracks+=tracks.length;
+              state.realAudioTracks+=tracks.length;markPostStartProgress('real-mic-track',{combined:false,tracks:tracks.length});
               diag('GUM_AUDIO_ONLY',{realAudio:true,realAudioTracks:tracks.length,request:state.realAudioRequests});
               return audioStream;
             }).catch(function(e){
@@ -368,6 +442,37 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     return s;
   }
 
+  function liveUiProgress(snapshot){
+    const items=(snapshot&&snapshot.interactive)||[];
+    for(let i=0;i<items.length;i++){
+      const l=label(items[i]);
+      if(/\b(stop|end|disconnect|leave)\b/.test(l)&&/\b(live|session|talk|stream|recording)\b/.test(l))return safe(l,220);
+    }
+    return '';
+  }
+
+  function cameraGate(snapshot){
+    state.cameraGateScans++;
+    const start=observeStart();
+    if(!start.started){state.cameraGateReason='waiting-start-live';return false;}
+    if(state.cameraBlockedByPageError){state.cameraGateReason='page-error-after-start';return false;}
+    const startAge=state.startObservedAt?Date.now()-state.startObservedAt:-1;
+    if(start.setup)markPostStartProgress('server-setup',{});
+    if(!state.postStartProgress){
+      const ui=liveUiProgress(snapshot);if(ui)markPostStartProgress('live-ui-transition',{label:ui});
+    }
+    if(startAge>=0&&startAge<CAMERA_POST_START_MIN_MS){state.cameraGateReason='waiting-start-settle';return false;}
+    if(!state.postStartProgress){state.cameraGateReason='waiting-post-start-progress';return false;}
+    if(state.cameraClicks>=1){
+      state.cameraGateReason=state.gumVideoRequests>0?'camera-gum-seen':'camera-clicked-waiting-gum';
+      if(!state.cameraNoGumReported&&state.lastCameraClickAt&&Date.now()-state.lastCameraClickAt>=CAMERA_NO_GUM_REPORT_MS&&state.gumVideoRequests===0){
+        state.cameraNoGumReported=true;diag('CAMERA_NO_GUM_AFTER_CLICK',{waitMs:Date.now()-state.lastCameraClickAt,label:safe(state.lastCameraLabel,220),postStartProgressKind:state.postStartProgressKind});
+      }
+      return false;
+    }
+    state.cameraGateReason='ready-after-'+state.postStartProgressKind;return true;
+  }
+
   function nativeTapElement(el,purpose){
     try{
       const bridge=window.AIStudioNativeTapBridge;if(!bridge||typeof bridge.requestNativeTap!=='function')return false;
@@ -384,11 +489,11 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!scored.length)return false;
     scored.sort(function(a,b){return b.score-a.score;});
     const best=scored[0],now=Date.now();state.cameraCandidates=scored.length;state.lastCameraLabel=best.label;
-    if(state.cameraClicks>=5||state.lastCameraClickAt&&now-state.lastCameraClickAt<CAMERA_RETRY_MS)return true;
+    if(state.cameraClicks>=1)return true;
     state.cameraClicks++;state.lastCameraClickAt=now;
     const nativeTap=nativeTapElement(best.el,'camera-input');
     if(!nativeTap){try{best.el.click();}catch(_){} }
-    diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),retryAfterMs:CAMERA_RETRY_MS,nativeTap:nativeTap});
+    diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),nativeTap:nativeTap,postStartProgressKind:state.postStartProgressKind,startAgeMs:state.startObservedAt?now-state.startObservedAt:-1});
     return true;
   }
 
@@ -397,11 +502,15 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     let path='';try{path=String(location.pathname||'').toLowerCase();}catch(_){}
     if(path.indexOf('/live')<0)return;
     const snapshot=collectDeep();scanPageErrors(snapshot);state.cameraScans++;
+    if(!cameraGate(snapshot)){
+      if(state.cameraGateScans===1||state.cameraGateScans%8===0)diag('CAMERA_WAIT',{scan:state.cameraScans,gateScan:state.cameraGateScans,reason:state.cameraGateReason,startAttemptSeen:state.startAttemptSeen,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,pageError:state.lastPageError,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,realAudioRequests:state.realAudioRequests});
+      return;
+    }
     const camera=[];
     for(let i=0;i<snapshot.interactive.length;i++){const score=cameraScore(snapshot.interactive[i]);if(score>=20)camera.push({el:snapshot.interactive[i],score:score,label:label(snapshot.interactive[i])});}
     state.cameraCandidates=camera.length;
     if(clickBestCamera(camera))return;
-    if(state.cameraScans===1||state.cameraScans%8===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0,gumVideoRequests:state.gumVideoRequests,configuredAgeMs:state.configuredAt?Date.now()-state.configuredAt:-1});
+    if(state.cameraScans===1||state.cameraScans%8===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0,gateReason:state.cameraGateReason,gumVideoRequests:state.gumVideoRequests,configuredAgeMs:state.configuredAt?Date.now()-state.configuredAt:-1});
   }
 
   function pushJpeg(base64){
@@ -427,16 +536,15 @@ object AiStudioWebSessionR19ScreenVideoBridge {
 
   function configure(enabled){
     state.enabled=enabled!==false;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
-    if(state.enabled){setTimeout(tryEnableVideoInput,0);setTimeout(tryEnableVideoInput,250);setTimeout(tryEnableVideoInput,650);}
-    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:true,displayMediaPassiveFallback:true,realMicBypassesSynthetic:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
+    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:true,displayMediaPassiveFallback:true,realMicBypassesSynthetic:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
   }
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,transport:'camera-gum',cameraBeforeStart:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
   installPageDiagnostics();installTransportDiagnostics();installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
   setInterval(function(){installMediaHooks();installTransportDiagnostics();tryEnableVideoInput();},800);
   setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);
-  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:true,displayMediaPassiveFallback:true,pageDiagnostics:true,networkDiagnostics:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:true,displayMediaPassiveFallback:true,pageDiagnostics:true,networkDiagnostics:true});
 })();
     """.trimIndent()
 }

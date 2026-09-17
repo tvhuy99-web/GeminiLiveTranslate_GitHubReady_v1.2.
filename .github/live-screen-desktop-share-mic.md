@@ -1,1 +1,0 @@
-Temporary integration marker for CI. Live screen-description AI Studio changes are isolated on this branch; remove before merge.

@@ -5,6 +5,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     const val VERSION = "2026-09-05-web-session-r17.9-fast-progress-recovery"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
+    const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"
     const val TARGET_MODEL = "function-specific"
 
     val DOCUMENT_START: String = """
@@ -15,8 +16,9 @@ object AiStudioWebSessionR17ProductionBootstrap {
   const VERSION='2026-09-05-web-session-r17.9-fast-progress-recovery';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
+  const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
   const state={
-    configured:false,transcribeOnly:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,echoTargetLanguage:false,
+    configured:false,transcribeOnly:false,screenDescription:false,targetLanguage:'vi',targetModel:TRANSLATE_MODEL,echoTargetLanguage:false,systemPrompt:'',
     instructionApplied:false,streamSelected:false,modelSeen:false,modelVerified:false,modelRouteRequested:false,
     languageUiSelected:false,languageAttempts:0,translationGuardRequests:0,translationConfigSeen:false,targetLanguageVerified:false,
     targetLanguageRewriteRequests:0,targetLanguageRewriteCount:0,lastLanguageStrategy:'none',setupObserved:false,
@@ -127,10 +129,30 @@ object AiStudioWebSessionR17ProductionBootstrap {
     const keys=Object.keys(node);for(let i=0;i<keys.length;i++){const r=patchTranslationTree(node[keys[i]],d+1);changed+=r.changed;seen+=r.seen;}
     return {changed:changed,seen:seen};
   }
+  function patchScreenDescriptionTree(node,depth){
+    const d=depth||0;if(d>12||node==null||typeof node!=='object')return {changed:0,seen:0};let changed=0,seen=0;
+    if(Array.isArray(node)){for(let i=0;i<node.length;i++){const r=patchScreenDescriptionTree(node[i],d+1);changed+=r.changed;seen+=r.seen;}return {changed:changed,seen:seen};}
+    const model=typeof node.model==='string'?String(node.model).toLowerCase().replace(/^models\//,''):'';
+    if(model&&model===String(state.targetModel||'').toLowerCase().replace(/^models\//,'')){
+      seen++;
+      const gk=Object.prototype.hasOwnProperty.call(node,'generation_config')?'generation_config':'generationConfig';let gc=node[gk];
+      if(!gc||typeof gc!=='object'||Array.isArray(gc)){gc={};node[gk]=gc;changed++;}
+      const rk=Object.prototype.hasOwnProperty.call(gc,'response_modalities')?'response_modalities':'responseModalities';gc[rk]=['AUDIO'];changed++;
+      for(const k of ['translationConfig','translation_config']){if(Object.prototype.hasOwnProperty.call(gc,k)){delete gc[k];changed++;}}
+      const sk=Object.prototype.hasOwnProperty.call(node,'system_instruction')?'system_instruction':'systemInstruction';
+      node[sk]={parts:[{text:String(state.systemPrompt||'')}]};state.instructionApplied=true;changed++;
+      const ok=Object.prototype.hasOwnProperty.call(node,'output_audio_transcription')?'output_audio_transcription':'outputAudioTranscription';node[ok]={};changed++;
+      for(const k of ['inputAudioTranscription','input_audio_transcription']){if(Object.prototype.hasOwnProperty.call(node,k)){delete node[k];changed++;}}
+      const ck=Object.prototype.hasOwnProperty.call(node,'context_window_compression')?'context_window_compression':'contextWindowCompression';
+      if(!node[ck]||typeof node[ck]!=='object'){node[ck]={slidingWindow:{}};changed++;}
+    }
+    const keys=Object.keys(node);for(let i=0;i<keys.length;i++){const r=patchScreenDescriptionTree(node[keys[i]],d+1);changed+=r.changed;seen+=r.seen;}
+    return {changed:changed,seen:seen};
+  }
   function rewriteSetupBody(body){
     try{
       let params=null,asString=false;if(typeof body==='string'){params=new URLSearchParams(body);asString=true;}else if(body instanceof URLSearchParams){params=new URLSearchParams(body.toString());}else return body;
-      let anyChanged=false,modelRewrites=0,translationChanges=0,translationSeen=0,touched=false;const updates=[];
+      let anyChanged=false,modelRewrites=0,translationChanges=0,translationSeen=0,screenChanges=0,screenSeen=0,touched=false;const updates=[];
       params.forEach(function(value,key){
         const keyText=String(key);if(keyText.indexOf('req')!==0||keyText.indexOf('___data__')<0)return;if(String(value).indexOf('audio/pcm')>=0)return;
         let next=String(value),changed=false;
@@ -139,7 +161,10 @@ object AiStudioWebSessionR17ProductionBootstrap {
           const replaced=next.replace(/(models\/)?gemini-[a-z0-9._-]*(?:live|translate|transcribe)[a-z0-9._-]*/ig,function(match,prefix){modelRewrites++;return (prefix?'models/':'')+state.targetModel;});
           if(replaced!==next){next=replaced;changed=true;state.modelSeen=true;state.modelVerified=true;}
         }
-        if(!state.transcribeOnly&&next.toLowerCase().indexOf(TRANSLATE_MODEL)>=0){
+        if(state.screenDescription){
+          touched=true;
+          try{const parsed=JSON.parse(next);const result=patchScreenDescriptionTree(parsed,0);screenChanges+=result.changed;screenSeen+=result.seen;if(result.seen>0){state.modelSeen=true;state.modelVerified=true;}if(result.changed>0){next=JSON.stringify(parsed);changed=true;}}catch(_){}
+        }else if(!state.transcribeOnly&&next.toLowerCase().indexOf(TRANSLATE_MODEL)>=0){
           touched=true;state.translationGuardRequests++;
           try{const parsed=JSON.parse(next);const result=patchTranslationTree(parsed,0);translationChanges+=result.changed;translationSeen+=result.seen;if(result.seen>0){state.translationConfigSeen=true;state.targetLanguageVerified=true;state.lastLanguageStrategy=result.changed>0?'named-config-rewrite':'named-config-already-correct';}if(result.changed>0){next=JSON.stringify(parsed);changed=true;}}catch(_){}
         }
@@ -147,8 +172,9 @@ object AiStudioWebSessionR17ProductionBootstrap {
       });
       for(let i=0;i<updates.length;i++)params.set(updates[i][0],updates[i][1]);
       if(touched)state.modelGuardRequests++;if(modelRewrites>0){state.modelRewriteRequests++;state.modelRewriteCount+=modelRewrites;}if(translationChanges>0){state.targetLanguageRewriteRequests++;state.targetLanguageRewriteCount+=translationChanges;}
-      if(touched)diag('TRANSLATION_CONFIG_GUARD',{targetLanguageCode:state.targetLanguage,verified:state.targetLanguageVerified,configSeen:state.translationConfigSeen,rewriteCount:state.targetLanguageRewriteCount,strategy:state.lastLanguageStrategy});
-      if(touched||modelRewrites>0)diag('MODEL_REQUEST_GUARD',{targetModel:state.targetModel,verified:state.modelVerified,rewriteCount:state.modelRewriteCount});
+      if(state.screenDescription&&touched)diag('SCREEN_SETUP_GUARD',{targetModel:state.targetModel,modelVerified:state.modelVerified,screenSeen:screenSeen,screenChanges:screenChanges,promptChars:String(state.systemPrompt||'').length});
+      if(!state.screenDescription&&touched)diag('TRANSLATION_CONFIG_GUARD',{targetLanguageCode:state.targetLanguage,verified:state.targetLanguageVerified,configSeen:state.translationConfigSeen,rewriteCount:state.targetLanguageRewriteCount,strategy:state.lastLanguageStrategy});
+      if(touched||modelRewrites>0)diag('MODEL_REQUEST_GUARD',{targetModel:state.targetModel,verified:state.modelVerified,rewriteCount:state.modelRewriteCount,screenDescription:state.screenDescription});
       return anyChanged?(asString?params.toString():params):body;
     }catch(_){return body;}
   }
@@ -190,10 +216,11 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(!state.streamSelected){state.stage='route';state.lastBlocker='waiting-live-route';reportDiscovery();return;}
     const snapshot=collectDeep();tryStart(snapshot);reportDiscovery();
   }
-  function configure(targetLanguage,transcribeOnly,echoTargetLanguage){
-    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.echoTargetLanguage=echoTargetLanguage===true;state.targetModel=state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL;
-    state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly;
-    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage});tick();return describe();
+  function configure(targetLanguage,transcribeOnly,echoTargetLanguage,requestedModel,screenDescription,systemPrompt){
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.screenDescription=!!screenDescription;state.echoTargetLanguage=echoTargetLanguage===true;state.systemPrompt=String(systemPrompt||'').trim().slice(0,20000);
+    const requested=safeText(requestedModel||'',160).replace(/^models\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
+    state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length});tick();return describe();
   }
   function describe(){
     return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,

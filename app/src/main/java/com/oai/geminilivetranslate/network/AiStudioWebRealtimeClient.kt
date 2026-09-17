@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
@@ -32,6 +33,7 @@ import com.oai.geminilivetranslate.ui.AiStudioWebSessionR14DirectLiveEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR17ProductionBootstrap
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR18LanguageGuard
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR19ScreenVideoBridge
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.util.concurrent.atomic.AtomicBoolean
@@ -45,6 +47,9 @@ internal class AiStudioWebRealtimeClient(
     private val logger: SessionLogger,
     private val listener: GeminiLiveClient.Listener,
     private val maxQueuedWireBytes: Long,
+    private val screenDescription: Boolean = false,
+    private val screenDescriptionModel: String = AiStudioWebSessionR17ProductionBootstrap.SCREEN_DESCRIPTION_MODEL,
+    private val screenDescriptionPrompt: String? = null,
 ) {
     private val appContext = GeminiTranslateApp.requireAppContext()
     private val main = Handler(Looper.getMainLooper())
@@ -77,6 +82,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastDirectState = ""
     @Volatile private var lastOutputState = ""
     @Volatile private var lastLanguageGuardState = ""
+    @Volatile private var lastScreenVideoState = ""
+    @Volatile private var lastScreenFramesDrawn = 0L
     @Volatile private var languageGuardConfigured = false
     @Volatile private var lastCarrierRequests = 0L
     @Volatile private var lastBrowserChunks = 0L
@@ -146,6 +153,32 @@ internal class AiStudioWebRealtimeClient(
         logger.log(3, "AiStudioInput", "STREAM_END result=$result queuedWire=${estimatedQueuedWireBytes()}")
         main.postDelayed({ maybeSilenceCarrier(force = true) }, STREAM_END_CARRIER_GRACE_MS)
         return result.also { updateBackpressureHighWater() }
+    }
+
+    fun sendVideoFrame(jpeg: ByteArray): GeminiLiveClient.SendResult {
+        if (!screenDescription) return GeminiLiveClient.SendResult.FAILED
+        if (jpeg.isEmpty()) return GeminiLiveClient.SendResult.SENT
+        if (closed.get()) return GeminiLiveClient.SendResult.CLOSED
+        if (!setupDelivered.get()) return GeminiLiveClient.SendResult.NOT_READY
+        val current = webView ?: return GeminiLiveClient.SendResult.NOT_READY
+        lastInputAt = SystemClock.elapsedRealtime()
+        val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+        if (encoded.length > SCREEN_DESCRIPTION_MAX_BASE64_CHARS) {
+            backpressureEvents.incrementAndGet()
+            logger.log(1, "AiStudioScreenVideo", "FRAME_REJECT reason=too-large jpegBytes=${jpeg.size} base64Chars=${encoded.length}")
+            return GeminiLiveClient.SendResult.BACKPRESSURED
+        }
+        val quoted = JSONObject.quote(encoded)
+        current.post {
+            if (closed.get()) return@post
+            current.evaluateJavascript(
+                "JSON.stringify(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.pushJpeg($quoted):({ok:false,error:'r19-not-installed'}))",
+            ) { raw ->
+                val decoded = decodeEvalValue(raw)
+                logger.log(3, "AiStudioScreenVideo", "FRAME_PUSH jpegBytes=${jpeg.size} ${safe(decoded, 900)}")
+            }
+        }
+        return GeminiLiveClient.SendResult.SENT
     }
 
     fun backpressureStats(): GeminiLiveClient.BackpressureStats {
@@ -237,6 +270,11 @@ internal class AiStudioWebRealtimeClient(
         WebViewCompat.addDocumentStartJavaScript(
             created,
             AiStudioWebSessionR17ProductionBootstrap.DOCUMENT_START,
+            setOf(AI_STUDIO_ORIGIN),
+        )
+        WebViewCompat.addDocumentStartJavaScript(
+            created,
+            AiStudioWebSessionR19ScreenVideoBridge.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
 
@@ -588,7 +626,7 @@ internal class AiStudioWebRealtimeClient(
                     return
                 }
             }
-            if (!suppressTimeouts && setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
+            if (!screenDescription && !suppressTimeouts && setupDelivered.get() && lastProgressAt > 0L && now - lastProgressAt > LIVE_STALE_TIMEOUT_MS) {
                 fail(IllegalStateException("AI_STUDIO_LIVE_CARRIER_STALE"))
                 return
             }
@@ -654,27 +692,38 @@ internal class AiStudioWebRealtimeClient(
         val language = JSONObject.quote(targetLanguage)
         val transcribe = operationMode == GeminiLiveClient.OperationMode.TRANSCRIBE
         val transcribeJs = if (transcribe) "true" else "false"
-        val languageCall = if (transcribe) {
+        val screenJs = if (screenDescription) "true" else "false"
+        val requestedModel = JSONObject.quote(targetLiveModel())
+        val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
+        val languageCall = if (transcribe || screenDescription) {
             "null"
         } else {
             "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
         }
+        val screenCall = if (screenDescription) {
+            "(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.configure(true):({ok:false,error:'r19-not-installed'}))"
+        } else {
+            "null"
+        }
         current.evaluateJavascript(
-            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall,screen:$screenCall})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
             val bootstrap = root?.optJSONObject("bootstrap")
             val languageGuard = root?.optJSONObject("language")
+            val screenBridge = root?.optJSONObject("screen")
             val bootstrapOk = bootstrap?.optBoolean("ok") == true
-            val languageOk = transcribe || languageGuard?.optBoolean("ok") == true
-            if (bootstrapOk && languageOk) {
+            val languageOk = transcribe || screenDescription || languageGuard?.optBoolean("ok") == true
+            val screenOk = !screenDescription || screenBridge?.optBoolean("ok") == true
+            if (bootstrapOk && languageOk && screenOk) {
                 configured = true
-                languageGuardConfigured = !transcribe && languageOk
+                languageGuardConfigured = !transcribe && !screenDescription && languageOk
                 lastBootstrapState = bootstrap.toString()
                 if (!transcribe && languageGuard != null) lastLanguageGuardState = languageGuard.toString()
+                if (screenBridge != null) lastScreenVideoState = screenBridge.toString()
                 updateBootstrapProgress(bootstrap)
-                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured")
+                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured")
             } else if (decoded.isNotBlank()) {
                 logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk ${safe(decoded, 1200)}")
             }
@@ -683,7 +732,7 @@ internal class AiStudioWebRealtimeClient(
 
     private fun requestStates() {
         val current = webView ?: return
-        val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,language:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
+        val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,language:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,screen:window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
         current.evaluateJavascript(js) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return@evaluateJavascript
@@ -707,6 +756,16 @@ internal class AiStudioWebRealtimeClient(
                     markBootstrapProgress("carrier-request-$requests")
                     if (requests == 1L || requests % 25L == 0L) {
                         logger.log(3, "AiStudioTransport", "CARRIER requests=$requests frames=${direct.optLong("carrierFrames", 0L)} replaced=${direct.optLong("replacedFrames", 0L)} template=${direct.optBoolean("templateObserved", false)} queue=${direct.optInt("queueDepth", 0)}")
+                    }
+                }
+            }
+            root.optJSONObject("screen")?.let { screen ->
+                lastScreenVideoState = screen.toString()
+                val drawn = screen.optLong("framesDrawn", 0L)
+                if (drawn > lastScreenFramesDrawn) {
+                    lastScreenFramesDrawn = drawn
+                    if (drawn == 1L || drawn % 20L == 0L) {
+                        logger.log(3, "AiStudioScreenVideo", "STATE framesDrawn=$drawn gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} displayRequests=${screen.optLong("displayRequests", 0L)} cameraClicks=${screen.optInt("cameraClicks", 0)}")
                     }
                 }
             }
@@ -765,12 +824,40 @@ internal class AiStudioWebRealtimeClient(
 
     private fun maybeDeliverSetup() {
         if (closed.get() || setupDelivered.get() || !serverSetupSeen) return
-        if (operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
+        if (!screenDescription && operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
             val language = runCatching { JSONObject(lastLanguageGuardState) }.getOrNull() ?: return
             if (!languageGuardConfigured || !language.optBoolean("targetLanguageVerified", false)) {
                 logger.log(2, "AiStudioLanguage", "WAITING_TARGET_LANGUAGE target=$targetLanguage configured=$languageGuardConfigured verified=${language.optBoolean("targetLanguageVerified", false)} strategy=${safe(language.optString("lastStrategy", "none"), 120)} bidiRequests=${language.optLong("bidiRequests", 0L)} setupRequests=${language.optLong("setupRequests", 0L)} translateSetup=${language.optLong("translateSetupRequests", 0L)} fallbackCandidates=${language.optInt("lastFallbackCandidates", 0)}")
                 return
             }
+        }
+        if (screenDescription) {
+            val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
+            val videoReady = screen.optBoolean("videoTrackReady", false)
+            if (!videoReady) {
+                logger.log(
+                    2,
+                    "AiStudioScreenVideo",
+                    "WAITING_VIDEO_TRACK enabled=${screen.optBoolean("enabled", false)} " +
+                        "gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                        "displayRequests=${screen.optLong("displayRequests", 0L)}",
+                )
+                return
+            }
+            main.postDelayed({
+                if (closed.get() || setupDelivered.get()) return@postDelayed
+                setupDelivered.set(true)
+                lastProgressAt = SystemClock.elapsedRealtime()
+                logger.log(
+                    2,
+                    "AiStudioLive",
+                    "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage " +
+                        "transport=r19-video videoTrackReady=true gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                        "displayRequests=${screen.optLong("displayRequests", 0L)} hidden=false debugVisible=true isolatedLiveHost=true",
+                )
+                listener.onSetupComplete()
+            }, ARM_SETTLE_MS)
+            return
         }
         val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
         val template = direct.optBoolean("templateObserved", false)
@@ -825,9 +912,13 @@ internal class AiStudioWebRealtimeClient(
         }
     }
 
-    private fun targetLiveModel(): String = when (operationMode) {
-        GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
-        GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+    private fun targetLiveModel(): String = if (screenDescription) {
+        screenDescriptionModel
+    } else {
+        when (operationMode) {
+            GeminiLiveClient.OperationMode.TRANSLATE -> AiStudioWebSessionR17ProductionBootstrap.TRANSLATE_MODEL
+            GeminiLiveClient.OperationMode.TRANSCRIBE -> AiStudioWebSessionR17ProductionBootstrap.TRANSCRIBE_MODEL
+        }
     }
 
     private fun liveRouteUrl(): String = "$AI_STUDIO_LIVE?model=${Uri.encode(targetLiveModel())}"
@@ -837,7 +928,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             0,
             "AiStudioLive",
-            "FAIL hidden=false debugVisible=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured languageGuardConfigured=$languageGuardConfigured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} language=${safe(lastLanguageGuardState, 2200)} direct=${safe(lastDirectState, 1800)} output=${safe(lastOutputState, 1800)}",
+            "FAIL hidden=false debugVisible=true isolatedLiveHost=true setup=${setupDelivered.get()} operation=$operationMode model=${targetLiveModel()} target=$targetLanguage routeRepairs=$routeRepairAttempts bootstrapInstalled=$bootstrapInstalled configured=$configured languageGuardConfigured=$languageGuardConfigured bootstrapRecoveries=$bootstrapRecoveryAttempts lastBootstrapInstallError=${safe(lastBootstrapInstallError, 600)} bootstrap=${safe(lastBootstrapState, 2400)} language=${safe(lastLanguageGuardState, 2200)} direct=${safe(lastDirectState, 1800)} screen=${safe(lastScreenVideoState, 1800)} output=${safe(lastOutputState, 1800)}",
             error,
         )
         listener.onError(error)
@@ -853,7 +944,11 @@ internal class AiStudioWebRealtimeClient(
             when {
                 kind.startsWith("R17_") -> logger.log(3, "AiStudioBootstrap", "JS_$kind ${safe(text, 2800)}")
                 kind.startsWith("R183_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioLanguage", "JS_$kind ${safe(text, 2800)}")
+                kind.startsWith("R19_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioScreenVideo", "JS_$kind ${safe(text, 2400)}")
                 kind == "R14_AUDIO_TEMPLATE_CAPTURED" ||
+                    kind == "R14_VIDEO_QUEUE" ||
+                    kind == "R14_VIDEO_REPLACED" ||
+                    kind == "R14_MEDIA_REPLACED" ||
                     kind == "R14_INJECT_HTTP_2XX" ||
                     kind == "R14_INJECT_HTTP_ERROR" ||
                     kind == "R14_INJECT_ZERO_STATUS_END" ->
@@ -900,6 +995,7 @@ internal class AiStudioWebRealtimeClient(
         private const val ARM_SETTLE_MS = 180L
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
+        private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
         private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2

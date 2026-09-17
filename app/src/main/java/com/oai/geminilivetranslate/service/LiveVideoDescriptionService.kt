@@ -16,11 +16,13 @@ import androidx.core.app.ServiceCompat
 import com.oai.geminilivetranslate.MainActivity
 import com.oai.geminilivetranslate.R
 import com.oai.geminilivetranslate.audio.StreamingPcmPlayer
+import com.oai.geminilivetranslate.core.AiConnectionModeStore
 import com.oai.geminilivetranslate.core.ApiKeyStore
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.LanguageCatalog
 import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.network.GeminiScreenDescriptionLiveClient
+import com.oai.geminilivetranslate.network.ScreenDescriptionLiveClient
 import com.oai.geminilivetranslate.video.ScreenFrameCapture
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,7 +35,7 @@ class LiveVideoDescriptionService : Service() {
     private lateinit var logger: SessionLogger
     private var mediaProjection: MediaProjection? = null
     private var frameCapture: ScreenFrameCapture? = null
-    private var liveClient: GeminiScreenDescriptionLiveClient? = null
+    private var liveClient: ScreenDescriptionLiveClient? = null
     private var outputPlayer: StreamingPcmPlayer? = null
     private var projectionCallback: MediaProjection.Callback? = null
     private val stopping = AtomicBoolean(false)
@@ -70,9 +72,14 @@ class LiveVideoDescriptionService : Service() {
         publish("Đang khởi động...", running = true, transcriptText = "", error = null)
         startForegroundNow("Đang khởi động...")
 
-        val keyState = ApiKeyStore(this).load()
-        val apiKey = keyState.selected?.takeIf { it in keyState.keys } ?: keyState.keys.firstOrNull()
-        if (apiKey.isNullOrBlank()) {
+        val connectionMode = AiConnectionModeStore(this).load()
+        val apiKey = if (connectionMode == AiConnectionModeStore.MODE_API_KEY) {
+            val keyState = ApiKeyStore(this).load()
+            keyState.selected?.takeIf { it in keyState.keys } ?: keyState.keys.firstOrNull()
+        } else {
+            null
+        }
+        if (connectionMode == AiConnectionModeStore.MODE_API_KEY && apiKey.isNullOrBlank()) {
             failSession("Chưa có Gemini API Key")
             return
         }
@@ -130,11 +137,11 @@ class LiveVideoDescriptionService : Service() {
             logger = logger,
         ) { jpeg ->
             when (liveClient?.sendVideoFrame(jpeg)) {
-                GeminiScreenDescriptionLiveClient.SendResult.FAILED,
-                GeminiScreenDescriptionLiveClient.SendResult.CLOSED -> {
+                ScreenDescriptionLiveClient.SendResult.FAILED,
+                ScreenDescriptionLiveClient.SendResult.CLOSED -> {
                     logger.log(1, TAG, "Frame không gửi được vì Live socket đã đóng")
                 }
-                GeminiScreenDescriptionLiveClient.SendResult.BACKPRESSURED -> {
+                ScreenDescriptionLiveClient.SendResult.BACKPRESSURED -> {
                     logger.log(3, TAG, "Bỏ frame hiện tại do backpressure; không xếp hàng frame cũ")
                 }
                 else -> Unit
@@ -143,11 +150,14 @@ class LiveVideoDescriptionService : Service() {
         frameCapture = capture
 
         val outputLanguage = LanguageCatalog.displayName(settings.targetLanguage)
-        val client = GeminiScreenDescriptionLiveClient(
+        val selectedBackend = if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) "ai_studio" else "api_key"
+        val client = ScreenDescriptionLiveClient(
+            context = this,
             apiKey = apiKey,
-            outputLanguage = outputLanguage,
+            outputLanguageCode = settings.targetLanguage,
+            outputLanguageDisplay = outputLanguage,
             logger = logger,
-            listener = object : GeminiScreenDescriptionLiveClient.Listener {
+            listener = object : ScreenDescriptionLiveClient.Listener {
                 override fun onSetupComplete() {
                     if (stopping.get()) return
                     runCatching { capture.start() }
@@ -157,7 +167,8 @@ class LiveVideoDescriptionService : Service() {
                                 2,
                                 TAG,
                                 "LIVE_READY model=${GeminiScreenDescriptionLiveClient.MODEL} screen=true micInput=false " +
-                                    "audioOutput=true language=$outputLanguage promptSource=${if (customPrompt == null) "default" else "custom"} " +
+                                    "audioOutput=true language=$outputLanguage connectionMode=$connectionMode backend=$selectedBackend " +
+                                        "promptSource=${if (customPrompt == null) "default" else "custom"} " +
                                     "promptChars=${customPrompt?.length ?: 0}",
                             )
                         }
@@ -198,7 +209,8 @@ class LiveVideoDescriptionService : Service() {
             2,
             TAG,
             "START model=${GeminiScreenDescriptionLiveClient.MODEL} input=screen-jpeg maxFps=1 micInput=false " +
-                "audioOutput=true promptSource=${if (customPrompt == null) "default" else "custom"} " +
+                "audioOutput=true connectionMode=$connectionMode backend=$selectedBackend " +
+                    "promptSource=${if (customPrompt == null) "default" else "custom"} " +
                 "promptChars=${customPrompt?.length ?: 0}",
         )
         client.connect()

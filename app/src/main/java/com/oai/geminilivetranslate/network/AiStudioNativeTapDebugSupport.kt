@@ -117,6 +117,7 @@ internal class AiStudioNativeTapController(
 ) {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var lastTapAt = 0L
+    @Volatile private var lastMicPermissionRequestAt = 0L
 
     @JavascriptInterface
     fun requestNativeTap(json: String?) {
@@ -169,6 +170,28 @@ internal class AiStudioNativeTapController(
     }
 
     @JavascriptInterface
+    fun hasMicrophonePermission(): Boolean {
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+            webView.context,
+            android.Manifest.permission.RECORD_AUDIO,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    @JavascriptInterface
+    fun requestMicrophonePermission(): Boolean {
+        if (hasMicrophonePermission()) return true
+        main.post {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastMicPermissionRequestAt < 5_000L) return@post
+            val activity = GeminiTranslateApp.currentActivity() ?: return@post
+            lastMicPermissionRequestAt = now
+            logger?.log(2, "AiStudioAuthMedia", "ANDROID_MIC_PERMISSION_REQUEST source=live-screen-description")
+            activity.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), LIVE_MIC_PERMISSION_REQUEST_CODE)
+        }
+        return false
+    }
+
+    @JavascriptInterface
     fun reportStartGesture(json: String?) {
         val parsed = runCatching { JSONObject(json.orEmpty()) }.getOrNull() ?: return
         val kind = parsed.optString("kind").take(24)
@@ -177,6 +200,10 @@ internal class AiStudioNativeTapController(
         val role = parsed.optString("role").take(48)
         val purpose = parsed.optString("purpose").take(48)
         logger?.log(2, "AiStudioNativeTap", "ACTION_GESTURE kind=$kind trusted=$trusted purpose=$purpose tag=$tag role=$role")
+    }
+
+    companion object {
+        private const val LIVE_MIC_PERMISSION_REQUEST_CODE = 64017
     }
 }
 

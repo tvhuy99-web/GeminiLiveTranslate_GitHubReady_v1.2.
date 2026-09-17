@@ -28,7 +28,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
     if(!active())return;
     try{const b=window.AIStudioWebSessionLab;if(b&&typeof b.onJsEvent==='function')b.onJsEvent(JSON.stringify({kind:'R19_FORENSIC_'+kind,payload:payload||{}}));}catch(_){}
   }
-  function secretName(name){return /authorization|cookie|set-cookie|x-goog-api-key|api[-_]?key|access[-_]?token|id[-_]?token|\$httpheaders|^sid$|^gsessionid$/i.test(String(name||''));}
+  function secretName(name){return /authorization|cookie|set-cookie|x-goog-api-key|api[-_]?key|access[-_]?token|id[-_]?token|\x24httpheaders|^sid$|^gsessionid$/i.test(String(name||''));}
   function safeHeader(name,value){const v=String(value||'');return secretName(name)?'<redacted chars='+v.length+'>':v.slice(0,12000);}
   function safeUrl(raw){
     try{

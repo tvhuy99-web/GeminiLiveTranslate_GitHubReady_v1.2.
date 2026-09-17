@@ -1,14 +1,15 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.2-screen-canvas-cloned-track"
+    const val VERSION = "2026-09-17-r19.3-screen-canvas-cloned-track"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.2-screen-canvas-cloned-track';
+  const VERSION='2026-09-17-r19.3-screen-canvas-cloned-track';
+  const CAMERA_RETRY_MS=3000;
   const state={
     enabled:false,
     canvas:null,
@@ -32,6 +33,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     cameraScans:0,
     cameraCandidates:0,
     cameraClicks:0,
+    lastCameraClickAt:0,
     lastCameraLabel:'',
     lastFrameAt:0,
     lastDrawSeq:0,
@@ -159,6 +161,8 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!state.enabled||state.gumVideoRequests>0||state.displayRequests>0)return;
     let path='';try{path=String(location.pathname||'').toLowerCase();}catch(_){}
     if(path.indexOf('/live')<0)return;
+    const now=Date.now();
+    if(state.lastCameraClickAt&&now-state.lastCameraClickAt<CAMERA_RETRY_MS)return;
     state.cameraScans++;
     const nodes=collectDeep(),scored=[];
     for(let i=0;i<nodes.length;i++){const score=cameraScore(nodes[i]);if(score>=10)scored.push({el:nodes[i],score:score,label:label(nodes[i])});}
@@ -166,8 +170,8 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!scored.length){if(state.cameraScans===1||state.cameraScans%10===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0});return;}
     const best=scored[0];state.lastCameraLabel=best.label;
     if(state.cameraClicks>=6)return;
-    state.cameraClicks++;
-    try{best.el.click();diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,220),tag:tag(best.el),role:role(best.el)});}catch(e){diag('CAMERA_CLICK_ERROR',{attempt:state.cameraClicks,name:String(e&&e.name||'Error')});}
+    state.cameraClicks++;state.lastCameraClickAt=now;
+    try{best.el.click();diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,220),tag:tag(best.el),role:role(best.el),retryAfterMs:CAMERA_RETRY_MS});}catch(e){diag('CAMERA_CLICK_ERROR',{attempt:state.cameraClicks,name:String(e&&e.name||'Error')});}
   }
 
   function pushJpeg(base64){
@@ -192,7 +196,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   }
 
   function configure(enabled){state.enabled=enabled!==false;state.configuredAt=Date.now();installMediaHooks();if(state.enabled)ensureVideo();diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended')});return describe();}
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraLabel:state.lastCameraLabel,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
   installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};

@@ -25,12 +25,11 @@ import kotlin.math.roundToInt
 internal object AiStudioNativeTapDocumentStart {
     const val VERSION = "2026-09-17-r18.9-screen-forensic-r20"
 
-    val DOCUMENT_START: String = """
-(function(){
-  if(/gemini-3\.8-live/i.test(String(location.href||''))){
-    ${AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START}
-  }
-})();
+    val DOCUMENT_START: String =
+        "(function(){if(/gemini-3\\.8-live/i.test(String(location.href||''))){\n" +
+            AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START +
+            "\n}})();\n" +
+            """
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
@@ -114,7 +113,7 @@ internal object AiStudioNativeTapDocumentStart {
   }
   window.__AIS_NATIVE_START_TAP__={version:VERSION};
 })();
-    """.trimIndent()
+            """.trimIndent()
 }
 
 internal class AiStudioNativeTapController(

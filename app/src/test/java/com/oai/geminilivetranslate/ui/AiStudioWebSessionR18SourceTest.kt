@@ -97,7 +97,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(service.contains("FILE_TRANSCRIBE backend=aistudio-file"))
         assertTrue(fileClient.contains("AppPreferences.TRANSCRIBE_FILE_MODEL"))
         assertTrue(fileClient.contains("live=false"))
-        assertTrue(bootstrap.contains("r17.9-fast-progress-recovery"))
+        assertTrue(bootstrap.contains("r17.10-screen-camera-gate"))
         assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
         assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }

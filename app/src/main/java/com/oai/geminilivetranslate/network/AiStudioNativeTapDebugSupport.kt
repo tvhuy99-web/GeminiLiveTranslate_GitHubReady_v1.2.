@@ -16,19 +16,25 @@ import android.widget.TextView
 import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.core.AppPreferences
 import com.oai.geminilivetranslate.core.SessionLogger
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR20ForensicDiagnostics
 import org.json.JSONObject
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-17-r18.8-native-live-media-tap"
+    const val VERSION = "2026-09-17-r18.9-screen-forensic-r20"
 
     val DOCUMENT_START: String = """
 (function(){
+  if(/gemini-3\.8-live/i.test(String(location.href||''))){
+    ${AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START}
+  }
+})();
+(function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-17-r18.8-native-live-media-tap';
+  const VERSION='2026-09-17-r18.9-screen-forensic-r20';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 

@@ -834,12 +834,16 @@ internal class AiStudioWebRealtimeClient(
         if (screenDescription) {
             val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
             val videoReady = screen.optBoolean("videoTrackReady", false)
-            if (!videoReady) {
+            val cameraTransportReady = screen.optBoolean("cameraTransportReady", false)
+            val gumVideoRequests = screen.optLong("gumVideoRequests", 0L)
+            if (!videoReady || !cameraTransportReady || gumVideoRequests <= 0L) {
                 logger.log(
                     2,
                     "AiStudioScreenVideo",
-                    "WAITING_VIDEO_TRACK enabled=${screen.optBoolean("enabled", false)} " +
-                        "gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                    "WAITING_VIDEO_TRANSPORT enabled=${screen.optBoolean("enabled", false)} " +
+                        "videoTrackReady=$videoReady cameraTransportReady=$cameraTransportReady " +
+                        "gumVideoRequests=$gumVideoRequests cameraClicks=${screen.optInt("cameraClicks", 0)} " +
+                        "cameraRetries=${screen.optInt("cameraRetries", 0)} gate=${safe(screen.optString("cameraGateReason", ""), 120)} " +
                         "displayRequests=${screen.optLong("displayRequests", 0L)}",
                 )
                 return
@@ -852,7 +856,7 @@ internal class AiStudioWebRealtimeClient(
                     2,
                     "AiStudioLive",
                     "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage " +
-                        "transport=r19-video videoTrackReady=true gumVideoRequests=${screen.optLong("gumVideoRequests", 0L)} " +
+                        "transport=r19-video videoTrackReady=true cameraTransportReady=true gumVideoRequests=$gumVideoRequests " +
                         "displayRequests=${screen.optLong("displayRequests", 0L)} hidden=false debugVisible=true isolatedLiveHost=true",
                 )
                 listener.onSetupComplete()
@@ -982,7 +986,7 @@ internal class AiStudioWebRealtimeClient(
         value.replace('\u0000', ' ').replace('\n', ' ').replace('\r', ' ').take(max)
 
     companion object {
-        const val VERSION = "2026-09-06-production-ai-studio-live-r8-background-resync"
+        const val VERSION = "2026-09-18-production-ai-studio-live-r9-camera-ready-gate"
         private const val DIAGNOSTIC_BRIDGE_NAME = "AIStudioWebSessionLab"
         private const val NATIVE_TAP_BRIDGE_NAME = "AIStudioNativeTapBridge"
         private const val AI_STUDIO_ORIGIN = "https://aistudio.google.com"

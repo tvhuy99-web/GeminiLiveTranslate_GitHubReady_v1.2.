@@ -1,14 +1,14 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.5-desktop-share-real-mic-permission"
+    const val VERSION = "2026-09-17-r19.6-desktop-share-real-mic-all-requests"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.5-desktop-share-real-mic-permission';
+  const VERSION='2026-09-17-r19.6-desktop-share-real-mic-all-requests';
   const SHARE_RETRY_MS=1800;
   const CAMERA_RETRY_MS=3000;
   const CAMERA_FALLBACK_AFTER_SCANS=5;
@@ -171,6 +171,21 @@ object AiStudioWebSessionR19ScreenVideoBridge {
             }
             diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:false,video:true,realAudio:false,tracks:videoStream&&videoStream.getTracks?videoStream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
             return Promise.resolve(videoStream);
+          }
+          if(state.enabled&&!!c.audio&&!c.video){
+            state.realAudioRequests++;
+            return waitForRealMicPermission().then(function(){
+              return native(constraints);
+            }).then(function(audioStream){
+              const tracks=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
+              state.realAudioTracks+=tracks.length;
+              diag('GUM_AUDIO_ONLY',{realAudio:true,realAudioTracks:tracks.length,request:state.realAudioRequests});
+              return audioStream;
+            }).catch(function(e){
+              state.realAudioErrors++;
+              diag('REAL_AUDIO_ERROR',{count:state.realAudioErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',280),audioOnly:true});
+              throw e;
+            });
           }
           return native(constraints);
         };

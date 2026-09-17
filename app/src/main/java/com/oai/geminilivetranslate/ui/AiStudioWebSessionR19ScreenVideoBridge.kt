@@ -1,14 +1,14 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-18-r19.10-camera-retry-ready-gate"
+    const val VERSION = "2026-09-18-r19.11-camera-retry-silent-audio"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-18-r19.10-camera-retry-ready-gate';
+  const VERSION='2026-09-18-r19.11-camera-retry-silent-audio';
   const CAMERA_POST_START_MIN_MS=350;
   const CAMERA_RETRY_NO_GUM_MS=3000;
   const MAX_CAMERA_TAP_ATTEMPTS=2;
@@ -16,6 +16,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   const PAGE_ERROR_SCAN_MS=900;
   const state={
     enabled:false,
+    allowRealMicInput:false,
     canvas:null,
     ctx:null,
     videoStream:null,
@@ -26,6 +27,13 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     realAudioRequests:0,
     realAudioTracks:0,
     realAudioErrors:0,
+    silentAudioRequests:0,
+    silentAudioTracks:0,
+    silentAudioErrors:0,
+    silentAudioContext:null,
+    silentAudioSource:null,
+    silentAudioGain:null,
+    silentAudioStream:null,
     micPermissionRequests:0,
     micPermissionTimeouts:0,
     videoClonesCreated:0,
@@ -318,13 +326,32 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     try{return new MediaStream([video]);}catch(_){return state.videoStream;}
   }
 
-  function combineVideoAndRealAudio(videoStream,audioStream){
+  function combineVideoAndAudio(videoStream,audioStream){
     const videos=videoStream&&videoStream.getVideoTracks?videoStream.getVideoTracks():[];
     const audios=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
     if(!videos.length)throw new Error('synthetic-video-track-unavailable');
-    if(!audios.length)throw new Error('real-audio-track-unavailable');
-    state.realAudioTracks+=audios.length;
+    if(!audios.length)throw new Error('audio-track-unavailable');
     return new MediaStream(videos.concat(audios));
+  }
+
+  function buildSilentAudioStream(){
+    try{
+      const existing=state.silentAudioStream&&state.silentAudioStream.getAudioTracks?state.silentAudioStream.getAudioTracks():[];
+      if(existing.length&&existing[0].readyState!=='ended')return state.silentAudioStream;
+      const C=window.AudioContext||window.webkitAudioContext;if(!C)throw new Error('AudioContext unavailable');
+      const context=new C({sampleRate:16000}),source=context.createOscillator(),gain=context.createGain(),dest=context.createMediaStreamDestination();
+      source.type='sine';source.frequency.value=173;gain.gain.value=0;source.connect(gain);gain.connect(dest);source.start();
+      try{const p=context.resume();if(p&&typeof p.catch==='function')p.catch(function(){});}catch(_){}
+      const stream=dest.stream,tracks=stream&&stream.getAudioTracks?stream.getAudioTracks():[];
+      if(!tracks.length)throw new Error('silent-audio-track-unavailable');
+      state.silentAudioContext=context;state.silentAudioSource=source;state.silentAudioGain=gain;state.silentAudioStream=stream;state.silentAudioTracks=tracks.length;
+      diag('SILENT_AUDIO_READY',{tracks:tracks.length,readyState:String(tracks[0]&&tracks[0].readyState||''),sampleRate:Number(context.sampleRate||0),realMic:false});
+      return stream;
+    }catch(e){
+      state.silentAudioErrors++;
+      diag('SILENT_AUDIO_ERROR',{count:state.silentAudioErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',280)});
+      return null;
+    }
   }
 
   function markCameraTransportReady(source,stream){
@@ -378,14 +405,26 @@ object AiStudioWebSessionR19ScreenVideoBridge {
             const videoStream=syntheticVideoStream();
             if(!videoStream)return inherited(constraints);
             if(!!c.audio){
-              state.realAudioRequests++;markPostStartProgress('audio-gum-request',{combined:true});
+              markPostStartProgress('audio-gum-request',{combined:true,realMic:state.allowRealMicInput});
+              if(!state.allowRealMicInput){
+                state.silentAudioRequests++;
+                const silent=buildSilentAudioStream();
+                if(!silent)return Promise.reject(new Error('silent-audio-track-unavailable'));
+                const combined=combineVideoAndAudio(videoStream,silent);
+                markCameraTransportReady('gum-combined-silent-audio',combined);
+                diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:false,silentAudio:true,silentAudioTracks:silent.getAudioTracks?silent.getAudioTracks().length:0,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
+                return Promise.resolve(combined);
+              }
+              state.realAudioRequests++;
               return waitForRealMicPermission().then(function(){
                 return platformGum({audio:c.audio,video:false});
               }).then(function(audioStream){
-                const combined=combineVideoAndRealAudio(videoStream,audioStream);
-                markPostStartProgress('real-mic-track',{combined:true,tracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0});
+                const audioTracks=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
+                state.realAudioTracks+=audioTracks.length;
+                const combined=combineVideoAndAudio(videoStream,audioStream);
+                markPostStartProgress('real-mic-track',{combined:true,tracks:audioTracks.length});
                 markCameraTransportReady('gum-combined',combined);
-                diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:true,realAudioTracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
+                diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:true,realAudioTracks:audioTracks.length,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
                 return combined;
               }).catch(function(e){
                 state.realAudioErrors++;
@@ -398,13 +437,21 @@ object AiStudioWebSessionR19ScreenVideoBridge {
             return Promise.resolve(videoStream);
           }
           if(state.enabled&&!!c.audio&&!c.video){
-            observeStart();state.realAudioRequests++;markPostStartProgress('audio-gum-request',{combined:false});
+            observeStart();markPostStartProgress('audio-gum-request',{combined:false,realMic:state.allowRealMicInput});
+            if(!state.allowRealMicInput){
+              state.silentAudioRequests++;
+              const silent=buildSilentAudioStream();
+              if(!silent)return Promise.reject(new Error('silent-audio-track-unavailable'));
+              diag('GUM_AUDIO_ONLY',{realAudio:false,silentAudio:true,silentAudioTracks:silent.getAudioTracks?silent.getAudioTracks().length:0,request:state.silentAudioRequests});
+              return Promise.resolve(silent);
+            }
+            state.realAudioRequests++;
             return waitForRealMicPermission().then(function(){
               return platformGum(constraints);
             }).then(function(audioStream){
               const tracks=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
               state.realAudioTracks+=tracks.length;markPostStartProgress('real-mic-track',{combined:false,tracks:tracks.length});
-              diag('GUM_AUDIO_ONLY',{realAudio:true,realAudioTracks:tracks.length,request:state.realAudioRequests});
+              diag('GUM_AUDIO_ONLY',{realAudio:true,silentAudio:false,realAudioTracks:tracks.length,request:state.realAudioRequests});
               return audioStream;
             }).catch(function(e){
               state.realAudioErrors++;
@@ -551,17 +598,17 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     return {ok:true,queued:true,seq:seq,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),cameraTransportReady:state.cameraTransportReady};
   }
 
-  function configure(enabled){
-    state.enabled=enabled!==false;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
-    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,realMicBypassesSynthetic:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
+  function configure(enabled,allowRealMicInput){
+    state.enabled=enabled!==false;state.allowRealMicInput=allowRealMicInput===true;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
+    diag('CONFIG',{enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
   }
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,silentAudioRequests:state.silentAudioRequests,silentAudioTracks:state.silentAudioTracks,silentAudioErrors:state.silentAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
   installPageDiagnostics();installTransportDiagnostics();installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
   setInterval(function(){installMediaHooks();installTransportDiagnostics();tryEnableVideoInput();},800);
   setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);
-  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,pageDiagnostics:true,networkDiagnostics:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});
 })();
     """.trimIndent()
 }

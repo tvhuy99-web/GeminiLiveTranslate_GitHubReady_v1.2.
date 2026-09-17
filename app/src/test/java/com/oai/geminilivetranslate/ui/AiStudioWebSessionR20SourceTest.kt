@@ -1,8 +1,8 @@
 package com.oai.geminilivetranslate.ui
 
 import java.io.File
-import kotlin.test.Test
-import kotlin.test.assertTrue
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class AiStudioWebSessionR20SourceTest {
     @Test

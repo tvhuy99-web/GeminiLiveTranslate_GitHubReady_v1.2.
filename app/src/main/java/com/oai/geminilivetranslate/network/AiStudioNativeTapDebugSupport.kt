@@ -14,22 +14,21 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.oai.geminilivetranslate.GeminiTranslateApp
-import com.oai.geminilivetranslate.core.SessionLogger
 import com.oai.geminilivetranslate.core.AppPreferences
+import com.oai.geminilivetranslate.core.SessionLogger
 import org.json.JSONObject
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
-
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-04-r18.7-native-action-tap-debug"
+    const val VERSION = "2026-09-17-r18.8-native-live-media-tap"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-04-r18.7-native-action-tap-debug';
+  const VERSION='2026-09-17-r18.8-native-live-media-tap';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 
@@ -38,22 +37,41 @@ internal object AiStudioNativeTapDocumentStart {
   function role(el){return attr(el,'role').toLowerCase();}
   function tag(el){try{return String(el&&el.tagName||'').toUpperCase();}catch(_){return '';}}
   function label(el){
-    try{return safeText([attr(el,'aria-label'),attr(el,'data-testid'),attr(el,'name'),attr(el,'id'),safeText(el&&el.title||'',80),safeText(el&&el.value||'',100),safeText(el&&el.textContent||'',180)].filter(Boolean).join(' '),280).toLowerCase();}catch(_){return '';}
+    try{return safeText([attr(el,'aria-label'),attr(el,'data-testid'),attr(el,'name'),attr(el,'id'),safeText(el&&el.title||'',80),safeText(el&&el.value||'',100),safeText(el&&el.textContent||'',180)].filter(Boolean).join(' '),320).toLowerCase();}catch(_){return '';}
+  }
+  function isInteractive(el){
+    const r=role(el),t=tag(el);
+    return t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link';
   }
   function startLike(el){
-    const l=label(el),r=role(el),t=tag(el);if(!l||l.indexOf('stop')>=0)return false;
-    if(!(t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link'))return false;
+    const l=label(el);if(!l||!isInteractive(el)||/\b(stop|end|disconnect|leave)\b/.test(l))return false;
     return /\b(start|begin|connect|talk|speak|join)\b/.test(l)||l.indexOf('go live')>=0||l.indexOf('start session')>=0||l.indexOf('start live')>=0;
+  }
+  function shareScreenLike(el){
+    const l=label(el);if(!l||!isInteractive(el))return false;
+    if(/stop sharing|stop share|end sharing|turn off screen/.test(l))return false;
+    return /share screen|screen share|share your screen|present screen|share display|share window|share tab|present now|chia sẻ màn hình/.test(l);
+  }
+  function cameraLike(el){
+    const l=label(el);if(!l||!isInteractive(el))return false;
+    if(/turn camera off|turn off camera|disable camera|stop camera|camera enabled/.test(l))return false;
+    return /turn camera on|turn on camera|enable camera|start camera|\bcamera\b|\bwebcam\b|máy ảnh|share video|start video/.test(l);
+  }
+  function tapPurpose(el){
+    if(shareScreenLike(el))return 'share-screen';
+    if(cameraLike(el))return 'camera-input';
+    if(startLike(el))return 'start-live';
+    return '';
   }
   function clickableAncestor(node){
     let el=node&&node.nodeType===1?node:null;
-    for(let i=0;i<7&&el;i++,el=el.parentElement){if(startLike(el))return el;}
+    for(let i=0;i<7&&el;i++,el=el.parentElement){if(tapPurpose(el))return el;}
     return null;
   }
   function reportGesture(kind,ev){
     try{
       const el=clickableAncestor(ev&&ev.target);if(!el)return;
-      bridge.reportStartGesture(JSON.stringify({kind:kind,trusted:!!ev.isTrusted,tag:tag(el)||'none',role:role(el)||'none'}));
+      bridge.reportStartGesture(JSON.stringify({kind:kind,trusted:!!ev.isTrusted,tag:tag(el)||'none',role:role(el)||'none',purpose:tapPurpose(el)||'unknown'}));
     }catch(_){}
   }
   ['pointerdown','touchstart','mousedown','pointerup','touchend','mouseup','click'].forEach(function(kind){
@@ -65,7 +83,8 @@ internal object AiStudioNativeTapDocumentStart {
   if(proto&&typeof nativeClick==='function'&&!nativeClick.__aisNativeStartTapWrapped){
     const wrapped=function(){
       try{
-        if(startLike(this)){
+        const purpose=tapPurpose(this);
+        if(purpose){
           let r=this.getBoundingClientRect();
           if(r&&r.width>1&&r.height>1){
             const vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1);
@@ -76,7 +95,7 @@ internal object AiStudioNativeTapDocumentStart {
               r=this.getBoundingClientRect();cx=r.left+r.width/2;cy=r.top+r.height/2;
             }
             if(cx>=0&&cy>=0&&cx<=vw&&cy<=vh){
-              bridge.requestNativeTap(JSON.stringify({xRatio:cx/vw,yRatio:cy/vh,tag:tag(this)||'none',role:role(this)||'none'}));
+              bridge.requestNativeTap(JSON.stringify({xRatio:cx/vw,yRatio:cy/vh,tag:tag(this)||'none',role:role(this)||'none',purpose:purpose}));
               return;
             }
           }
@@ -108,7 +127,7 @@ internal class AiStudioNativeTapController(
         val role = parsed?.optString("role").orEmpty().take(48)
         val purpose = parsed?.optString("purpose").orEmpty().take(48).ifBlank { "start-live" }
         if (!xRatio.isFinite() || !yRatio.isFinite() || xRatio !in 0.0..1.0 || yRatio !in 0.0..1.0) {
-            logger?.log(1, "AiStudioNativeTap", "START_TAP_REJECT invalidCoordinates=true")
+            logger?.log(1, "AiStudioNativeTap", "ACTION_TAP_REJECT purpose=$purpose invalidCoordinates=true")
             return
         }
         main.post {
@@ -156,12 +175,14 @@ internal class AiStudioNativeTapController(
         val trusted = parsed.optBoolean("trusted", false)
         val tag = parsed.optString("tag").take(32)
         val role = parsed.optString("role").take(48)
-        logger?.log(2, "AiStudioNativeTap", "START_GESTURE kind=$kind trusted=$trusted tag=$tag role=$role")
+        val purpose = parsed.optString("purpose").take(48)
+        logger?.log(2, "AiStudioNativeTap", "ACTION_GESTURE kind=$kind trusted=$trusted purpose=$purpose tag=$tag role=$role")
     }
 }
 
 internal object AiStudioDebugWebViewHost {
-    const val VERSION = "2026-09-05-r18.14-toggle-hidden-webview-debug"
+    const val VERSION = "2026-09-17-r18.15-desktop-live-immediate-visible"
+    private const val DESKTOP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
     private val main = Handler(Looper.getMainLooper())
     private val panels = WeakHashMap<WebView, WeakReference<ViewGroup>>()
 
@@ -176,6 +197,19 @@ internal object AiStudioDebugWebViewHost {
             else logger?.log(1, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACH_FAILED reason=no-foreground-activity")
             return
         }
+        val prefs = AppPreferences(activity)
+        val liveScreenMode =
+            prefs.loadProcessingMode() == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                prefs.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
+        if (liveScreenMode) {
+            webView.settings.apply {
+                userAgentString = DESKTOP_USER_AGENT
+                useWideViewPort = true
+                loadWithOverviewMode = true
+            }
+            logger?.log(2, "AiStudioDebugWeb", "R25_DESKTOP_PROFILE enabled=true reason=live-screen-description ua=desktop wideViewport=true overview=true")
+        }
+
         val content = activity.findViewById<ViewGroup>(android.R.id.content)
         if (content == null) {
             logger?.log(1, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACH_FAILED reason=no-content-root")
@@ -198,7 +232,11 @@ internal object AiStudioDebugWebViewHost {
             elevation = 16f * resources.displayMetrics.density
         }
         val label = TextView(activity).apply {
-            text = "AI Studio kiểm tra tạm thời - đây là chính phiên AI Studio ứng dụng đang dùng"
+            text = if (liveScreenMode) {
+                "AI Studio Live desktop - phiên đang dùng cho Mô tả thời gian thực"
+            } else {
+                "AI Studio kiểm tra tạm thời - đây là chính phiên AI Studio ứng dụng đang dùng"
+            }
             setTextColor(Color.BLACK)
             setBackgroundColor(Color.WHITE)
             setPadding(dp(activity, 8), dp(activity, 6), dp(activity, 8), dp(activity, 6))
@@ -210,9 +248,22 @@ internal object AiStudioDebugWebViewHost {
         val height = (screenHeight * 0.48f).roundToInt().coerceAtLeast(dp(activity, 300))
         content.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height, Gravity.BOTTOM))
         panels[webView] = WeakReference(panel)
-        val visible = AppPreferences(activity).loadAiStudioWebViewVisible()
+        val visible = prefs.loadAiStudioWebViewVisible()
         applyPresentation(webView, panel, visible, logger, "attach")
-        logger?.log(2, "AiStudioDebugWeb", "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible}")
+        if (visible) {
+            panel.bringToFront()
+            panel.requestLayout()
+            panel.invalidate()
+            webView.requestLayout()
+            webView.invalidate()
+            main.post {
+                if (panel.parent != null && webView.parent != null) {
+                    panel.bringToFront()
+                    applyPresentation(webView, panel, true, logger, "attach-first-layout")
+                }
+            }
+        }
+        logger?.log(2, "AiStudioDebugWeb", "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible} desktop=$liveScreenMode immediate=$visible")
     }
 
     fun setVisibleForActive(visible: Boolean, logger: SessionLogger?) {
@@ -224,6 +275,7 @@ internal object AiStudioDebugWebViewHost {
         panels.entries.toList().forEach { (webView, ref) ->
             val panel = ref.get() ?: return@forEach
             applyPresentation(webView, panel, visible, logger, "settings-toggle")
+            if (visible) panel.bringToFront()
             changed += 1
         }
         logger?.log(2, "AiStudioDebugWeb", "R24_WEBVIEW_VISIBILITY_TOGGLE visible=$visible activePanels=$changed")
@@ -238,8 +290,10 @@ internal object AiStudioDebugWebViewHost {
     ) {
         val screenHeight = panel.resources.displayMetrics.heightPixels
         val panelHeight = (panel.layoutParams?.height ?: panel.height).coerceAtLeast(1)
-
-
+        panel.visibility = android.view.View.VISIBLE
+        webView.visibility = android.view.View.VISIBLE
+        panel.alpha = 1f
+        webView.alpha = 1f
         panel.translationY = if (visible) 0f else (screenHeight + panelHeight).toFloat()
         val accessibility = if (visible) {
             android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
@@ -250,6 +304,7 @@ internal object AiStudioDebugWebViewHost {
         webView.importantForAccessibility = accessibility
         panel.isFocusable = visible
         panel.isFocusableInTouchMode = visible
+        if (visible) panel.bringToFront()
         logger?.log(2, "AiStudioDebugWeb", "R24_WEBVIEW_PRESENTATION visible=$visible hiddenOffscreen=${!visible} reason=$reason webShown=${webView.isShown} width=${webView.width} height=${webView.height}")
     }
 

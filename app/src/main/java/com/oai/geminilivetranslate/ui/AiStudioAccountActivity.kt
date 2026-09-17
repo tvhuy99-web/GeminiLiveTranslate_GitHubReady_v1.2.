@@ -96,7 +96,7 @@ class AiStudioAccountActivity : AppCompatActivity() {
                 statusView.text = if (host.contains("accounts.google")) {
                     "Hãy đăng nhập hoặc chọn tài khoản Google trong trang bên dưới"
                 } else {
-                    "Đang mở AI Studio..."
+                    "Đang mở AI Studio Live 3.8..."
                 }
                 logger.log(3, "AiStudioAccount", "pageStarted host=$host")
             }
@@ -105,18 +105,18 @@ class AiStudioAccountActivity : AppCompatActivity() {
                 val host = safeHost(url)
                 val ready = host == "aistudio.google.com"
                 statusView.text = when {
-                    ready -> "AI Studio đã mở. Nếu thấy nội dung AI Studio, phiên đăng nhập đã sẵn sàng."
+                    ready -> "AI Studio Live 3.8 đã mở. Dùng Share Screen trong phiên Live để mô tả thời gian thực."
                     host.contains("accounts.google") -> "Hãy hoàn tất đăng nhập hoặc chọn tài khoản Google."
                     else -> "Trang tài khoản đang ở host=$host"
                 }
-                logger.log(2, "AiStudioAccount", "pageFinished host=$host aiStudioReady=$ready")
+                logger.log(2, "AiStudioAccount", "pageFinished host=$host aiStudioReady=$ready model=gemini-3.8-live")
             }
         }
     }
 
     private fun openAiStudio(reason: String) {
-        logger.log(2, "AiStudioAccount", "action=$reason loadHost=aistudio.google.com")
-        statusView.text = "Đang mở AI Studio..."
+        logger.log(2, "AiStudioAccount", "action=$reason loadHost=aistudio.google.com model=gemini-3.8-live")
+        statusView.text = "Đang mở AI Studio Live 3.8..."
         webView.loadUrl(LIVE_URL)
     }
 
@@ -157,6 +157,6 @@ class AiStudioAccountActivity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val LIVE_URL = "https://aistudio.google.com/live?model=gemini-3.5-live-translate-preview"
+        private const val LIVE_URL = "https://aistudio.google.com/u/0/live?model=gemini-3.8-live"
     }
 }

@@ -1,16 +1,17 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.9-start-progress-camera-diag"
+    const val VERSION = "2026-09-18-r19.10-camera-retry-ready-gate"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.9-start-progress-camera-diag';
+  const VERSION='2026-09-18-r19.10-camera-retry-ready-gate';
   const CAMERA_POST_START_MIN_MS=350;
-  const CAMERA_NO_GUM_REPORT_MS=3000;
+  const CAMERA_RETRY_NO_GUM_MS=3000;
+  const MAX_CAMERA_TAP_ATTEMPTS=2;
   const MIC_PERMISSION_TIMEOUT_MS=15000;
   const PAGE_ERROR_SCAN_MS=900;
   const state={
@@ -45,6 +46,8 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     cameraGateReason:'waiting-start-live',
     cameraBlockedByPageError:false,
     cameraNoGumReported:false,
+    cameraRetries:0,
+    cameraRetryExhaustedReported:false,
     startObservedAt:0,
     startAttemptSeen:0,
     startNetworkBaseline:0,
@@ -464,11 +467,23 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(startAge>=0&&startAge<CAMERA_POST_START_MIN_MS){state.cameraGateReason='waiting-start-settle';return false;}
     if(!state.postStartProgress){state.cameraGateReason='waiting-post-start-progress';return false;}
     if(state.cameraClicks>=1){
-      state.cameraGateReason=state.gumVideoRequests>0?'camera-gum-seen':'camera-clicked-waiting-gum';
-      if(!state.cameraNoGumReported&&state.lastCameraClickAt&&Date.now()-state.lastCameraClickAt>=CAMERA_NO_GUM_REPORT_MS&&state.gumVideoRequests===0){
-        state.cameraNoGumReported=true;diag('CAMERA_NO_GUM_AFTER_CLICK',{waitMs:Date.now()-state.lastCameraClickAt,label:safe(state.lastCameraLabel,220),postStartProgressKind:state.postStartProgressKind});
+      if(state.gumVideoRequests>0){state.cameraGateReason='camera-gum-seen';return false;}
+      const sinceCamera=state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1;
+      if(sinceCamera>=0&&sinceCamera<CAMERA_RETRY_NO_GUM_MS){state.cameraGateReason='camera-clicked-waiting-gum';return false;}
+      if(!state.cameraNoGumReported){
+        state.cameraNoGumReported=true;
+        diag('CAMERA_NO_GUM_AFTER_CLICK',{attempt:state.cameraClicks,waitMs:sinceCamera,label:safe(state.lastCameraLabel,220),postStartProgressKind:state.postStartProgressKind});
       }
-      return false;
+      if(state.cameraClicks>=MAX_CAMERA_TAP_ATTEMPTS){
+        state.cameraGateReason='camera-retries-exhausted';
+        if(!state.cameraRetryExhaustedReported){
+          state.cameraRetryExhaustedReported=true;
+          diag('CAMERA_RETRY_EXHAUSTED',{attempts:state.cameraClicks,waitMs:sinceCamera,label:safe(state.lastCameraLabel,220)});
+        }
+        return false;
+      }
+      state.cameraGateReason='camera-retry-no-gum';
+      return true;
     }
     state.cameraGateReason='ready-after-'+state.postStartProgressKind;return true;
   }
@@ -489,11 +504,13 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!scored.length)return false;
     scored.sort(function(a,b){return b.score-a.score;});
     const best=scored[0],now=Date.now();state.cameraCandidates=scored.length;state.lastCameraLabel=best.label;
-    if(state.cameraClicks>=1)return true;
-    state.cameraClicks++;state.lastCameraClickAt=now;
+    if(state.cameraClicks>=MAX_CAMERA_TAP_ATTEMPTS)return false;
+    state.cameraClicks++;
+    if(state.cameraClicks>1)state.cameraRetries++;
+    state.lastCameraClickAt=now;state.cameraNoGumReported=false;
     const nativeTap=nativeTapElement(best.el,'camera-input');
     if(!nativeTap){try{best.el.click();}catch(_){} }
-    diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),nativeTap:nativeTap,postStartProgressKind:state.postStartProgressKind,startAgeMs:state.startObservedAt?now-state.startObservedAt:-1});
+    diag(state.cameraClicks===1?'CAMERA_CLICK':'CAMERA_RETRY',{attempt:state.cameraClicks,retries:state.cameraRetries,maxAttempts:MAX_CAMERA_TAP_ATTEMPTS,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),nativeTap:nativeTap,postStartProgressKind:state.postStartProgressKind,startAgeMs:state.startObservedAt?now-state.startObservedAt:-1});
     return true;
   }
 
@@ -536,15 +553,15 @@ object AiStudioWebSessionR19ScreenVideoBridge {
 
   function configure(enabled){
     state.enabled=enabled!==false;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
-    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:true,displayMediaPassiveFallback:true,realMicBypassesSynthetic:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
+    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,realMicBypassesSynthetic:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
   }
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
   installPageDiagnostics();installTransportDiagnostics();installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
   setInterval(function(){installMediaHooks();installTransportDiagnostics();tryEnableVideoInput();},800);
   setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);
-  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:true,displayMediaPassiveFallback:true,pageDiagnostics:true,networkDiagnostics:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,pageDiagnostics:true,networkDiagnostics:true});
 })();
     """.trimIndent()
 }

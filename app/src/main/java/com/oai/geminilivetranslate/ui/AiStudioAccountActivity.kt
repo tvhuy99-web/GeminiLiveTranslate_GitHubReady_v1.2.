@@ -24,13 +24,22 @@ class AiStudioAccountActivity : AppCompatActivity() {
     private lateinit var logger: SessionLogger
     private lateinit var statusView: TextView
     private lateinit var webView: WebView
+    private var liveDescriptionMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        logger = SessionLogger(this, AppPreferences(this))
+        val appPreferences = AppPreferences(this)
+        logger = SessionLogger(this, appPreferences)
+        liveDescriptionMode =
+            appPreferences.loadProcessingMode() == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
+                appPreferences.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
         buildUi()
         configureWebView()
-        logger.log(2, "AiStudioAccount", "Mở quản lý tài khoản mode=${AiConnectionModeStore(this).load()}")
+        logger.log(
+            2,
+            "AiStudioAccount",
+            "Mở quản lý tài khoản mode=${AiConnectionModeStore(this).load()} purpose=${currentPurpose()} model=${currentModel()}",
+        )
         openAiStudio("open")
     }
 
@@ -54,7 +63,7 @@ class AiStudioAccountActivity : AppCompatActivity() {
             ViewCompat.setAccessibilityHeading(this, true)
         }, fullWidth())
         statusView = TextView(this).apply {
-            text = "Đang mở AI Studio..."
+            text = openingStatus()
             textSize = 15f
             setPadding(0, dp(8), 0, dp(8))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -96,28 +105,41 @@ class AiStudioAccountActivity : AppCompatActivity() {
                 statusView.text = if (host.contains("accounts.google")) {
                     "Hãy đăng nhập hoặc chọn tài khoản Google trong trang bên dưới"
                 } else {
-                    "Đang mở AI Studio Live 3.8..."
+                    openingStatus()
                 }
-                logger.log(3, "AiStudioAccount", "pageStarted host=$host")
+                logger.log(3, "AiStudioAccount", "pageStarted host=$host purpose=${currentPurpose()} model=${currentModel()}")
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 val host = safeHost(url)
                 val ready = host == "aistudio.google.com"
                 statusView.text = when {
-                    ready -> "AI Studio Live 3.8 đã mở. Dùng Share Screen trong phiên Live để mô tả thời gian thực."
-                    host.contains("accounts.google") -> "Hãy hoàn tất đăng nhập hoặc chọn tài khoản Google."
-                    else -> "Trang tài khoản đang ở host=$host"
+                    ready && liveDescriptionMode ->
+                        "AI Studio Live 3.8 đã mở. Dùng Share Screen trong phiên Live để mô tả thời gian thực."
+                    ready ->
+                        "AI Studio đã mở. Nếu thấy nội dung AI Studio, phiên đăng nhập đã sẵn sàng."
+                    host.contains("accounts.google") ->
+                        "Hãy hoàn tất đăng nhập hoặc chọn tài khoản Google."
+                    else ->
+                        "Trang tài khoản đang ở host=$host"
                 }
-                logger.log(2, "AiStudioAccount", "pageFinished host=$host aiStudioReady=$ready model=gemini-3.8-live")
+                logger.log(
+                    2,
+                    "AiStudioAccount",
+                    "pageFinished host=$host aiStudioReady=$ready purpose=${currentPurpose()} model=${currentModel()}",
+                )
             }
         }
     }
 
     private fun openAiStudio(reason: String) {
-        logger.log(2, "AiStudioAccount", "action=$reason loadHost=aistudio.google.com model=gemini-3.8-live")
-        statusView.text = "Đang mở AI Studio Live 3.8..."
-        webView.loadUrl(LIVE_URL)
+        logger.log(
+            2,
+            "AiStudioAccount",
+            "action=$reason loadHost=aistudio.google.com purpose=${currentPurpose()} model=${currentModel()}",
+        )
+        statusView.text = openingStatus()
+        webView.loadUrl(currentUrl())
     }
 
     private fun clearSessionAndOpen(reason: String) {
@@ -135,6 +157,17 @@ class AiStudioAccountActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun currentPurpose(): String = if (liveDescriptionMode) "live-description" else "account-translate"
+
+    private fun currentModel(): String =
+        if (liveDescriptionMode) LIVE_DESCRIPTION_MODEL else AppPreferences.DEFAULT_MODEL
+
+    private fun currentUrl(): String =
+        if (liveDescriptionMode) LIVE_DESCRIPTION_URL else TRANSLATE_LIVE_URL
+
+    private fun openingStatus(): String =
+        if (liveDescriptionMode) "Đang mở AI Studio Live 3.8..." else "Đang mở AI Studio..."
 
     private fun safeHost(raw: String?): String = runCatching {
         android.net.Uri.parse(raw.orEmpty()).host.orEmpty().lowercase()
@@ -157,6 +190,10 @@ class AiStudioAccountActivity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val LIVE_URL = "https://aistudio.google.com/u/0/live?model=gemini-3.8-live"
+        private const val LIVE_DESCRIPTION_MODEL = "gemini-3.8-live"
+        private const val LIVE_DESCRIPTION_URL =
+            "https://aistudio.google.com/u/0/live?model=gemini-3.8-live"
+        private const val TRANSLATE_LIVE_URL =
+            "https://aistudio.google.com/live?model=gemini-3.5-live-translate-preview"
     }
 }

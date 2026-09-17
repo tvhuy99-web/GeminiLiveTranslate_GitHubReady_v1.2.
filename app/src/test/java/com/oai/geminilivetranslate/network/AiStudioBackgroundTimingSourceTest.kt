@@ -24,7 +24,7 @@ class AiStudioBackgroundTimingSourceTest {
     @Test
     fun realtimeAiStudioModesProtectWebViewAndSuppressBackgroundStaleTimeouts() {
         val live = source("src/main/java/com/oai/geminilivetranslate/network/AiStudioWebRealtimeClient.kt")
-        assertTrue(live.contains("2026-09-06-production-ai-studio-live-r8-background-resync"))
+        assertTrue(live.contains("2026-09-18-production-ai-studio-live-r9-camera-ready-gate"))
         assertTrue(live.contains("RENDERER_PRIORITY_IMPORTANT"))
         assertTrue(live.contains("R38_LIVE_WEBVIEW_BACKGROUND_POLICY"))
         assertTrue(live.contains("R38_LIVE_BACKGROUND_DEFER"))

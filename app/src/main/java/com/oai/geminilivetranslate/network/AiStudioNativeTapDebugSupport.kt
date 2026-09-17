@@ -23,7 +23,7 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-18-r18.11-authentic-touch-metadata"
+    const val VERSION = "2026-09-18-r18.12-per-purpose-touch-debounce"
 
     val DOCUMENT_START: String =
         "(function(){if(/gemini-3\\.8-live/i.test(String(location.href||''))){\n" +
@@ -33,7 +33,7 @@ internal object AiStudioNativeTapDocumentStart {
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-18-r18.11-authentic-touch-metadata';
+  const VERSION='2026-09-18-r18.12-per-purpose-touch-debounce';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 
@@ -144,7 +144,7 @@ internal class AiStudioNativeTapController(
             InputDevice.getDevice(id)?.supportsSource(InputDevice.SOURCE_TOUCHSCREEN) == true
         } ?: 0
     }
-    @Volatile private var lastTapAt = 0L
+    private val lastTapAtByPurpose = mutableMapOf<String, Long>()
     @Volatile private var lastMicPermissionRequestAt = 0L
 
     private fun obtainFingerTouchEvent(
@@ -196,8 +196,13 @@ internal class AiStudioNativeTapController(
         }
         main.post {
             val now = SystemClock.uptimeMillis()
-            if (now - lastTapAt < 1200L) {
-                logger?.log(3, "AiStudioNativeTap", "ACTION_TAP_SKIPPED purpose=$purpose debounce=true")
+            val previousTapAt = lastTapAtByPurpose[purpose] ?: 0L
+            if (now - previousTapAt < NATIVE_TAP_DEBOUNCE_MS) {
+                logger?.log(
+                    3,
+                    "AiStudioNativeTap",
+                    "ACTION_TAP_SKIPPED purpose=$purpose debounce=true samePurpose=true ageMs=${now - previousTapAt}",
+                )
                 return@post
             }
             val width = webView.width
@@ -206,7 +211,7 @@ internal class AiStudioNativeTapController(
                 logger?.log(1, "AiStudioNativeTap", "ACTION_TAP_REJECT purpose=$purpose laidOut=${width >= 4 && height >= 4} shown=${webView.isShown} width=$width height=$height")
                 return@post
             }
-            lastTapAt = now
+            lastTapAtByPurpose[purpose] = now
             val x = (xRatio * width).toFloat().coerceIn(1f, (width - 2).toFloat())
             val y = (yRatio * height).toFloat().coerceIn(1f, (height - 2).toFloat())
             val downTime = SystemClock.uptimeMillis()
@@ -281,6 +286,7 @@ internal class AiStudioNativeTapController(
 
     companion object {
         private const val LIVE_MIC_PERMISSION_REQUEST_CODE = 64017
+        private const val NATIVE_TAP_DEBOUNCE_MS = 1_200L
     }
 }
 

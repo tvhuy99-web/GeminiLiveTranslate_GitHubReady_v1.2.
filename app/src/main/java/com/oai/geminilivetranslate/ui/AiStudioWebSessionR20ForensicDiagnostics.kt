@@ -2,15 +2,15 @@ package com.oai.geminilivetranslate.ui
 
 /** Temporary, screen-description-only forensic instrumentation. Remove after root cause is isolated. */
 object AiStudioWebSessionR20ForensicDiagnostics {
-    const val VERSION = "2026-09-17-r20.0-screen-forensic"
+    const val VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R20_FORENSIC__&&window.__AIS_R20_FORENSIC__.version)return;
 
-  const VERSION='2026-09-17-r20.0-screen-forensic';
-  const BODY_CAP=524288;
+  const VERSION='2026-09-18-r20.1-redacted-screen-forensic';
+  const BODY_CAP=16384;
   const CHUNK=1000;
   const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',installedAt:Date.now()};
 
@@ -28,13 +28,16 @@ object AiStudioWebSessionR20ForensicDiagnostics {
     if(!active())return;
     try{const b=window.AIStudioWebSessionLab;if(b&&typeof b.onJsEvent==='function')b.onJsEvent(JSON.stringify({kind:'R19_FORENSIC_'+kind,payload:payload||{}}));}catch(_){}
   }
-  function secretName(name){return /authorization|cookie|set-cookie|x-goog-api-key|api[-_]?key|access[-_]?token|id[-_]?token/i.test(String(name||''));}
+  function secretName(name){return /authorization|cookie|set-cookie|x-goog-api-key|api[-_]?key|access[-_]?token|id[-_]?token|\x24httpheaders|^sid$|^gsessionid$/i.test(String(name||''));}
   function safeHeader(name,value){const v=String(value||'');return secretName(name)?'<redacted chars='+v.length+'>':v.slice(0,12000);}
   function safeUrl(raw){
     try{
       const u=new URL(String(raw||''),location.href);
       const params=[];
-      u.searchParams.forEach(function(v,k){params.push(encodeURIComponent(k)+'='+encodeURIComponent(secretName(k)?'<redacted chars='+String(v||'').length+'>':String(v||'')));});
+      u.searchParams.forEach(function(v,k){
+        const raw=String(v||''),sensitive=secretName(k)||/authorization|sapisid|x-goog-api-key/i.test(raw);
+        params.push(encodeURIComponent(k)+'='+encodeURIComponent(sensitive?'<redacted chars='+raw.length+'>':raw));
+      });
       return u.origin+u.pathname+(params.length?'?'+params.join('&'):'');
     }catch(_){return String(raw||'').slice(0,12000);}
   }
@@ -53,6 +56,21 @@ object AiStudioWebSessionR20ForensicDiagnostics {
       if(ArrayBuffer.isView&&ArrayBuffer.isView(body))return new TextDecoder('utf-8').decode(new Uint8Array(body.buffer,body.byteOffset,body.byteLength));
       return String(body);
     }catch(e){return '<body-read-error '+String(e&&e.message||e||'')+'>';}
+  }
+  function bodySummary(text){
+    const s=String(text==null?'':text);
+    const out={chars:s.length,form:false,keys:[],requestPayloads:0,audioPcm:false,imageJpeg:false,model38:false};
+    try{
+      const p=new URLSearchParams(s);let seen=0;
+      p.forEach(function(v,k){
+        if(seen<40)out.keys.push(String(k||'').slice(0,80));
+        seen++;
+        const key=String(k||''),value=String(v||'');
+        if(/^req\d+___data__$/.test(key)){out.requestPayloads++;if(/audio\/pcm/i.test(value))out.audioPcm=true;if(/image\/jpeg/i.test(value))out.imageJpeg=true;if(/gemini-3\.8-live/i.test(value))out.model38=true;}
+      });
+      out.form=seen>0;
+    }catch(_){}
+    return out;
   }
   function responseText(xhr){try{if(xhr.responseType===''||xhr.responseType==='text')return String(xhr.responseText||'');if(xhr.responseType==='json')return JSON.stringify(xhr.response);return '';}catch(_){return '';}}
   function headersText(xhr){try{return String(xhr.getAllResponseHeaders()||'');}catch(_){return '';}}
@@ -97,7 +115,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
         if(m&&m.relevant){
           const text=bodyText(body);state.bodyChars+=text.length;
           bridge('XHR_SEND',{id:m.id,method:m.method,url:safeUrl(m.url),bodyChars:text.length,headers:m.headers,timeout:Number(xhr.timeout||0),withCredentials:!!xhr.withCredentials,responseType:String(xhr.responseType||''),stack:stack(),t:Date.now(),p:now()});
-          chunk('XHR_REQUEST_BODY',m.id,'request',text);
+          bridge('XHR_REQUEST_BODY_SUMMARY',Object.assign({id:m.id},bodySummary(text)));
           const snap=function(event){
             let status=0,statusText='',rs=0,responseURL='';try{status=Number(xhr.status||0);statusText=String(xhr.statusText||'');rs=Number(xhr.readyState||0);responseURL=String(xhr.responseURL||'');}catch(_){}
             bridge('XHR_EVENT',{id:m.id,event:event,readyState:rs,status:status,statusText:statusText,responseURL:safeUrl(responseURL),elapsedMs:Date.now()-m.openedAt,t:Date.now(),p:now()});
@@ -120,7 +138,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
         const id=++state.fetchSeq;let url='',method='GET',body=null,headers=null;
         try{url=typeof input==='string'?input:String(input&&input.url||'');method=String(init&&init.method||input&&input.method||'GET');body=init&&Object.prototype.hasOwnProperty.call(init,'body')?init.body:null;headers=init&&init.headers||input&&input.headers||null;}catch(_){}
         const rel=relevant(url);
-        if(rel){const text=bodyText(body);bridge('FETCH_START',{id:id,method:method,url:safeUrl(url),bodyChars:text.length,stack:stack(),t:Date.now(),p:now()});chunk('FETCH_REQUEST_BODY',id,'request',text);try{const h=new Headers(headers||{});h.forEach(function(v,k){bridge('FETCH_REQUEST_HEADER',{id:id,name:k,value:safeHeader(k,v)});});}catch(_){} }
+        if(rel){const text=bodyText(body);bridge('FETCH_START',{id:id,method:method,url:safeUrl(url),bodyChars:text.length,bodySummary:bodySummary(text),stack:stack(),t:Date.now(),p:now()});try{const h=new Headers(headers||{});h.forEach(function(v,k){bridge('FETCH_REQUEST_HEADER',{id:id,name:k,value:safeHeader(k,v)});});}catch(_){} }
         return nFetch.apply(this,arguments).then(function(resp){if(rel){bridge('FETCH_RESPONSE',{id:id,status:Number(resp.status||0),statusText:String(resp.statusText||''),url:safeUrl(resp.url||url),type:String(resp.type||''),redirected:!!resp.redirected,t:Date.now(),p:now()});try{const hs=[];resp.headers.forEach(function(v,k){hs.push(k+': '+safeHeader(k,v));});chunk('FETCH_RESPONSE_HEADERS',id,'headers',hs.join('\n'));}catch(_){}try{resp.clone().text().then(function(text){state.responseChars+=String(text||'').length;chunk('FETCH_RESPONSE_BODY',id,'response',text);resources('fetch-response-'+id);}).catch(function(e){bridge('FETCH_BODY_ERROR',{id:id,message:String(e&&e.message||e||'')});});}catch(_){} }return resp;},function(err){if(rel){bridge('FETCH_REJECT',{id:id,name:String(err&&err.name||''),message:String(err&&err.message||err||''),stack:String(err&&err.stack||''),t:Date.now(),p:now()});resources('fetch-reject-'+id);}throw err;});
       };
       wFetch.__aisR20Forensic=true;window.fetch=wFetch;
@@ -162,7 +180,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};
-  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'temporary-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
+  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'temporary-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
   setInterval(snapshot,1000);
 })();
     """.trimIndent()

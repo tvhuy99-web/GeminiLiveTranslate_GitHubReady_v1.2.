@@ -1,28 +1,29 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.3-screen-canvas-cloned-track"
+    const val VERSION = "2026-09-17-r19.4-desktop-share-real-mic"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.3-screen-canvas-cloned-track';
+  const VERSION='2026-09-17-r19.4-desktop-share-real-mic';
+  const SHARE_RETRY_MS=1800;
   const CAMERA_RETRY_MS=3000;
+  const CAMERA_FALLBACK_AFTER_SCANS=5;
   const state={
     enabled:false,
     canvas:null,
     ctx:null,
     videoStream:null,
     videoTrack:null,
-    audioContext:null,
-    audioStream:null,
-    audioOscillator:null,
-    audioGain:null,
     gumVideoRequests:0,
     gumCombinedRequests:0,
     displayRequests:0,
+    realAudioRequests:0,
+    realAudioTracks:0,
+    realAudioErrors:0,
     videoClonesCreated:0,
     videoClonesEnded:0,
     masterTrackEnds:0,
@@ -30,6 +31,11 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     framesDrawn:0,
     frameErrors:0,
     staleFrameDrops:0,
+    shareScans:0,
+    shareCandidates:0,
+    shareClicks:0,
+    lastShareClickAt:0,
+    lastShareLabel:'',
     cameraScans:0,
     cameraCandidates:0,
     cameraClicks:0,
@@ -45,17 +51,17 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   }
   function safe(v,n){return String(v||'').replace(/\s+/g,' ').trim().slice(0,n||240);}
   function tag(el){try{return String(el&&el.tagName||'').toUpperCase();}catch(_){return '';}}
-  function attr(el,name){try{return el&&el.getAttribute?safe(el.getAttribute(name)||'',160):'';}catch(_){return '';}}
+  function attr(el,name){try{return el&&el.getAttribute?safe(el.getAttribute(name)||'',180):'';}catch(_){return '';}}
   function role(el){return attr(el,'role').toLowerCase();}
-  function label(el){try{return safe([attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid'),attr(el,'name'),attr(el,'id'),safe(el&&el.textContent||'',220)].filter(Boolean).join(' '),420).toLowerCase();}catch(_){return '';}}
-  function interactive(el){const t=tag(el),r=role(el);return t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab';}
+  function label(el){try{return safe([attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid'),attr(el,'name'),attr(el,'id'),safe(el&&el.textContent||'',260)].filter(Boolean).join(' '),520).toLowerCase();}catch(_){return '';}}
+  function interactive(el){const t=tag(el),r=role(el);return t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link';}
 
   function collectDeep(){
     const roots=[document],seen=new Set(),out=[];
-    while(roots.length&&out.length<5000){
+    while(roots.length&&out.length<6000){
       const root=roots.shift();if(!root||seen.has(root))continue;seen.add(root);
       let nodes=[];try{nodes=Array.from(root.querySelectorAll('*'));}catch(_){}
-      for(let i=0;i<nodes.length&&out.length<5000;i++){
+      for(let i=0;i<nodes.length&&out.length<6000;i++){
         const el=nodes[i];if(interactive(el))out.push(el);
         try{if(el.shadowRoot)roots.push(el.shadowRoot);}catch(_){}
         try{const t=tag(el);if((t==='IFRAME'||t==='FRAME')&&el.contentDocument)roots.push(el.contentDocument);}catch(_){}
@@ -94,22 +100,22 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     }catch(e){diag('VIDEO_TRACK_CLONE_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',260)});return null;}
   }
 
-  function ensureSilentAudio(){
-    if(state.audioStream&&state.audioStream.getAudioTracks&&state.audioStream.getAudioTracks().length)return state.audioStream;
-    try{
-      const C=window.AudioContext||window.webkitAudioContext;if(!C)return null;
-      const ac=new C({sampleRate:16000});const osc=ac.createOscillator();const gain=ac.createGain();const dest=ac.createMediaStreamDestination();
-      osc.type='sine';osc.frequency.value=173;gain.gain.value=0;osc.connect(gain);gain.connect(dest);osc.start();
-      try{const p=ac.resume();if(p&&typeof p.catch==='function')p.catch(function(){});}catch(_){}
-      state.audioContext=ac;state.audioOscillator=osc;state.audioGain=gain;state.audioStream=dest.stream;return dest.stream;
-    }catch(e){diag('AUDIO_TRACK_ERROR',{name:String(e&&e.name||'Error')});return null;}
+  function syntheticVideoStream(){
+    const video=cloneVideoTrack();if(!video)return null;
+    try{return new MediaStream([video]);}catch(_){return state.videoStream;}
   }
 
-  function syntheticStream(constraints){
-    const video=cloneVideoTrack();if(!video)return null;
-    const tracks=[video];
-    if(constraints&&constraints.audio){const a=ensureSilentAudio();if(a&&a.getAudioTracks)tracks.push.apply(tracks,a.getAudioTracks());}
-    try{return new MediaStream(tracks);}catch(_){try{return new MediaStream([video]);}catch(__){return state.videoStream;}}
+  function combineVideoAndRealAudio(videoStream,audioStream){
+    try{
+      const videos=videoStream&&videoStream.getVideoTracks?videoStream.getVideoTracks():[];
+      const audios=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
+      if(!videos.length)throw new Error('synthetic-video-track-unavailable');
+      if(!audios.length)throw new Error('real-audio-track-unavailable');
+      state.realAudioTracks+=audios.length;
+      return new MediaStream(videos.concat(audios));
+    }catch(e){
+      throw e;
+    }
   }
 
   function installMediaHooks(){
@@ -121,9 +127,22 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           const c=constraints||{};
           if(state.enabled&&!!c.video){
             state.gumVideoRequests++;if(!!c.audio)state.gumCombinedRequests++;
-            const stream=syntheticStream(c);
-            diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:!!c.audio,video:true,tracks:stream&&stream.getTracks?stream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
-            if(stream)return Promise.resolve(stream);
+            const videoStream=syntheticVideoStream();
+            if(!videoStream)return native(constraints);
+            if(!!c.audio){
+              state.realAudioRequests++;
+              return native({audio:c.audio,video:false}).then(function(audioStream){
+                const combined=combineVideoAndRealAudio(videoStream,audioStream);
+                diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:true,realAudioTracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
+                return combined;
+              }).catch(function(e){
+                state.realAudioErrors++;
+                diag('REAL_AUDIO_ERROR',{count:state.realAudioErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',280)});
+                throw e;
+              });
+            }
+            diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:false,video:true,realAudio:false,tracks:videoStream&&videoStream.getTracks?videoStream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
+            return Promise.resolve(videoStream);
           }
           return native(constraints);
         };
@@ -135,8 +154,8 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           const c=constraints||{};
           if(state.enabled){
             state.displayRequests++;
-            const stream=syntheticStream(c);
-            diag('DISPLAY_VIDEO',{count:state.displayRequests,audio:!!c.audio,tracks:stream&&stream.getTracks?stream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
+            const stream=syntheticVideoStream();
+            diag('DISPLAY_VIDEO',{count:state.displayRequests,audioRequested:!!c.audio,realAudioInjected:false,tracks:stream&&stream.getTracks?stream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
             if(stream)return Promise.resolve(stream);
           }
           return nativeDisplay(constraints);
@@ -144,6 +163,18 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         wrappedDisplay.__aisR19ScreenVideo=true;md.getDisplayMedia=wrappedDisplay;
       }
     }catch(e){diag('HOOK_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});}
+  }
+
+  function shareScore(el){
+    const l=label(el);if(!l)return 0;
+    if(/stop sharing|stop share|end sharing|turn off screen/.test(l))return -100;
+    let s=0;
+    if(/share screen|screen share|share your screen|chia sẻ màn hình/.test(l))s+=60;
+    if(/present screen|present now|share display|share window|share tab/.test(l))s+=45;
+    if(/\bscreen\b|\bdisplay\b|\bwindow\b|\btab\b/.test(l))s+=8;
+    if(/share|present/.test(l))s+=6;
+    if(/camera|webcam/.test(l))s-=30;
+    return s;
   }
 
   function cameraScore(el){
@@ -157,21 +188,43 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     return s;
   }
 
-  function tryEnableCamera(){
+  function clickBest(scored,kind){
+    if(!scored.length)return false;
+    scored.sort(function(a,b){return b.score-a.score;});
+    const best=scored[0],now=Date.now();
+    if(kind==='share'){
+      state.shareCandidates=scored.length;state.lastShareLabel=best.label;
+      if(state.shareClicks>=6||state.lastShareClickAt&&now-state.lastShareClickAt<SHARE_RETRY_MS)return true;
+      state.shareClicks++;state.lastShareClickAt=now;
+      try{best.el.click();diag('SHARE_CLICK',{attempt:state.shareClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),retryAfterMs:SHARE_RETRY_MS});}catch(e){diag('SHARE_CLICK_ERROR',{attempt:state.shareClicks,name:String(e&&e.name||'Error')});}
+      return true;
+    }
+    state.cameraCandidates=scored.length;state.lastCameraLabel=best.label;
+    if(state.cameraClicks>=6||state.lastCameraClickAt&&now-state.lastCameraClickAt<CAMERA_RETRY_MS)return true;
+    state.cameraClicks++;state.lastCameraClickAt=now;
+    try{best.el.click();diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,220),tag:tag(best.el),role:role(best.el),retryAfterMs:CAMERA_RETRY_MS});}catch(e){diag('CAMERA_CLICK_ERROR',{attempt:state.cameraClicks,name:String(e&&e.name||'Error')});}
+    return true;
+  }
+
+  function tryEnableVideoInput(){
     if(!state.enabled||state.gumVideoRequests>0||state.displayRequests>0)return;
     let path='';try{path=String(location.pathname||'').toLowerCase();}catch(_){}
     if(path.indexOf('/live')<0)return;
-    const now=Date.now();
-    if(state.lastCameraClickAt&&now-state.lastCameraClickAt<CAMERA_RETRY_MS)return;
+    const nodes=collectDeep();
+    state.shareScans++;
+    const share=[];
+    for(let i=0;i<nodes.length;i++){const score=shareScore(nodes[i]);if(score>=20)share.push({el:nodes[i],score:score,label:label(nodes[i])});}
+    state.shareCandidates=share.length;
+    if(clickBest(share,'share'))return;
+    if(state.shareScans===1||state.shareScans%10===0)diag('SHARE_SCAN',{scan:state.shareScans,candidates:0});
+    if(state.shareScans<CAMERA_FALLBACK_AFTER_SCANS)return;
+
     state.cameraScans++;
-    const nodes=collectDeep(),scored=[];
-    for(let i=0;i<nodes.length;i++){const score=cameraScore(nodes[i]);if(score>=10)scored.push({el:nodes[i],score:score,label:label(nodes[i])});}
-    scored.sort(function(a,b){return b.score-a.score;});state.cameraCandidates=scored.length;
-    if(!scored.length){if(state.cameraScans===1||state.cameraScans%10===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0});return;}
-    const best=scored[0];state.lastCameraLabel=best.label;
-    if(state.cameraClicks>=6)return;
-    state.cameraClicks++;state.lastCameraClickAt=now;
-    try{best.el.click();diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,220),tag:tag(best.el),role:role(best.el),retryAfterMs:CAMERA_RETRY_MS});}catch(e){diag('CAMERA_CLICK_ERROR',{attempt:state.cameraClicks,name:String(e&&e.name||'Error')});}
+    const camera=[];
+    for(let i=0;i<nodes.length;i++){const score=cameraScore(nodes[i]);if(score>=10)camera.push({el:nodes[i],score:score,label:label(nodes[i])});}
+    state.cameraCandidates=camera.length;
+    if(clickBest(camera,'camera'))return;
+    if(state.cameraScans===1||state.cameraScans%10===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0});
   }
 
   function pushJpeg(base64){
@@ -196,11 +249,11 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   }
 
   function configure(enabled){state.enabled=enabled!==false;state.configuredAt=Date.now();installMediaHooks();if(state.enabled)ensureVideo();diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended')});return describe();}
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,shareScans:state.shareScans,shareCandidates:state.shareCandidates,shareClicks:state.shareClicks,lastShareClickAgeMs:state.lastShareClickAt?Date.now()-state.lastShareClickAt:-1,lastShareLabel:state.lastShareLabel,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
   installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
-  setInterval(function(){installMediaHooks();tryEnableCamera();},800);
+  setInterval(function(){installMediaHooks();tryEnableVideoInput();},800);
   diag('ENGINE_INSTALLED',{version:VERSION});
 })();
     """.trimIndent()

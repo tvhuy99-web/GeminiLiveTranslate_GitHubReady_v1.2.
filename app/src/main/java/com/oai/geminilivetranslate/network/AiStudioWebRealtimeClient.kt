@@ -395,12 +395,17 @@ internal class AiStudioWebRealtimeClient(
                     !resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
                 val granted = ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
                     PackageManager.PERMISSION_GRANTED
-                if (audioOnly && granted) {
+                val allowRealMic = !screenDescription
+                if (audioOnly && granted && allowRealMic) {
                     req.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                    logger.log(2, "AiStudioAuthMedia", "WEB_PERMISSION audio=true video=false androidMic=true result=granted")
+                    logger.log(2, "AiStudioAuthMedia", "WEB_PERMISSION audio=true video=false androidMic=true realMicAllowed=true result=granted")
                 } else {
                     req.deny()
-                    logger.log(1, "AiStudioAuthMedia", "WEB_PERMISSION audioOnly=$audioOnly androidMic=$granted result=denied")
+                    logger.log(
+                        if (screenDescription && audioOnly) 2 else 1,
+                        "AiStudioAuthMedia",
+                        "WEB_PERMISSION audioOnly=$audioOnly androidMic=$granted realMicAllowed=$allowRealMic screenDescription=$screenDescription result=denied",
+                    )
                 }
             }
         }
@@ -701,7 +706,7 @@ internal class AiStudioWebRealtimeClient(
             "(window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.configure($language):({ok:false,error:'r183-language-not-installed'}))"
         }
         val screenCall = if (screenDescription) {
-            "(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.configure(true):({ok:false,error:'r19-not-installed'}))"
+            "(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.configure(true,false):({ok:false,error:'r19-not-installed'}))"
         } else {
             "null"
         }

@@ -1,18 +1,18 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-17-r19.6-desktop-share-real-mic-all-requests"
+    const val VERSION = "2026-09-17-r19.7-start-before-share-page-errors"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-17-r19.6-desktop-share-real-mic-all-requests';
-  const SHARE_RETRY_MS=1800;
-  const CAMERA_RETRY_MS=3000;
-  const CAMERA_FALLBACK_AFTER_SCANS=5;
+  const VERSION='2026-09-17-r19.7-start-before-share-page-errors';
+  const SHARE_RETRY_MS=2500;
+  const START_TO_SHARE_GRACE_MS=1200;
   const MIC_PERMISSION_TIMEOUT_MS=15000;
+  const PAGE_ERROR_SCAN_MS=900;
   const state={
     enabled:false,
     canvas:null,
@@ -39,15 +39,19 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     shareClicks:0,
     lastShareClickAt:0,
     lastShareLabel:'',
-    cameraScans:0,
-    cameraCandidates:0,
-    cameraClicks:0,
-    lastCameraClickAt:0,
-    lastCameraLabel:'',
+    startGateScans:0,
+    startGateReady:false,
+    startGateReason:'waiting-r17-start',
+    startAttemptSeen:0,
+    startActionAgeMs:-1,
+    pageErrorCount:0,
+    lastPageError:'',
+    lastPageErrorAt:0,
     lastFrameAt:0,
     lastDrawSeq:0,
     configuredAt:0
   };
+  const pageErrorSignatures=new Map();
 
   function diag(kind,payload){
     try{const b=window.AIStudioWebSessionLab;if(b&&typeof b.onJsEvent==='function')b.onJsEvent(JSON.stringify({kind:'R19_'+kind,payload:payload||{}}));}catch(_){}
@@ -60,17 +64,74 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   function interactive(el){const t=tag(el),r=role(el);return t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link';}
 
   function collectDeep(){
-    const roots=[document],seen=new Set(),out=[];
-    while(roots.length&&out.length<6000){
+    const roots=[document],seen=new Set(),all=[],interactiveNodes=[];
+    while(roots.length&&all.length<6000){
       const root=roots.shift();if(!root||seen.has(root))continue;seen.add(root);
       let nodes=[];try{nodes=Array.from(root.querySelectorAll('*'));}catch(_){}
-      for(let i=0;i<nodes.length&&out.length<6000;i++){
-        const el=nodes[i];if(interactive(el))out.push(el);
+      for(let i=0;i<nodes.length&&all.length<6000;i++){
+        const el=nodes[i];all.push(el);if(interactive(el))interactiveNodes.push(el);
         try{if(el.shadowRoot)roots.push(el.shadowRoot);}catch(_){}
         try{const t=tag(el);if((t==='IFRAME'||t==='FRAME')&&el.contentDocument)roots.push(el.contentDocument);}catch(_){}
       }
     }
-    return out;
+    return {all:all,interactive:interactiveNodes};
+  }
+
+  function visible(el){
+    try{
+      if(!el||!el.getBoundingClientRect)return false;
+      const s=(el.ownerDocument&&el.ownerDocument.defaultView?el.ownerDocument.defaultView:window).getComputedStyle(el);
+      if(!s||s.display==='none'||s.visibility==='hidden'||Number(s.opacity||1)===0)return false;
+      const r=el.getBoundingClientRect();return r.width>1&&r.height>1&&r.bottom>=0&&r.right>=0;
+    }catch(_){return false;}
+  }
+
+  function recordPageError(kind,text,extra){
+    const clean=safe(text,900);if(!state.enabled||!clean)return;
+    const sig=kind+'|'+clean.toLowerCase();const now=Date.now();const previous=Number(pageErrorSignatures.get(sig)||0);
+    if(previous&&now-previous<10000)return;
+    pageErrorSignatures.set(sig,now);state.pageErrorCount++;state.lastPageError=clean;state.lastPageErrorAt=now;
+    diag(kind,Object.assign({count:state.pageErrorCount,text:clean},extra||{}));
+  }
+
+  function scanPageErrors(snapshot){
+    if(!state.enabled)return;
+    const all=(snapshot&&snapshot.all)||collectDeep().all;
+    for(let i=0;i<all.length;i++){
+      const el=all[i];if(!visible(el))continue;
+      const r=role(el),id=attr(el,'id'),cls=attr(el,'class'),testid=attr(el,'data-testid');
+      const marker=(r+' '+id+' '+cls+' '+testid).toLowerCase();
+      const text=safe(el.textContent||attr(el,'aria-label')||'',900);if(!text||text.length<3)continue;
+      const lower=text.toLowerCase();
+      const errorWords=/\b(error|failed|failure|unavailable|unsupported|denied|blocked|permission|problem|could not|couldn't|cannot|can't|try again|something went wrong)\b|lỗi|thất bại|không thể|bị chặn|quyền/;
+      const errorContainer=r==='alert'||/error|snackbar|toast|alert|banner|notification/.test(marker);
+      if(errorContainer&&errorWords.test(lower)){
+        recordPageError('PAGE_ERROR_UI',text,{tag:tag(el),role:r||'none',id:safe(id,120),className:safe(cls,180),testId:safe(testid,160)});
+      }
+    }
+  }
+
+  function installPageDiagnostics(){
+    try{
+      if(window.__AIS_R19_PAGE_DIAGNOSTICS__)return;
+      window.__AIS_R19_PAGE_DIAGNOSTICS__=true;
+      window.addEventListener('error',function(ev){
+        if(!state.enabled)return;
+        recordPageError('PAGE_JS_ERROR',String(ev&&ev.message||'javascript-error'),{source:safe(ev&&ev.filename||'',300),line:Number(ev&&ev.lineno||0),column:Number(ev&&ev.colno||0)});
+      },true);
+      window.addEventListener('unhandledrejection',function(ev){
+        if(!state.enabled)return;
+        const reason=ev&&ev.reason;recordPageError('PAGE_UNHANDLED_REJECTION',String(reason&&reason.message||reason||'unhandled-rejection'),{name:safe(reason&&reason.name||'',120),stack:safe(reason&&reason.stack||'',900)});
+      },true);
+      try{
+        const nativeAlert=window.alert;
+        if(typeof nativeAlert==='function'&&!nativeAlert.__aisR19Logged){
+          const wrappedAlert=function(message){recordPageError('PAGE_ALERT',String(message||''),{});return nativeAlert.apply(this,arguments);};
+          wrappedAlert.__aisR19Logged=true;window.alert=wrappedAlert;
+        }
+      }catch(_){}
+      diag('PAGE_DIAGNOSTICS_INSTALLED',{});
+    }catch(e){diag('PAGE_DIAGNOSTICS_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});}
   }
 
   function ensureVideo(){
@@ -148,24 +209,28 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     try{
       const md=navigator.mediaDevices;if(!md)return;
       if(typeof md.getUserMedia==='function'&&!md.getUserMedia.__aisR19ScreenVideo){
-        const native=md.getUserMedia.bind(md);
+        const inherited=md.getUserMedia.bind(md);
+        const platformGum=(window.MediaDevices&&window.MediaDevices.prototype&&typeof window.MediaDevices.prototype.getUserMedia==='function')
+          ?window.MediaDevices.prototype.getUserMedia.bind(md)
+          :inherited;
         const wrapped=function(constraints){
           const c=constraints||{};
+          if(state.enabled)diag('GUM_REQUEST',{audio:!!c.audio,video:!!c.video,constraints:safe(JSON.stringify(c),700)});
           if(state.enabled&&!!c.video){
             state.gumVideoRequests++;if(!!c.audio)state.gumCombinedRequests++;
             const videoStream=syntheticVideoStream();
-            if(!videoStream)return native(constraints);
+            if(!videoStream)return inherited(constraints);
             if(!!c.audio){
               state.realAudioRequests++;
               return waitForRealMicPermission().then(function(){
-                return native({audio:c.audio,video:false});
+                return platformGum({audio:c.audio,video:false});
               }).then(function(audioStream){
                 const combined=combineVideoAndRealAudio(videoStream,audioStream);
                 diag('GUM_VIDEO',{count:state.gumVideoRequests,audio:true,video:true,realAudio:true,realAudioTracks:audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks().length:0,tracks:combined&&combined.getTracks?combined.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
                 return combined;
               }).catch(function(e){
                 state.realAudioErrors++;
-                diag('REAL_AUDIO_ERROR',{count:state.realAudioErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',280)});
+                diag('REAL_AUDIO_ERROR',{count:state.realAudioErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',280),combined:true});
                 throw e;
               });
             }
@@ -175,7 +240,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           if(state.enabled&&!!c.audio&&!c.video){
             state.realAudioRequests++;
             return waitForRealMicPermission().then(function(){
-              return native(constraints);
+              return platformGum(constraints);
             }).then(function(audioStream){
               const tracks=audioStream&&audioStream.getAudioTracks?audioStream.getAudioTracks():[];
               state.realAudioTracks+=tracks.length;
@@ -187,9 +252,10 @@ object AiStudioWebSessionR19ScreenVideoBridge {
               throw e;
             });
           }
-          return native(constraints);
+          return inherited(constraints);
         };
         wrapped.__aisR19ScreenVideo=true;md.getUserMedia=wrapped;
+        diag('GUM_HOOK',{realMicBypassesSynthetic:true});
       }
       if(typeof md.getDisplayMedia==='function'&&!md.getDisplayMedia.__aisR19ScreenVideo){
         const nativeDisplay=md.getDisplayMedia.bind(md);
@@ -197,6 +263,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           const c=constraints||{};
           if(state.enabled){
             state.displayRequests++;
+            diag('DISPLAY_REQUEST',{count:state.displayRequests,audioRequested:!!c.audio,constraints:safe(JSON.stringify(c),700)});
             const stream=syntheticVideoStream();
             diag('DISPLAY_VIDEO',{count:state.displayRequests,audioRequested:!!c.audio,realAudioInjected:false,tracks:stream&&stream.getTracks?stream.getTracks().length:0,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
             if(stream)return Promise.resolve(stream);
@@ -220,32 +287,32 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     return s;
   }
 
-  function cameraScore(el){
-    const l=label(el);if(!l)return 0;
-    if(/turn camera off|turn off camera|disable camera|stop camera|camera enabled/.test(l))return -100;
-    let s=0;
-    if(/turn camera on|turn on camera|enable camera|start camera/.test(l))s+=20;
-    if(/\bcamera\b|\bwebcam\b|máy ảnh/.test(l))s+=10;
-    if(/share video|start video|enable video|turn video on/.test(l))s+=8;
-    if(/video/.test(l))s+=2;
-    return s;
+  function startGate(){
+    state.startGateScans++;
+    try{
+      const r17=window.__AIS_R17_PRODUCTION__;
+      const d=r17&&typeof r17.describe==='function'?r17.describe():null;
+      if(!d||!d.configured){state.startGateReady=false;state.startGateReason='waiting-r17-configured';return false;}
+      const attempts=Number(d.startAttempts||0),action=String(d.lastAction||''),stage=String(d.stage||''),age=Number(d.lastActionAgeMs||-1);
+      state.startAttemptSeen=Math.max(state.startAttemptSeen,attempts);state.startActionAgeMs=age;
+      if(!!d.setupObserved){state.startGateReady=true;state.startGateReason='server-setup-seen';return true;}
+      if(attempts<=0&&action!=='start-live'&&stage!=='start-clicked'){
+        state.startGateReady=false;state.startGateReason='waiting-start-live-click';return false;
+      }
+      if(age>=0&&age<START_TO_SHARE_GRACE_MS){
+        state.startGateReady=false;state.startGateReason='waiting-start-live-settle';return false;
+      }
+      state.startGateReady=true;state.startGateReason='start-live-clicked';return true;
+    }catch(e){state.startGateReady=false;state.startGateReason='start-gate-error';diag('START_GATE_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',260)});return false;}
   }
 
-  function clickBest(scored,kind){
+  function clickBestShare(scored){
     if(!scored.length)return false;
     scored.sort(function(a,b){return b.score-a.score;});
-    const best=scored[0],now=Date.now();
-    if(kind==='share'){
-      state.shareCandidates=scored.length;state.lastShareLabel=best.label;
-      if(state.shareClicks>=6||state.lastShareClickAt&&now-state.lastShareClickAt<SHARE_RETRY_MS)return true;
-      state.shareClicks++;state.lastShareClickAt=now;
-      try{best.el.click();diag('SHARE_CLICK',{attempt:state.shareClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),retryAfterMs:SHARE_RETRY_MS});}catch(e){diag('SHARE_CLICK_ERROR',{attempt:state.shareClicks,name:String(e&&e.name||'Error')});}
-      return true;
-    }
-    state.cameraCandidates=scored.length;state.lastCameraLabel=best.label;
-    if(state.cameraClicks>=6||state.lastCameraClickAt&&now-state.lastCameraClickAt<CAMERA_RETRY_MS)return true;
-    state.cameraClicks++;state.lastCameraClickAt=now;
-    try{best.el.click();diag('CAMERA_CLICK',{attempt:state.cameraClicks,score:best.score,label:safe(best.label,220),tag:tag(best.el),role:role(best.el),retryAfterMs:CAMERA_RETRY_MS});}catch(e){diag('CAMERA_CLICK_ERROR',{attempt:state.cameraClicks,name:String(e&&e.name||'Error')});}
+    const best=scored[0],now=Date.now();state.shareCandidates=scored.length;state.lastShareLabel=best.label;
+    if(state.shareClicks>=6||state.lastShareClickAt&&now-state.lastShareClickAt<SHARE_RETRY_MS)return true;
+    state.shareClicks++;state.lastShareClickAt=now;
+    try{best.el.click();diag('SHARE_CLICK',{attempt:state.shareClicks,score:best.score,label:safe(best.label,240),tag:tag(best.el),role:role(best.el),retryAfterMs:SHARE_RETRY_MS,startGateReason:state.startGateReason,startAttemptSeen:state.startAttemptSeen,startActionAgeMs:state.startActionAgeMs});}catch(e){diag('SHARE_CLICK_ERROR',{attempt:state.shareClicks,name:String(e&&e.name||'Error')});}
     return true;
   }
 
@@ -253,21 +320,16 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!state.enabled||state.gumVideoRequests>0||state.displayRequests>0)return;
     let path='';try{path=String(location.pathname||'').toLowerCase();}catch(_){}
     if(path.indexOf('/live')<0)return;
-    const nodes=collectDeep();
-    state.shareScans++;
+    if(!startGate()){
+      if(state.startGateScans===1||state.startGateScans%8===0)diag('SHARE_WAIT_START',{scan:state.startGateScans,reason:state.startGateReason,startAttemptSeen:state.startAttemptSeen,startActionAgeMs:state.startActionAgeMs});
+      return;
+    }
+    const snapshot=collectDeep();scanPageErrors(snapshot);state.shareScans++;
     const share=[];
-    for(let i=0;i<nodes.length;i++){const score=shareScore(nodes[i]);if(score>=20)share.push({el:nodes[i],score:score,label:label(nodes[i])});}
+    for(let i=0;i<snapshot.interactive.length;i++){const score=shareScore(snapshot.interactive[i]);if(score>=20)share.push({el:snapshot.interactive[i],score:score,label:label(snapshot.interactive[i])});}
     state.shareCandidates=share.length;
-    if(clickBest(share,'share'))return;
-    if(state.shareScans===1||state.shareScans%10===0)diag('SHARE_SCAN',{scan:state.shareScans,candidates:0});
-    if(state.shareScans<CAMERA_FALLBACK_AFTER_SCANS)return;
-
-    state.cameraScans++;
-    const camera=[];
-    for(let i=0;i<nodes.length;i++){const score=cameraScore(nodes[i]);if(score>=10)camera.push({el:nodes[i],score:score,label:label(nodes[i])});}
-    state.cameraCandidates=camera.length;
-    if(clickBest(camera,'camera'))return;
-    if(state.cameraScans===1||state.cameraScans%10===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0});
+    if(clickBestShare(share))return;
+    if(state.shareScans===1||state.shareScans%8===0)diag('SHARE_SCAN',{scan:state.shareScans,candidates:0,startGateReason:state.startGateReason});
   }
 
   function pushJpeg(base64){
@@ -291,13 +353,17 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     return {ok:true,queued:true,seq:seq,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended')};
   }
 
-  function configure(enabled){state.enabled=enabled!==false;state.configuredAt=Date.now();installMediaHooks();if(state.enabled)ensureVideo();diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended')});return describe();}
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,shareScans:state.shareScans,shareCandidates:state.shareCandidates,shareClicks:state.shareClicks,lastShareClickAgeMs:state.lastShareClickAt?Date.now()-state.lastShareClickAt:-1,lastShareLabel:state.lastShareLabel,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function configure(enabled){
+    state.enabled=enabled!==false;state.configuredAt=Date.now();installPageDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
+    diag('CONFIG',{enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),startBeforeShare:true,cameraFallback:false,realMicBypassesSynthetic:true,pageDiagnostics:true});return describe();
+  }
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,shareScans:state.shareScans,shareCandidates:state.shareCandidates,shareClicks:state.shareClicks,lastShareClickAgeMs:state.lastShareClickAt?Date.now()-state.lastShareClickAt:-1,lastShareLabel:state.lastShareLabel,startGateScans:state.startGateScans,startGateReady:state.startGateReady,startGateReason:state.startGateReason,startAttemptSeen:state.startAttemptSeen,startActionAgeMs:state.startActionAgeMs,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
 
-  installMediaHooks();
+  installPageDiagnostics();installMediaHooks();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
   setInterval(function(){installMediaHooks();tryEnableVideoInput();},800);
-  diag('ENGINE_INSTALLED',{version:VERSION});
+  setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);
+  diag('ENGINE_INSTALLED',{version:VERSION,startBeforeShare:true,cameraFallback:false,pageDiagnostics:true});
 })();
     """.trimIndent()
 }

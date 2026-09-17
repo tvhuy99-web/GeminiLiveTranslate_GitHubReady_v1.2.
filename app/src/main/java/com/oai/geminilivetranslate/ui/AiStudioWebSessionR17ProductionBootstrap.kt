@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-17-r17.10-screen-camera-gate"
+    const val VERSION = "2026-09-17-r17.11-start-before-camera-progress"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"
@@ -13,7 +13,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-17-r17.10-screen-camera-gate';
+  const VERSION='2026-09-17-r17.11-start-before-camera-progress';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
@@ -82,32 +82,17 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function startProgressEvidence(){
     try{const o=window.__AIS_LIVE_OUTPUT_ENGINE__;const d=o&&typeof o.describe==='function'?o.describe():null;if(d&&Number(d.setupCompleteEvents||0)>0)return {progress:true,kind:'server-setup'};}catch(_){}
+    try{const s=window.__AIS_R19_SCREEN_VIDEO__;const d=s&&typeof s.describe==='function'?s.describe():null;if(state.screenDescription&&d&&d.postStartProgress)return {progress:true,kind:'screen-'+String(d.postStartProgressKind||'media')};}catch(_){}
     try{const l=window.__AIS_R183_LANGUAGE__;const d=l&&typeof l.describe==='function'?l.describe():null;if(d&&(d.targetLanguageVerified||Number(d.rewriteRequests||0)>0||Number(d.translateSetupRequests||0)>0))return {progress:true,kind:'language-setup'};}catch(_){}
     try{const r=window.__AIS_LIVE_DIRECT_ENGINE__;const d=r&&typeof r.describe==='function'?r.describe():null;if(d&&(d.templateObserved||Number(d.carrierRequests||0)>0))return {progress:true,kind:'carrier-template'};}catch(_){}
     return {progress:false,kind:'none'};
   }
-  function screenVideoReadyForStart(){
-    if(!state.screenDescription)return true;
-    state.screenVideoWaitScans++;
-    try{
-      const r=window.__AIS_R19_SCREEN_VIDEO__;const d=r&&typeof r.describe==='function'?r.describe():null;
-      const ready=!!(d&&d.enabled&&d.cameraTransportReady&&Number(d.gumVideoRequests||0)>0);
-      if(!ready){
-        state.lastBlocker=!d?'waiting-screen-video-bridge':(!d.enabled?'waiting-screen-video-config':'waiting-screen-video-transport');
-        if(state.screenVideoWaitScans===1||state.screenVideoWaitScans%8===0)diag('SCREEN_VIDEO_GATE',{ready:false,reason:state.lastBlocker,scans:state.screenVideoWaitScans,cameraClicks:Number(d&&d.cameraClicks||0),gumVideoRequests:Number(d&&d.gumVideoRequests||0),cameraCandidates:Number(d&&d.cameraCandidates||0)});
-        return false;
-      }
-      if(state.screenVideoWaitScans===1||state.screenVideoWaitScans%8===0)diag('SCREEN_VIDEO_GATE',{ready:true,reason:'camera-transport-ready',scans:state.screenVideoWaitScans,cameraClicks:Number(d.cameraClicks||0),gumVideoRequests:Number(d.gumVideoRequests||0)});
-      return true;
-    }catch(e){state.lastBlocker='screen-video-gate-error';diag('SCREEN_VIDEO_GATE_ERROR',{name:String(e&&e.name||'Error'),message:safeText(e&&e.message||'',260)});return false;}
-  }
   function tryStart(snapshot){
     state.startScans++;if(setupSeen()){state.setupObserved=true;state.stage='setup-complete';state.lastBlocker='none';return;}
     if(!state.streamSelected){state.lastBlocker='waiting-stream';return;}if(!state.modelSeen&&!state.modelGuardInstalled){state.lastBlocker='waiting-model';return;}
-    if(state.screenDescription&&!screenVideoReadyForStart()){state.stage='discover';return;}
     const now=Date.now();
     if(state.lastAction==='start-live'&&state.lastActionAt){
-      const age=now-state.lastActionAt,progress=startProgressEvidence(),limit=progress.progress?8000:10000;
+      const age=now-state.lastActionAt,progress=startProgressEvidence(),limit=progress.progress?12000:10000;
       if(age<limit){state.stage='start-clicked';state.lastBlocker=progress.progress?'waiting-start-ack-progress-'+progress.kind:'waiting-start-ack';return;}
       state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts,progress:progress.progress,progressKind:progress.kind,limitMs:limit});
       state.lastAction='start-ack-timeout';state.lastActionAt=0;state.startStableScans=0;state.lastStartSignature='';
@@ -122,7 +107,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       state.startAttempts++;
       if(clickElement(best.el,'start-live')){
         state.stage='start-clicked';state.lastBlocker='waiting-start-ack';
-        if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;diag('SCREEN_REAL_MEDIA_START',{syntheticCarrier:false,screenVideoGateScans:state.screenVideoWaitScans});}
+        if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;diag('SCREEN_REAL_MEDIA_START',{syntheticCarrier:false,startBeforeCamera:true});}
         else buildSyntheticCarrier();
         diag('START_ATTEMPT',{attempt:state.startAttempts,score:best.score,stableScans:state.startStableScans,screenDescription:state.screenDescription});return;
       }
@@ -228,9 +213,9 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function detectAuth(){try{const h=String(location.hostname||'').toLowerCase();state.authRequired=h.indexOf('accounts.google.')>=0||h==='accounts.google.com';}catch(_){}}
   function reportDiscovery(){
-    const signature=[state.stage,state.lastBlocker,state.streamSelected,state.modelSeen,state.modelVerified,state.targetLanguageVerified,state.setupObserved,state.startCandidates,state.startAttempts,state.screenVideoWaitScans,state.modelGuardRequests,state.modelRewriteRequests,state.routeKind].join('|');
+    const signature=[state.stage,state.lastBlocker,state.streamSelected,state.modelSeen,state.modelVerified,state.targetLanguageVerified,state.setupObserved,state.startCandidates,state.startAttempts,state.modelGuardRequests,state.modelRewriteRequests,state.routeKind].join('|');
     if(signature===lastDiscoverySignature)return;lastDiscoverySignature=signature;
-    diag('DISCOVERY',{stage:state.stage,blocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,startCandidates:state.startCandidates,startAttempts:state.startAttempts,screenVideoWaitScans:state.screenVideoWaitScans,modelSeen:state.modelSeen,modelVerified:state.modelVerified,targetLanguageVerified:state.targetLanguageVerified,translationGuardRequests:state.translationGuardRequests,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,routeKind:state.routeKind});
+    diag('DISCOVERY',{stage:state.stage,blocker:state.lastBlocker,deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,startCandidates:state.startCandidates,startAttempts:state.startAttempts,modelSeen:state.modelSeen,modelVerified:state.modelVerified,targetLanguageVerified:state.targetLanguageVerified,translationGuardRequests:state.translationGuardRequests,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,routeKind:state.routeKind});
   }
   function tick(){
     state.lastTickAt=Date.now();detectAuth();if(state.authRequired){state.stage='auth';state.lastBlocker='auth-required';return;}if(window.top!==window)return;
@@ -244,7 +229,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;}
     const requested=safeText(requestedModel||'',160).replace(/^models\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
     state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;
-    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription});tick();return describe();
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription,startBeforeCamera:state.screenDescription});tick();return describe();
   }
   function describe(){
     return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,
@@ -262,7 +247,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   installModelGuard();installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};
   setInterval(tick,700);setTimeout(tick,0);setTimeout(tick,900);setTimeout(tick,2200);
-  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenCameraGate:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenCameraGate:false,startBeforeCamera:true});
 })();
     """.trimIndent()
 }

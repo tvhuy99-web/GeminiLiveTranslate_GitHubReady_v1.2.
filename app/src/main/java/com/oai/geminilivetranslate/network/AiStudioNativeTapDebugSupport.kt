@@ -23,7 +23,7 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-18-r18.10-mobile-profile-user-activation"
+    const val VERSION = "2026-09-18-r18.11-authentic-touch-metadata"
 
     val DOCUMENT_START: String =
         "(function(){if(/gemini-3\\.8-live/i.test(String(location.href||''))){\n" +
@@ -33,7 +33,7 @@ internal object AiStudioNativeTapDocumentStart {
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-18-r18.10-mobile-profile-user-activation';
+  const VERSION='2026-09-18-r18.11-authentic-touch-metadata';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 
@@ -139,8 +139,48 @@ internal class AiStudioNativeTapController(
     private val logger: SessionLogger?,
 ) {
     private val main = Handler(Looper.getMainLooper())
+    private val touchscreenDeviceId: Int by lazy(LazyThreadSafetyMode.NONE) {
+        InputDevice.getDeviceIds().firstOrNull { id ->
+            InputDevice.getDevice(id)?.supportsSource(InputDevice.SOURCE_TOUCHSCREEN) == true
+        } ?: 0
+    }
     @Volatile private var lastTapAt = 0L
     @Volatile private var lastMicPermissionRequestAt = 0L
+
+    private fun obtainFingerTouchEvent(
+        action: Int,
+        downTime: Long,
+        eventTime: Long,
+        px: Float,
+        py: Float,
+    ): MotionEvent {
+        val properties = MotionEvent.PointerProperties().apply {
+            id = 0
+            toolType = MotionEvent.TOOL_TYPE_FINGER
+        }
+        val coordinates = MotionEvent.PointerCoords().apply {
+            x = px
+            y = py
+            pressure = 1f
+            size = 1f
+        }
+        return MotionEvent.obtain(
+            downTime,
+            eventTime,
+            action,
+            1,
+            arrayOf(properties),
+            arrayOf(coordinates),
+            0,
+            0,
+            1f,
+            1f,
+            touchscreenDeviceId,
+            0,
+            InputDevice.SOURCE_TOUCHSCREEN,
+            0,
+        )
+    }
 
     @JavascriptInterface
     fun requestNativeTap(json: String?) {
@@ -170,24 +210,28 @@ internal class AiStudioNativeTapController(
             val x = (xRatio * width).toFloat().coerceIn(1f, (width - 2).toFloat())
             val y = (yRatio * height).toFloat().coerceIn(1f, (height - 2).toFloat())
             val downTime = SystemClock.uptimeMillis()
-            val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0).apply {
-                source = InputDevice.SOURCE_TOUCHSCREEN
-            }
+            val down = obtainFingerTouchEvent(MotionEvent.ACTION_DOWN, downTime, downTime, x, y)
             val downHandled = runCatching { webView.dispatchTouchEvent(down) }.getOrDefault(false)
             down.recycle()
-            logger?.log(2, "AiStudioNativeTap", "ACTION_TAP_DOWN purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} width=$width height=$height handled=$downHandled tag=$tag role=$role")
+            logger?.log(
+                2,
+                "AiStudioNativeTap",
+                "ACTION_TAP_DOWN purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} width=$width height=$height handled=$downHandled tag=$tag role=$role deviceId=$touchscreenDeviceId toolType=finger source=touchscreen",
+            )
             main.postDelayed({
                 if (!webView.isAttachedToWindow) {
                     logger?.log(1, "AiStudioNativeTap", "ACTION_TAP_UP purpose=$purpose skipped=detached")
                     return@postDelayed
                 }
                 val upTime = SystemClock.uptimeMillis()
-                val up = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, x, y, 0).apply {
-                    source = InputDevice.SOURCE_TOUCHSCREEN
-                }
+                val up = obtainFingerTouchEvent(MotionEvent.ACTION_UP, downTime, upTime, x, y)
                 val upHandled = runCatching { webView.dispatchTouchEvent(up) }.getOrDefault(false)
                 up.recycle()
-                logger?.log(2, "AiStudioNativeTap", "ACTION_TAP_UP purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} handled=$upHandled durationMs=${upTime - downTime}")
+                logger?.log(
+                    2,
+                    "AiStudioNativeTap",
+                    "ACTION_TAP_UP purpose=$purpose x=${x.roundToInt()} y=${y.roundToInt()} handled=$upHandled durationMs=${upTime - downTime} deviceId=$touchscreenDeviceId toolType=finger source=touchscreen",
+                )
             }, 72L)
         }
     }
@@ -241,9 +285,7 @@ internal class AiStudioNativeTapController(
 }
 
 internal object AiStudioDebugWebViewHost {
-    const val VERSION = "2026-09-18-r18.16-mobile-live-camera-transport"
-    private const val MOBILE_CHROME_USER_AGENT =
-        "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36"
+    const val VERSION = "2026-09-18-r18.17-default-webview-ua-authentic-touch"
     private val main = Handler(Looper.getMainLooper())
     private val panels = WeakHashMap<WebView, WeakReference<ViewGroup>>()
 
@@ -264,14 +306,14 @@ internal object AiStudioDebugWebViewHost {
                 prefs.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
         if (liveScreenMode) {
             webView.settings.apply {
-                userAgentString = MOBILE_CHROME_USER_AGENT
+                userAgentString = null
                 useWideViewPort = false
                 loadWithOverviewMode = false
             }
             logger?.log(
                 2,
                 "AiStudioDebugWeb",
-                "R26_MOBILE_PROFILE enabled=true reason=live-screen-description transport=camera-gum ua=mobile-chrome wideViewport=false overview=false",
+                "R26_MOBILE_PROFILE enabled=true reason=live-screen-description transport=camera-gum ua=default-webview wideViewport=false overview=false",
             )
         }
 

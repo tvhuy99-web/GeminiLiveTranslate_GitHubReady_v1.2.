@@ -7,13 +7,15 @@ import org.junit.Test
 class AiStudioWebSessionR20SourceTest {
     @Test
     fun screenForensicDiagnosticsAreWiredBeforeNativeTapScript() {
-        val root = File(System.getProperty("user.dir")).canonicalFile
+        val root = File(requireNotNull(System.getProperty("user.dir"))).canonicalFile
         val nativeTap = File(root, "src/main/java/com/oai/geminilivetranslate/network/AiStudioNativeTapDebugSupport.kt").readText()
         val forensic = File(root, "src/main/java/com/oai/geminilivetranslate/ui/AiStudioWebSessionR20ForensicDiagnostics.kt").readText()
         val logs = File(root, "src/main/java/com/oai/geminilivetranslate/core/AppLogRepository.kt").readText()
 
         assertTrue(nativeTap.contains("AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START"))
-        assertTrue(nativeTap.contains("gemini-3\\.8-live"))
+        assertTrue(nativeTap.contains("r18.9-screen-forensic-r20"))
+        assertTrue(nativeTap.contains("gemini-3"))
+        assertTrue(nativeTap.contains("8-live"))
         assertTrue(forensic.contains("XHR_ABORT_CALL"))
         assertTrue(forensic.contains("XHR_REQUEST_BODY"))
         assertTrue(forensic.contains("XHR_RESPONSE_DELTA"))

@@ -23,7 +23,7 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object AiStudioNativeTapDocumentStart {
-    const val VERSION = "2026-09-17-r18.9-screen-forensic-r20"
+    const val VERSION = "2026-09-18-r18.10-mobile-profile-user-activation"
 
     val DOCUMENT_START: String =
         "(function(){if(/gemini-3\\.8-live/i.test(String(location.href||''))){\n" +
@@ -33,7 +33,7 @@ internal object AiStudioNativeTapDocumentStart {
 (function(){
   'use strict';
   if(window.__AIS_NATIVE_START_TAP__&&window.__AIS_NATIVE_START_TAP__.version)return;
-  const VERSION='2026-09-17-r18.9-screen-forensic-r20';
+  const VERSION='2026-09-18-r18.10-mobile-profile-user-activation';
   const bridge=window.AIStudioNativeTapBridge;
   if(!bridge)return;
 
@@ -76,7 +76,25 @@ internal object AiStudioNativeTapDocumentStart {
   function reportGesture(kind,ev){
     try{
       const el=clickableAncestor(ev&&ev.target);if(!el)return;
-      bridge.reportStartGesture(JSON.stringify({kind:kind,trusted:!!ev.isTrusted,tag:tag(el)||'none',role:role(el)||'none',purpose:tapPurpose(el)||'unknown'}));
+      let active=false,hasBeenActive=false;
+      try{
+        const ua=navigator.userActivation;
+        active=!!(ua&&ua.isActive);
+        hasBeenActive=!!(ua&&ua.hasBeenActive);
+      }catch(_){}
+      bridge.reportStartGesture(JSON.stringify({
+        kind:kind,
+        trusted:!!ev.isTrusted,
+        tag:tag(el)||'none',
+        role:role(el)||'none',
+        purpose:tapPurpose(el)||'unknown',
+        userActivationActive:active,
+        userActivationHasBeenActive:hasBeenActive,
+        pointerType:safeText(ev&&ev.pointerType||'',24),
+        detail:Number(ev&&ev.detail||0),
+        button:Number(ev&&ev.button||0),
+        buttons:Number(ev&&ev.buttons||0)
+      }));
     }catch(_){}
   }
   ['pointerdown','touchstart','mousedown','pointerup','touchend','mouseup','click'].forEach(function(kind){
@@ -204,7 +222,17 @@ internal class AiStudioNativeTapController(
         val tag = parsed.optString("tag").take(32)
         val role = parsed.optString("role").take(48)
         val purpose = parsed.optString("purpose").take(48)
-        logger?.log(2, "AiStudioNativeTap", "ACTION_GESTURE kind=$kind trusted=$trusted purpose=$purpose tag=$tag role=$role")
+        val activationActive = parsed.optBoolean("userActivationActive", false)
+        val activationHasBeenActive = parsed.optBoolean("userActivationHasBeenActive", false)
+        val pointerType = parsed.optString("pointerType").take(24)
+        val detail = parsed.optInt("detail", 0)
+        val button = parsed.optInt("button", 0)
+        val buttons = parsed.optInt("buttons", 0)
+        logger?.log(
+            2,
+            "AiStudioNativeTap",
+            "ACTION_GESTURE kind=$kind trusted=$trusted purpose=$purpose tag=$tag role=$role userActivationActive=$activationActive userActivationHasBeenActive=$activationHasBeenActive pointerType=$pointerType detail=$detail button=$button buttons=$buttons",
+        )
     }
 
     companion object {
@@ -213,8 +241,9 @@ internal class AiStudioNativeTapController(
 }
 
 internal object AiStudioDebugWebViewHost {
-    const val VERSION = "2026-09-17-r18.15-desktop-live-immediate-visible"
-    private const val DESKTOP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    const val VERSION = "2026-09-18-r18.16-mobile-live-camera-transport"
+    private const val MOBILE_CHROME_USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36"
     private val main = Handler(Looper.getMainLooper())
     private val panels = WeakHashMap<WebView, WeakReference<ViewGroup>>()
 
@@ -235,11 +264,15 @@ internal object AiStudioDebugWebViewHost {
                 prefs.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
         if (liveScreenMode) {
             webView.settings.apply {
-                userAgentString = DESKTOP_USER_AGENT
-                useWideViewPort = true
-                loadWithOverviewMode = true
+                userAgentString = MOBILE_CHROME_USER_AGENT
+                useWideViewPort = false
+                loadWithOverviewMode = false
             }
-            logger?.log(2, "AiStudioDebugWeb", "R25_DESKTOP_PROFILE enabled=true reason=live-screen-description ua=desktop wideViewport=true overview=true")
+            logger?.log(
+                2,
+                "AiStudioDebugWeb",
+                "R26_MOBILE_PROFILE enabled=true reason=live-screen-description transport=camera-gum ua=mobile-chrome wideViewport=false overview=false",
+            )
         }
 
         val content = activity.findViewById<ViewGroup>(android.R.id.content)
@@ -265,7 +298,7 @@ internal object AiStudioDebugWebViewHost {
         }
         val label = TextView(activity).apply {
             text = if (liveScreenMode) {
-                "AI Studio Live desktop - phiên đang dùng cho Mô tả thời gian thực"
+                "AI Studio Live mobile - phiên đang dùng cho Mô tả thời gian thực"
             } else {
                 "AI Studio kiểm tra tạm thời - đây là chính phiên AI Studio ứng dụng đang dùng"
             }
@@ -295,7 +328,11 @@ internal object AiStudioDebugWebViewHost {
                 }
             }
         }
-        logger?.log(2, "AiStudioDebugWeb", "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible} desktop=$liveScreenMode immediate=$visible")
+        logger?.log(
+            2,
+            "AiStudioDebugWeb",
+            "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible} desktop=false mobileProfile=$liveScreenMode immediate=$visible",
+        )
     }
 
     fun setVisibleForActive(visible: Boolean, logger: SessionLogger?) {

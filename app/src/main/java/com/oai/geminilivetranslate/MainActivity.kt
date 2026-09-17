@@ -731,6 +731,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun startLiveDescription() {
         preferences.setLiveDescriptionPrompt(binding.livePromptEditText.text?.toString().orEmpty())
+        if (com.oai.geminilivetranslate.core.AiStudioLiveBackendPolicy.preferAiStudio(this)) {
+            logger.log(
+                2,
+                "BackendRoute",
+                "LIVE_DESCRIPTION backend=aistudio-web model=gemini-3.8-live path=/u/0/live apiKeyRequired=false",
+            )
+            startActivity(
+                Intent(
+                    this,
+                    com.oai.geminilivetranslate.ui.AiStudioAccountActivity::class.java,
+                ),
+            )
+            return
+        }
         val keyState = ApiKeyStore(this).load()
         if (keyState.keys.isEmpty()) {
             toast("Chưa có Gemini API Key")

@@ -18,7 +18,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   const MIC_PERMISSION_TIMEOUT_MS=15000;
   const PAGE_ERROR_SCAN_MS=900;
   const state={
-    enabled:false,
+    enabled:!!(window.__AIS_DESKTOP_SHARE_EXPERIMENT__&&window.__AIS_DESKTOP_SHARE_EXPERIMENT__.enabled),
     allowRealMicInput:false,
     canvas:null,
     ctx:null,

@@ -2,14 +2,14 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR16LiveOutputEngine {
-    const val VERSION = "2026-09-18-web-session-r16.2-screen-turn-gate"
+    const val VERSION = "2026-09-18-web-session-r16.3-postsetup-heartbeat"
 
     val DOCUMENT_START = """
 (function(){
   'use strict';
   if(window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-18-web-session-r16.2-screen-turn-gate';
+  const VERSION='2026-09-18-web-session-r16.3-postsetup-heartbeat';
   const MAX_BUFFER_CHARS=2200000;
   const MAX_NESTED_JSON_CHARS=1500000;
   const state={
@@ -109,6 +109,12 @@ object AiStudioWebSessionR16LiveOutputEngine {
     }catch(_){}
     return emitted;
   }
+  function notifyDirectSetupComplete(){
+    try{
+      const d=window.__AIS_LIVE_DIRECT_ENGINE__;
+      if(d&&typeof d.markScreenSetupComplete==='function')d.markScreenSetupComplete();
+    }catch(_){}
+  }
   function notifyDirectTurnComplete(){
     try{
       const d=window.__AIS_LIVE_DIRECT_ENGINE__;
@@ -137,7 +143,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
     const setup=Array.isArray(msg[1])?msg[1]:null;
     if(!sc&&!ga&&!resume&&!setup)return false;
     state.jspbServerMessages++;
-    if(setup&&!sc&&!ga&&!resume){state.setupCompleteEvents++;bridgeSignal('setupComplete','true');}
+    if(setup&&!sc&&!ga&&!resume){state.setupCompleteEvents++;bridgeSignal('setupComplete','true');notifyDirectSetupComplete();notifyDirectSetupComplete();}
     if(sc)handleJspbServerContent(sc);
     if(ga){
       state.goAwayEvents++;

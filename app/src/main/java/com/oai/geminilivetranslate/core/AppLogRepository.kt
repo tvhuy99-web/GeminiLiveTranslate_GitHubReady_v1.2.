@@ -13,6 +13,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
@@ -132,7 +133,7 @@ class AppLogRepository private constructor(context: Context) {
             .ifBlank { "Chưa có nhật ký phù hợp bộ lọc." }
 
     fun clipboardExport(maxChars: Int = MAX_CLIPBOARD_CHARS): ClipboardExport {
-        val safeCap = maxChars.coerceIn(32_000, MAX_CLIPBOARD_CHARS)
+        val safeCap = maxChars.coerceIn(32_000, MAX_TEXT_EXPORT_CHARS)
         val totalEntries = memory.size
         if (totalEntries == 0) {
             return ClipboardExport(
@@ -361,6 +362,7 @@ class AppLogRepository private constructor(context: Context) {
         private const val MAX_ROTATED_FILES = 3
         private const val MAX_CLIPBOARD_CHARS = 220_000
         private const val MAX_BUNDLE_MEMORY_TAIL_CHARS = 350_000
+        private const val MAX_TEXT_EXPORT_CHARS = 400_000
         private const val SHARE_TTL_MS = 24L * 60L * 60L * 1_000L
         private const val MAX_SHARED_REPORTS = 5
 

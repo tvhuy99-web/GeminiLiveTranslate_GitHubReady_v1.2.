@@ -66,6 +66,10 @@ internal class AiStudioWebRealtimeClient(
     private val turnCompleteEvents = AtomicLong(0L)
     private val backpressureEvents = AtomicLong(0L)
     private val maxObservedQueuedBytes = AtomicLong(0L)
+    private val screenFrameCalls = AtomicLong(0L)
+    private val screenFrameNotReady = AtomicLong(0L)
+    private val screenFramePosted = AtomicLong(0L)
+    private val screenFrameJsCallbacks = AtomicLong(0L)
 
     @Volatile private var webView: WebView? = null
     @Volatile private var inputClient: AiStudioWebLiveClient? = null
@@ -100,6 +104,8 @@ internal class AiStudioWebRealtimeClient(
     @Volatile private var lastHealthTickAt = 0L
     @Volatile private var backgroundDeferredMs = 0L
     @Volatile private var healthWasBackground = false
+    @Volatile private var lastScreenSetupGateSignature = ""
+    @Volatile private var lastScreenSetupGateAt = 0L
 
     fun connect() {
         if (closed.get()) return
@@ -155,27 +161,93 @@ internal class AiStudioWebRealtimeClient(
         return result.also { updateBackpressureHighWater() }
     }
 
-    fun sendVideoFrame(jpeg: ByteArray): GeminiLiveClient.SendResult {
-        if (!screenDescription) return GeminiLiveClient.SendResult.FAILED
-        if (jpeg.isEmpty()) return GeminiLiveClient.SendResult.SENT
-        if (closed.get()) return GeminiLiveClient.SendResult.CLOSED
-        if (!setupDelivered.get()) return GeminiLiveClient.SendResult.NOT_READY
-        val current = webView ?: return GeminiLiveClient.SendResult.NOT_READY
+    fun sendVideoFrame(jpeg: ByteArray, diagnosticFrameId: Long = 0L): GeminiLiveClient.SendResult {
+        val call = screenFrameCalls.incrementAndGet()
+        val frameSeq = diagnosticFrameId.takeIf { it > 0L } ?: call
+        val trace = call <= 10L || call % 30L == 0L
+        if (trace) {
+            logger.log(
+                3,
+                "AiStudioScreenVideo",
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-entry jpegBytes=${jpeg.size} " +
+                    "screenDescription=$screenDescription closed=${closed.get()} setupDelivered=${setupDelivered.get()} " +
+                    "serverSetupSeen=$serverSetupSeen webView=${webView != null}",
+            )
+        }
+        if (!screenDescription) {
+            logger.log(0, "AiStudioScreenVideo", "FRAME_CAUSAL id=$frameSeq stage=client-reject reason=screen-description-disabled")
+            return GeminiLiveClient.SendResult.FAILED
+        }
+        if (jpeg.isEmpty()) {
+            logger.log(1, "AiStudioScreenVideo", "FRAME_CAUSAL id=$frameSeq stage=client-reject reason=empty-jpeg")
+            return GeminiLiveClient.SendResult.SENT
+        }
+        if (closed.get()) {
+            logger.log(1, "AiStudioScreenVideo", "FRAME_CAUSAL id=$frameSeq stage=client-reject reason=client-closed")
+            return GeminiLiveClient.SendResult.CLOSED
+        }
+        if (!setupDelivered.get()) {
+            val count = screenFrameNotReady.incrementAndGet()
+            logger.log(
+                1,
+                "AiStudioScreenVideo",
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-gate reason=setup-not-delivered notReadyCount=$count " +
+                    "serverSetupSeen=$serverSetupSeen bootstrap=${safe(lastBootstrapState, 700)} " +
+                    "direct=${safe(lastDirectState, 700)} screen=${safe(lastScreenVideoState, 900)}",
+            )
+            return GeminiLiveClient.SendResult.NOT_READY
+        }
+        val current = webView
+        if (current == null) {
+            val count = screenFrameNotReady.incrementAndGet()
+            logger.log(
+                1,
+                "AiStudioScreenVideo",
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-gate reason=webview-null notReadyCount=$count setupDelivered=true",
+            )
+            return GeminiLiveClient.SendResult.NOT_READY
+        }
         lastInputAt = SystemClock.elapsedRealtime()
         val encoded = Base64.encodeToString(jpeg, Base64.NO_WRAP)
         if (encoded.length > SCREEN_DESCRIPTION_MAX_BASE64_CHARS) {
             backpressureEvents.incrementAndGet()
-            logger.log(1, "AiStudioScreenVideo", "FRAME_REJECT reason=too-large jpegBytes=${jpeg.size} base64Chars=${encoded.length}")
+            logger.log(
+                1,
+                "AiStudioScreenVideo",
+                "FRAME_CAUSAL id=$frameSeq stage=client-reject reason=too-large jpegBytes=${jpeg.size} " +
+                    "base64Chars=${encoded.length} limit=$SCREEN_DESCRIPTION_MAX_BASE64_CHARS",
+            )
             return GeminiLiveClient.SendResult.BACKPRESSURED
         }
         val quoted = JSONObject.quote(encoded)
+        val posted = screenFramePosted.incrementAndGet()
+        if (trace) {
+            logger.log(
+                3,
+                "AiStudioScreenVideo",
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=post-to-webview posted=$posted jpegBytes=${jpeg.size} " +
+                    "base64Chars=${encoded.length}",
+            )
+        }
         current.post {
-            if (closed.get()) return@post
+            if (closed.get()) {
+                logger.log(1, "AiStudioScreenVideo", "FRAME_CAUSAL id=$frameSeq stage=webview-post-abort reason=client-closed")
+                return@post
+            }
+            if (trace) {
+                logger.log(3, "AiStudioScreenVideo", "FRAME_CAUSAL id=$frameSeq stage=js-eval-begin r19InstalledExpected=true")
+            }
             current.evaluateJavascript(
-                "JSON.stringify(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.pushJpeg($quoted):({ok:false,error:'r19-not-installed'}))",
+                "JSON.stringify(window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.pushJpeg($quoted,$frameSeq):({ok:false,error:'r19-not-installed',nativeSeq:$frameSeq}))",
             ) { raw ->
+                val callbackCount = screenFrameJsCallbacks.incrementAndGet()
                 val decoded = decodeEvalValue(raw)
-                logger.log(3, "AiStudioScreenVideo", "FRAME_PUSH jpegBytes=${jpeg.size} ${safe(decoded, 900)}")
+                logger.log(
+                    if (decoded.contains("\"ok\":false")) 1 else 3,
+                    "AiStudioScreenVideo",
+                    "FRAME_CAUSAL id=$frameSeq stage=js-eval-result callbacks=$callbackCount jpegBytes=${jpeg.size} " +
+                        "result=${safe(decoded, 1800)}",
+                )
             }
         }
         return GeminiLiveClient.SendResult.SENT
@@ -228,7 +300,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts",
+            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()}",
         )
     }
 
@@ -627,6 +699,19 @@ internal class AiStudioWebRealtimeClient(
                     } else {
                         "AI_STUDIO_LIVE_SETUP_STALLED"
                     }
+                    logger.log(
+                        0,
+                        "AiStudioScreenVideo",
+                        "SETUP_TIMEOUT_FORENSIC reason=$reason totalMs=$totalFor stalledMs=$stalledFor " +
+                            "bootstrapInstalled=$bootstrapInstalled configured=$configured serverSetupSeen=$serverSetupSeen " +
+                            "setupDelivered=${setupDelivered.get()} frameCalls=${screenFrameCalls.get()} " +
+                            "frameNotReady=${screenFrameNotReady.get()} framePosted=${screenFramePosted.get()} " +
+                            "jsCallbacks=${screenFrameJsCallbacks.get()} recoveryAttempts=$bootstrapRecoveryAttempts " +
+                            "lastInstall=${safe(lastBootstrapInstallError, 400)} " +
+                            "bootstrap=${safe(lastBootstrapState, 2400)} direct=${safe(lastDirectState, 2400)} " +
+                            "screen=${safe(lastScreenVideoState, 3200)} output=${safe(lastOutputState, 2400)} " +
+                            "language=${safe(lastLanguageGuardState, 1800)}",
+                    )
                     fail(IllegalStateException("$reason bootstrapInstalled=$bootstrapInstalled configured=$configured recoveryAttempts=$bootstrapRecoveryAttempts lastInstall=$lastBootstrapInstallError"))
                     return
                 }
@@ -837,7 +922,19 @@ internal class AiStudioWebRealtimeClient(
     }
 
     private fun maybeDeliverSetup() {
-        if (closed.get() || setupDelivered.get() || !serverSetupSeen) return
+        if (closed.get()) {
+            logScreenSetupGate("client-closed", "setupDelivered=${setupDelivered.get()} serverSetupSeen=$serverSetupSeen")
+            return
+        }
+        if (setupDelivered.get()) return
+        if (!serverSetupSeen) {
+            logScreenSetupGate(
+                "server-setup-not-seen",
+                "screenDescription=$screenDescription frameCalls=${screenFrameCalls.get()} framePosted=${screenFramePosted.get()} " +
+                    "bootstrap=${safe(lastBootstrapState, 600)} direct=${safe(lastDirectState, 600)} screen=${safe(lastScreenVideoState, 800)}",
+            )
+            return
+        }
         if (!screenDescription && operationMode == GeminiLiveClient.OperationMode.TRANSLATE) {
             val language = runCatching { JSONObject(lastLanguageGuardState) }.getOrNull() ?: return
             if (!languageGuardConfigured || !language.optBoolean("targetLanguageVerified", false)) {
@@ -846,35 +943,58 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         if (screenDescription) {
-            val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
-            val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
-            val heartbeatSetupComplete = direct.optBoolean("screenSetupComplete", false)
-            if (!heartbeatEnabled || !heartbeatSetupComplete) {
-                logger.log(
-                    2,
-                    "AiStudioScreenVideo",
-                    "WAITING_SCREEN_CONTROL heartbeatEnabled=$heartbeatEnabled setupComplete=$heartbeatSetupComplete " +
-                        "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
-                        "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)}",
+            val direct = runCatching { JSONObject(lastDirectState) }.getOrNull()
+            if (direct == null) {
+                logScreenSetupGate(
+                    "direct-state-missing",
+                    "serverSetupSeen=$serverSetupSeen frameCalls=${screenFrameCalls.get()} screen=${safe(lastScreenVideoState, 800)}",
                 )
                 return
             }
-            val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
+            val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
+            val heartbeatSetupComplete = direct.optBoolean("screenSetupComplete", false)
+            if (!heartbeatEnabled || !heartbeatSetupComplete) {
+                logScreenSetupGate(
+                    "WAITING_SCREEN_CONTROL",
+                    "heartbeatEnabled=$heartbeatEnabled setupComplete=$heartbeatSetupComplete " +
+                        "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
+                        "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)} " +
+                        "heartbeatQueued=${direct.optLong("screenHeartbeatsQueued", 0L)} " +
+                        "serverSetupSeen=$serverSetupSeen frameCalls=${screenFrameCalls.get()}",
+                )
+                return
+            }
+            val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull()
+            if (screen == null) {
+                logScreenSetupGate(
+                    "screen-state-missing",
+                    "serverSetupSeen=$serverSetupSeen heartbeatSetupComplete=$heartbeatSetupComplete frameCalls=${screenFrameCalls.get()}",
+                )
+                return
+            }
             val videoReady = screen.optBoolean("videoTrackReady", false)
             val cameraTransportReady = screen.optBoolean("cameraTransportReady", false)
             val gumVideoRequests = screen.optLong("gumVideoRequests", 0L)
             if (!videoReady || !cameraTransportReady || gumVideoRequests <= 0L) {
-                logger.log(
-                    2,
-                    "AiStudioScreenVideo",
-                    "WAITING_VIDEO_TRANSPORT enabled=${screen.optBoolean("enabled", false)} " +
-                        "videoTrackReady=$videoReady cameraTransportReady=$cameraTransportReady " +
-                        "gumVideoRequests=$gumVideoRequests cameraClicks=${screen.optInt("cameraClicks", 0)} " +
-                        "cameraRetries=${screen.optInt("cameraRetries", 0)} gate=${safe(screen.optString("cameraGateReason", ""), 120)} " +
-                        "displayRequests=${screen.optLong("displayRequests", 0L)}",
+                logScreenSetupGate(
+                    "WAITING_VIDEO_TRANSPORT",
+                    "enabled=${screen.optBoolean("enabled", false)} videoTrackReady=$videoReady " +
+                        "cameraTransportReady=$cameraTransportReady gumVideoRequests=$gumVideoRequests " +
+                        "framesQueued=${screen.optLong("framesQueued", 0L)} framesDrawn=${screen.optLong("framesDrawn", 0L)} " +
+                        "framePushCalls=${screen.optLong("framePushCalls", 0L)} lastFrameAgeMs=${screen.optLong("lastFrameAgeMs", -1L)} " +
+                        "cameraClicks=${screen.optInt("cameraClicks", 0)} cameraRetries=${screen.optInt("cameraRetries", 0)} " +
+                        "gate=${safe(screen.optString("cameraGateReason", ""), 120)} displayRequests=${screen.optLong("displayRequests", 0L)} " +
+                        "nativeFrameCalls=${screenFrameCalls.get()} nativeFrameNotReady=${screenFrameNotReady.get()}",
                 )
                 return
             }
+            logScreenSetupGate(
+                "screen-setup-gates-passed",
+                "videoTrackReady=$videoReady cameraTransportReady=$cameraTransportReady gumVideoRequests=$gumVideoRequests " +
+                    "framesQueued=${screen.optLong("framesQueued", 0L)} framesDrawn=${screen.optLong("framesDrawn", 0L)} " +
+                    "armSettleMs=$ARM_SETTLE_MS",
+                force = true,
+            )
             main.postDelayed({
                 if (closed.get() || setupDelivered.get()) return@postDelayed
                 setupDelivered.set(true)
@@ -902,6 +1022,24 @@ internal class AiStudioWebRealtimeClient(
             logger.log(2, "AiStudioLive", "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage carrierRequests=$carriers template=${safe(direct.optString("templateMime"), 100)} hidden=false debugVisible=true isolatedLiveHost=true")
             listener.onSetupComplete()
         }, ARM_SETTLE_MS)
+    }
+
+    private fun logScreenSetupGate(reason: String, detail: String, force: Boolean = false) {
+        if (!screenDescription) return
+        val now = SystemClock.elapsedRealtime()
+        val signature = "$reason|$detail"
+        if (!force && signature == lastScreenSetupGateSignature && now - lastScreenSetupGateAt < SCREEN_SETUP_GATE_LOG_INTERVAL_MS) {
+            return
+        }
+        lastScreenSetupGateSignature = signature
+        lastScreenSetupGateAt = now
+        logger.log(
+            2,
+            "AiStudioScreenVideo",
+            "SETUP_GATE reason=$reason setupDelivered=${setupDelivered.get()} serverSetupSeen=$serverSetupSeen " +
+                "frameCalls=${screenFrameCalls.get()} frameNotReady=${screenFrameNotReady.get()} " +
+                "framePosted=${screenFramePosted.get()} jsCallbacks=${screenFrameJsCallbacks.get()} $detail",
+        )
     }
 
     private fun setCarrierActive(enabled: Boolean) {
@@ -1027,6 +1165,7 @@ internal class AiStudioWebRealtimeClient(
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
         private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
+        private const val SCREEN_SETUP_GATE_LOG_INTERVAL_MS = 2_500L
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L
         private const val MAX_ROUTE_REPAIR_ATTEMPTS = 2

@@ -60,7 +60,8 @@ class ScreenFrameCapture(
             2,
             TAG,
             "FRAME_PIPELINE_START_BEGIN source=${sourceWidth}x$sourceHeight capture=${width}x$height " +
-                "densityDpi=$densityDpi surfaceValid=${imageReader.surface.isValid} thread=${Thread.currentThread().name}",
+                "densityDpi=$densityDpi surfaceValid=${runCatching { imageReader.surface.isValid }.getOrDefault(false)} " +
+                "thread=${Thread.currentThread().name}",
         )
         imageReader.setOnImageAvailableListener({ reader -> onImageAvailable(reader) }, worker)
         virtualDisplay = mediaProjection.createVirtualDisplay(
@@ -78,7 +79,7 @@ class ScreenFrameCapture(
             TAG,
             "FRAME_PIPELINE_STARTED source=${sourceWidth}x$sourceHeight capture=${width}x$height " +
                 "densityDpi=$densityDpi maxFps=1 audioInput=false virtualDisplay=${virtualDisplay != null} " +
-                "surfaceValid=${imageReader.surface.isValid} workerAlive=${workerThread.isAlive}",
+                "surfaceValid=${runCatching { imageReader.surface.isValid }.getOrDefault(false)} workerAlive=${workerThread.isAlive}",
         )
     }
 
@@ -282,7 +283,6 @@ class ScreenFrameCapture(
             }
             if (!compressed) {
                 logger.log(1, TAG, "FRAME_TRACE candidate=$candidateId stage=jpeg-compress-false quality=$quality")
-                continue
             }
             if (bytes.size <= MAX_FRAME_BYTES || quality == JPEG_QUALITIES.last()) return bytes
         }

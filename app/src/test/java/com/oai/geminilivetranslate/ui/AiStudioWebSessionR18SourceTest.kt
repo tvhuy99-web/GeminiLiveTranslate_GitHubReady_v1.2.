@@ -178,7 +178,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(realtime.contains("GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT"))
         assertTrue(realtime.contains("configureScreenHeartbeat(true"))
         assertTrue(realtime.contains("WAITING_SCREEN_CONTROL"))
-        assertFalse(realtime.contains("instructionApplied=$instructionApplied"))
+        assertFalse(realtime.contains("instructionApplied="))
         assertTrue(realtime.contains("screenSetupComplete"))
         val direct = source("ui/AiStudioWebSessionR14DirectLiveEngine.kt")
         val output = source("ui/AiStudioWebSessionR16LiveOutputEngine.kt")

@@ -40,12 +40,28 @@ class ScreenFrameCapture(
     private val imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
     private var virtualDisplay: VirtualDisplay? = null
     private var lastFrameAt = 0L
+    private var imageCallbacks = 0L
+    private var acquiredImages = 0L
+    private var acquireNulls = 0L
+    private var candidateFrames = 0L
     private var framesEncoded = 0L
+    private var framesDelivered = 0L
     private var framesSkipped = 0L
+    private var encodeNulls = 0L
+    private var callbackErrors = 0L
 
     fun start() {
         check(!closed.get()) { "ScreenFrameCapture đã đóng" }
-        if (virtualDisplay != null) return
+        if (virtualDisplay != null) {
+            logger.log(1, TAG, "FRAME_PIPELINE_START_SKIP reason=already-started")
+            return
+        }
+        logger.log(
+            2,
+            TAG,
+            "FRAME_PIPELINE_START_BEGIN source=${sourceWidth}x$sourceHeight capture=${width}x$height " +
+                "densityDpi=$densityDpi surfaceValid=${imageReader.surface.isValid} thread=${Thread.currentThread().name}",
+        )
         imageReader.setOnImageAvailableListener({ reader -> onImageAvailable(reader) }, worker)
         virtualDisplay = mediaProjection.createVirtualDisplay(
             "GeminiLiveScreenDescription",
@@ -60,8 +76,9 @@ class ScreenFrameCapture(
         logger.log(
             2,
             TAG,
-            "Bắt đầu screen capture source=${sourceWidth}x$sourceHeight capture=${width}x$height " +
-                "densityDpi=$densityDpi maxFps=1 audioInput=false",
+            "FRAME_PIPELINE_STARTED source=${sourceWidth}x$sourceHeight capture=${width}x$height " +
+                "densityDpi=$densityDpi maxFps=1 audioInput=false virtualDisplay=${virtualDisplay != null} " +
+                "surfaceValid=${imageReader.surface.isValid} workerAlive=${workerThread.isAlive}",
         )
     }
 
@@ -73,40 +90,161 @@ class ScreenFrameCapture(
         runCatching { imageReader.close() }
         worker.removeCallbacksAndMessages(null)
         workerThread.quitSafely()
-        logger.log(2, TAG, "Dừng screen capture encoded=$framesEncoded skipped=$framesSkipped")
+        logger.log(
+            2,
+            TAG,
+            "FRAME_PIPELINE_STOP callbacks=$imageCallbacks acquired=$acquiredImages acquireNulls=$acquireNulls " +
+                "candidates=$candidateFrames encoded=$framesEncoded delivered=$framesDelivered " +
+                "skipped=$framesSkipped encodeNulls=$encodeNulls callbackErrors=$callbackErrors",
+        )
     }
 
     private fun onImageAvailable(reader: ImageReader) {
-        val image = runCatching { reader.acquireLatestImage() }.getOrNull() ?: return
+        imageCallbacks++
+        val image = runCatching { reader.acquireLatestImage() }
+            .onFailure { error ->
+                logger.log(
+                    0,
+                    TAG,
+                    "FRAME_TRACE stage=acquire-exception callback=$imageCallbacks thread=${Thread.currentThread().name}",
+                    error,
+                )
+            }
+            .getOrNull()
+        if (image == null) {
+            acquireNulls++
+            if (acquireNulls == 1L || acquireNulls % 30L == 0L) {
+                logger.log(
+                    1,
+                    TAG,
+                    "FRAME_TRACE stage=acquire-null callback=$imageCallbacks acquireNulls=$acquireNulls " +
+                        "closed=${closed.get()} surfaceValid=${runCatching { imageReader.surface.isValid }.getOrDefault(false)}",
+                )
+            }
+            return
+        }
+
+        acquiredImages++
+        var traceId = 0L
         try {
-            if (closed.get()) return
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastFrameAt < FRAME_INTERVAL_MS) {
-                framesSkipped++
+            if (closed.get()) {
+                logger.log(2, TAG, "FRAME_TRACE stage=drop reason=capture-closed callback=$imageCallbacks")
                 return
             }
+
+            val now = SystemClock.elapsedRealtime()
+            val ageMs = if (lastFrameAt == 0L) Long.MAX_VALUE else now - lastFrameAt
+            if (ageMs < FRAME_INTERVAL_MS) {
+                framesSkipped++
+                if (framesSkipped == 1L || framesSkipped % 120L == 0L) {
+                    logger.log(
+                        3,
+                        TAG,
+                        "FRAME_TRACE stage=drop reason=fps-throttle skipped=$framesSkipped callbacks=$imageCallbacks " +
+                            "acquired=$acquiredImages ageMs=$ageMs intervalMs=$FRAME_INTERVAL_MS",
+                    )
+                }
+                return
+            }
+
             lastFrameAt = now
-            val jpeg = encodeJpeg(image) ?: return
+            traceId = ++candidateFrames
+            if (shouldTrace(traceId)) {
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=image-acquired callback=$imageCallbacks acquired=$acquiredImages " +
+                        "image=${image.width}x${image.height} format=${image.format} planes=${image.planes.size} " +
+                        "timestampNs=${image.timestamp} surfaceValid=${runCatching { reader.surface.isValid }.getOrDefault(false)}",
+                )
+            }
+
+            val encodeStarted = SystemClock.elapsedRealtimeNanos()
+            val jpeg = encodeJpeg(image, traceId)
+            val encodeMs = (SystemClock.elapsedRealtimeNanos() - encodeStarted) / 1_000_000.0
+            if (jpeg == null || jpeg.isEmpty()) {
+                encodeNulls++
+                logger.log(
+                    1,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=encode-empty encodeNulls=$encodeNulls encodeMs=${"%.3f".format(encodeMs)}",
+                )
+                return
+            }
+
             framesEncoded++
-            if (framesEncoded == 1L || framesEncoded % 30L == 0L) {
-                logger.log(3, TAG, "Đã mã hóa frame=$framesEncoded jpegBytes=${jpeg.size}")
+            if (shouldTrace(traceId)) {
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=jpeg-encoded encoded=$framesEncoded jpegBytes=${jpeg.size} " +
+                        "encodeMs=${"%.3f".format(encodeMs)}",
+                )
+            }
+
+            val callbackStarted = SystemClock.elapsedRealtimeNanos()
+            if (shouldTrace(traceId)) {
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=callback-begin jpegBytes=${jpeg.size} thread=${Thread.currentThread().name}",
+                )
             }
             onFrame(jpeg)
+            framesDelivered++
+            if (shouldTrace(traceId)) {
+                val callbackMs = (SystemClock.elapsedRealtimeNanos() - callbackStarted) / 1_000_000.0
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=callback-end delivered=$framesDelivered callbackMs=${"%.3f".format(callbackMs)}",
+                )
+            }
         } catch (error: Throwable) {
-            if (!closed.get()) logger.log(1, TAG, "Không mã hóa được frame màn hình", error)
+            callbackErrors++
+            if (!closed.get()) {
+                logger.log(
+                    0,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=exception callbackErrors=$callbackErrors " +
+                        "callbacks=$imageCallbacks acquired=$acquiredImages encoded=$framesEncoded delivered=$framesDelivered",
+                    error,
+                )
+            }
         } finally {
             image.close()
         }
     }
 
-    private fun encodeJpeg(image: Image): ByteArray? {
-        val plane = image.planes.firstOrNull() ?: return null
+    private fun encodeJpeg(image: Image, traceId: Long): ByteArray? {
+        val plane = image.planes.firstOrNull()
+        if (plane == null) {
+            logger.log(1, TAG, "FRAME_TRACE id=$traceId stage=encode-reject reason=no-plane planes=${image.planes.size}")
+            return null
+        }
+
         val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
-        if (pixelStride <= 0 || rowStride <= 0) return null
+        if (pixelStride <= 0 || rowStride <= 0) {
+            logger.log(
+                1,
+                TAG,
+                "FRAME_TRACE id=$traceId stage=encode-reject reason=invalid-stride pixelStride=$pixelStride rowStride=$rowStride",
+            )
+            return null
+        }
+
         val rowPadding = (rowStride - pixelStride * width).coerceAtLeast(0)
         val paddedWidth = width + rowPadding / pixelStride
+        if (shouldTrace(traceId)) {
+            logger.log(
+                3,
+                TAG,
+                "FRAME_TRACE id=$traceId stage=buffer-layout remaining=${buffer.remaining()} capacity=${buffer.capacity()} " +
+                    "pixelStride=$pixelStride rowStride=$rowStride rowPadding=$rowPadding paddedWidth=$paddedWidth target=${width}x$height",
+            )
+        }
 
         val padded = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
         val cropped: Bitmap
@@ -116,32 +254,50 @@ class ScreenFrameCapture(
             cropped = if (paddedWidth == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height)
         } catch (error: Throwable) {
             padded.recycle()
+            logger.log(0, TAG, "FRAME_TRACE id=$traceId stage=bitmap-copy-error paddedWidth=$paddedWidth height=$height", error)
             throw error
         }
 
         return try {
-            encodeBounded(cropped)
+            encodeBounded(cropped, traceId)
         } finally {
             if (cropped !== padded) cropped.recycle()
             padded.recycle()
         }
     }
 
-    private fun encodeBounded(bitmap: Bitmap): ByteArray {
+    private fun encodeBounded(bitmap: Bitmap, traceId: Long): ByteArray {
         for (quality in JPEG_QUALITIES) {
             val output = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)
+            val compressed = bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)
             val bytes = output.toByteArray()
+            if (shouldTrace(traceId)) {
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_TRACE id=$traceId stage=jpeg-attempt quality=$quality compressed=$compressed bytes=${bytes.size} " +
+                        "limit=$MAX_FRAME_BYTES",
+                )
+            }
+            if (!compressed) {
+                logger.log(1, TAG, "FRAME_TRACE id=$traceId stage=jpeg-compress-false quality=$quality")
+                continue
+            }
             if (bytes.size <= MAX_FRAME_BYTES || quality == JPEG_QUALITIES.last()) return bytes
         }
         return ByteArray(0)
     }
+
+    private fun shouldTrace(traceId: Long): Boolean =
+        traceId in 1L..FIRST_FRAMES_FULL_TRACE || traceId % PERIODIC_TRACE_INTERVAL == 0L
 
     companion object {
         private const val TAG = "ScreenFrameCapture"
         private const val MAX_LONG_EDGE = 1280
         private const val FRAME_INTERVAL_MS = 1_000L
         private const val MAX_FRAME_BYTES = 900 * 1024
+        private const val FIRST_FRAMES_FULL_TRACE = 10L
+        private const val PERIODIC_TRACE_INTERVAL = 30L
         private val JPEG_QUALITIES = intArrayOf(78, 68, 56)
 
         internal fun fitWithin(width: Int, height: Int, maxLongEdge: Int): Pair<Int, Int> {

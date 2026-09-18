@@ -1,14 +1,14 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-18-r19.11-camera-retry-silent-audio"
+    const val VERSION = "2026-09-18-r19.12-frame-heartbeat"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-18-r19.11-camera-retry-silent-audio';
+  const VERSION='2026-09-18-r19.12-frame-heartbeat';
   const CAMERA_POST_START_MIN_MS=350;
   const CAMERA_RETRY_NO_GUM_MS=3000;
   const MAX_CAMERA_TAP_ATTEMPTS=2;
@@ -590,6 +590,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         if(img.naturalWidth>0&&img.naturalHeight>0&&(canvas.width!==img.naturalWidth||canvas.height!==img.naturalHeight)){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;}
         ctx.drawImage(img,0,0,canvas.width,canvas.height);state.lastDrawSeq=seq;state.framesDrawn++;state.lastFrameAt=Date.now();
         try{if(state.videoTrack&&typeof state.videoTrack.requestFrame==='function')state.videoTrack.requestFrame();}catch(_){}
+        try{const d=window.__AIS_LIVE_DIRECT_ENGINE__;if(d&&typeof d.queueScreenHeartbeat==='function')d.queueScreenHeartbeat();}catch(_){}
         if(state.framesDrawn===1||state.framesDrawn%20===0)diag('FRAME_DRAWN',{frames:state.framesDrawn,width:canvas.width,height:canvas.height,base64Chars:s.length,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
       }catch(e){state.frameErrors++;diag('FRAME_DRAW_ERROR',{count:state.frameErrors,name:String(e&&e.name||'Error')});}
     };

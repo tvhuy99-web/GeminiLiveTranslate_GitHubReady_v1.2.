@@ -150,7 +150,7 @@ class LiveVideoDescriptionService : Service() {
                         "clientPresent=${clientSnapshot != null} stopping=${stopping.get()} thread=${Thread.currentThread().name}",
                 )
             }
-            val result = clientSnapshot?.sendVideoFrame(jpeg)
+            val result = clientSnapshot?.sendVideoFrame(jpeg, diagnosticFrameId = seq)
             if (trace || result == ScreenDescriptionLiveClient.SendResult.NOT_READY || result == null) {
                 logger.log(
                     if (result == ScreenDescriptionLiveClient.SendResult.NOT_READY || result == null) 1 else 3,

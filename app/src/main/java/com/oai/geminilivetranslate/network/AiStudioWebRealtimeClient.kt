@@ -846,6 +846,20 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         if (screenDescription) {
+            val bootstrap = runCatching { JSONObject(lastBootstrapState) }.getOrNull() ?: return
+            val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
+            val instructionApplied = bootstrap.optBoolean("instructionApplied", false)
+            val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
+            if (!instructionApplied || !heartbeatEnabled) {
+                logger.log(
+                    2,
+                    "AiStudioScreenVideo",
+                    "WAITING_SCREEN_CONTROL instructionApplied=$instructionApplied heartbeatEnabled=$heartbeatEnabled " +
+                        "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
+                        "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)}",
+                )
+                return
+            }
             val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
             val videoReady = screen.optBoolean("videoTrackReady", false)
             val cameraTransportReady = screen.optBoolean("cameraTransportReady", false)

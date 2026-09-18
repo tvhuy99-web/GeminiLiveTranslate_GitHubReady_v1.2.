@@ -98,7 +98,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   function rewriteEnvelope(body){
     if(typeof body!=='string'||body.indexOf('req')<0||body.indexOf('=')<0)return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};
     let sp;try{sp=new URLSearchParams(body);}catch(_){return {body:body,carrierFrames:0,replaced:0,videoReplaced:0};}
-    let carrierFrames=0,replaced=0,videoReplaced=0;
+    let carrierFrames=0,replaced=0,videoReplaced=0,heartbeatInjected=0;
     const names=[];sp.forEach(function(_,k){if(/^req\d+___data__$/.test(String(k||'')))names.push(String(k));});
     for(let i=0;i<names.length;i++){
       const name=names[i];const raw=sp.get(name);const p=parseReq(raw);if(!p)continue;
@@ -106,6 +106,16 @@ object AiStudioWebSessionR14DirectLiveEngine {
       if(!state.templateObserved){
         state.templateObserved=true;state.templateMime=p.slot.mime;state.templatePayloadChars=p.slot.chars;
         emit('AUDIO_TEMPLATE_CAPTURED',{mime:p.slot.mime,payloadChars:p.slot.chars,pathDepth:p.slot.path.length});
+      }
+      if(state.screenHeartbeatEnabled&&state.screenHeartbeatPending&&!state.screenTurnInFlight&&!heartbeatInjected){
+        const realtime=Array.isArray(p.parsed)&&Array.isArray(p.parsed[2])?p.parsed[2]:null;
+        if(realtime&&state.screenHeartbeatText){
+          while(realtime.length<5)realtime.push(null);
+          realtime[4]=state.screenHeartbeatText;
+          sp.set(name,JSON.stringify(p.parsed));
+          heartbeatInjected++;state.screenHeartbeatsInjected++;state.screenHeartbeatPending=false;state.screenTurnInFlight=true;state.lastScreenHeartbeatAt=Date.now();
+          emit('SCREEN_HEARTBEAT_INJECTED',{count:state.screenHeartbeatsInjected,textChars:state.screenHeartbeatText.length,realtimeTextField:5,requestOrdinal:state.carrierRequests+1});
+        }
       }
       if(state.armed&&state.latestVideo){
         const video=state.latestVideo;state.latestVideo='';
@@ -125,9 +135,13 @@ object AiStudioWebSessionR14DirectLiveEngine {
     if(replaced){
       state.injectedRequests++;
       emit('MEDIA_REPLACED',{replaced:replaced,videoReplaced:videoReplaced,carrierFrames:carrierFrames,remaining:state.queue.length,totalReplaced:state.replacedFrames,totalVideoReplaced:state.videoReplaced,requestOrdinal:state.carrierRequests});
-      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:replaced,videoReplaced:videoReplaced};
+      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:replaced,videoReplaced:videoReplaced,heartbeatInjected:heartbeatInjected};
     }
-    return {body:body,carrierFrames:carrierFrames,replaced:0,videoReplaced:0};
+    if(heartbeatInjected){
+      state.injectedRequests++;
+      return {body:sp.toString(),carrierFrames:carrierFrames,replaced:0,videoReplaced:0,heartbeatInjected:heartbeatInjected};
+    }
+    return {body:body,carrierFrames:carrierFrames,replaced:0,videoReplaced:0,heartbeatInjected:0};
   }
   function describe(){
     return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,videoPending:!!state.latestVideo,videoEnqueued:state.videoEnqueued,videoReplaced:state.videoReplaced,videoDropped:state.videoDropped,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus};

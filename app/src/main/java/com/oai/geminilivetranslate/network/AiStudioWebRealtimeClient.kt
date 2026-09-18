@@ -34,6 +34,7 @@ import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR17ProductionBootstrap
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR18LanguageGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR19ScreenVideoBridge
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR21DesktopShareScreenExperiment
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.util.concurrent.atomic.AtomicBoolean
@@ -324,6 +325,13 @@ internal class AiStudioWebRealtimeClient(
             AiStudioNativeTapDocumentStart.DOCUMENT_START,
             setOf(AI_STUDIO_ORIGIN),
         )
+        if (screenDescription) {
+            WebViewCompat.addDocumentStartJavaScript(
+                created,
+                AiStudioWebSessionR21DesktopShareScreenExperiment.DOCUMENT_START,
+                setOf(AI_STUDIO_ORIGIN),
+            )
+        }
         WebViewCompat.addDocumentStartJavaScript(
             created,
             AiStudioWebSessionR14DirectLiveEngine.DOCUMENT_START,
@@ -445,6 +453,18 @@ internal class AiStudioWebRealtimeClient(
         )
         view.settings.apply {
             javaScriptEnabled = true
+            if (screenDescription) {
+                val originalUa = userAgentString.orEmpty()
+                userAgentString = DESKTOP_SHARE_USER_AGENT
+                useWideViewPort = true
+                loadWithOverviewMode = true
+                logger.log(
+                    2,
+                    "AiStudioDesktopShare",
+                    "DESKTOP_WEBVIEW_MODE enabled=true originalUa=${safe(originalUa, 260)} " +
+                        "desktopUa=${safe(userAgentString.orEmpty(), 260)} wideViewport=$useWideViewPort overview=$loadWithOverviewMode",
+                )
+            }
             domStorageEnabled = true
             databaseEnabled = true
             cacheMode = WebSettings.LOAD_DEFAULT
@@ -797,7 +817,7 @@ internal class AiStudioWebRealtimeClient(
             "null"
         }
         val directScreenCall = if (screenDescription) {
-            "(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat(true,$screenHeartbeat):({ok:false,error:'r14-screen-heartbeat-not-installed'}))"
+            "(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat(false,$screenHeartbeat):({ok:false,error:'r14-screen-heartbeat-not-installed'}))"
         } else {
             "null"
         }
@@ -943,56 +963,37 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         if (screenDescription) {
-            val direct = runCatching { JSONObject(lastDirectState) }.getOrNull()
-            if (direct == null) {
-                logScreenSetupGate(
-                    "direct-state-missing",
-                    "serverSetupSeen=$serverSetupSeen frameCalls=${screenFrameCalls.get()} screen=${safe(lastScreenVideoState, 800)}",
-                )
-                return
-            }
-            val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
-            val heartbeatSetupComplete = direct.optBoolean("screenSetupComplete", false)
-            if (!heartbeatEnabled || !heartbeatSetupComplete) {
-                logScreenSetupGate(
-                    "WAITING_SCREEN_CONTROL",
-                    "heartbeatEnabled=$heartbeatEnabled setupComplete=$heartbeatSetupComplete " +
-                        "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
-                        "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)} " +
-                        "heartbeatQueued=${direct.optLong("screenHeartbeatsQueued", 0L)} " +
-                        "serverSetupSeen=$serverSetupSeen frameCalls=${screenFrameCalls.get()}",
-                )
-                return
-            }
             val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull()
             if (screen == null) {
                 logScreenSetupGate(
-                    "screen-state-missing",
-                    "serverSetupSeen=$serverSetupSeen heartbeatSetupComplete=$heartbeatSetupComplete frameCalls=${screenFrameCalls.get()}",
+                    "desktop-share-state-missing",
+                    "serverSetupSeen=$serverSetupSeen frameCalls=${screenFrameCalls.get()} direct=${safe(lastDirectState, 700)}",
                 )
                 return
             }
             val videoReady = screen.optBoolean("videoTrackReady", false)
-            val cameraTransportReady = screen.optBoolean("cameraTransportReady", false)
-            val gumVideoRequests = screen.optLong("gumVideoRequests", 0L)
-            if (!videoReady || !cameraTransportReady || gumVideoRequests <= 0L) {
+            val transportReady = screen.optBoolean("cameraTransportReady", false)
+            val displayRequests = screen.optLong("displayRequests", 0L)
+            val displayStreamsReturned = screen.optLong("displayStreamsReturned", 0L)
+            val displayHookInstalled = screen.optBoolean("displayHookInstalled", false)
+            if (!displayHookInstalled || !videoReady || !transportReady || displayRequests <= 0L || displayStreamsReturned <= 0L) {
                 logScreenSetupGate(
-                    "WAITING_VIDEO_TRANSPORT",
-                    "enabled=${screen.optBoolean("enabled", false)} videoTrackReady=$videoReady " +
-                        "cameraTransportReady=$cameraTransportReady gumVideoRequests=$gumVideoRequests " +
+                    "WAITING_DESKTOP_SHARE_STREAM",
+                    "hookInstalled=$displayHookInstalled videoTrackReady=$videoReady transportReady=$transportReady " +
+                        "displayRequests=$displayRequests displayStreamsReturned=$displayStreamsReturned " +
+                        "displayNativeAvailable=${screen.optBoolean("displayNativeAvailable", false)} " +
                         "framesQueued=${screen.optLong("framesQueued", 0L)} framesDrawn=${screen.optLong("framesDrawn", 0L)} " +
-                        "framePushCalls=${screen.optLong("framePushCalls", 0L)} lastFrameAgeMs=${screen.optLong("lastFrameAgeMs", -1L)} " +
-                        "cameraClicks=${screen.optInt("cameraClicks", 0)} cameraRetries=${screen.optInt("cameraRetries", 0)} " +
-                        "gate=${safe(screen.optString("cameraGateReason", ""), 120)} displayRequests=${screen.optLong("displayRequests", 0L)} " +
+                        "lastDisplayRequestAgeMs=${screen.optLong("lastDisplayRequestAgeMs", -1L)} " +
+                        "lastDisplayReturnAgeMs=${screen.optLong("lastDisplayReturnAgeMs", -1L)} " +
                         "nativeFrameCalls=${screenFrameCalls.get()} nativeFrameNotReady=${screenFrameNotReady.get()}",
                 )
                 return
             }
             logScreenSetupGate(
-                "screen-setup-gates-passed",
-                "videoTrackReady=$videoReady cameraTransportReady=$cameraTransportReady gumVideoRequests=$gumVideoRequests " +
-                    "framesQueued=${screen.optLong("framesQueued", 0L)} framesDrawn=${screen.optLong("framesDrawn", 0L)} " +
-                    "armSettleMs=$ARM_SETTLE_MS",
+                "desktop-share-setup-gates-passed",
+                "videoTrackReady=$videoReady transportReady=$transportReady displayRequests=$displayRequests " +
+                    "displayStreamsReturned=$displayStreamsReturned framesQueued=${screen.optLong("framesQueued", 0L)} " +
+                    "framesDrawn=${screen.optLong("framesDrawn", 0L)} armSettleMs=$ARM_SETTLE_MS",
                 force = true,
             )
             main.postDelayed({
@@ -1003,8 +1004,9 @@ internal class AiStudioWebRealtimeClient(
                     2,
                     "AiStudioLive",
                     "READY model=${targetLiveModel()} operation=$operationMode target=$targetLanguage " +
-                        "transport=r19-video videoTrackReady=true cameraTransportReady=true gumVideoRequests=$gumVideoRequests " +
-                        "displayRequests=${screen.optLong("displayRequests", 0L)} hidden=false debugVisible=true isolatedLiveHost=true",
+                        "transport=desktop-share-screen-experiment videoTrackReady=true transportReady=true " +
+                        "displayRequests=$displayRequests displayStreamsReturned=$displayStreamsReturned " +
+                        "hidden=false debugVisible=true isolatedLiveHost=true",
                 )
                 listener.onSetupComplete()
             }, ARM_SETTLE_MS)
@@ -1165,6 +1167,9 @@ internal class AiStudioWebRealtimeClient(
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
         private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
+        private const val DESKTOP_SHARE_USER_AGENT =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/151.0.0.0 Safari/537.36"
         private const val SCREEN_SETUP_GATE_LOG_INTERVAL_MS = 2_500L
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L

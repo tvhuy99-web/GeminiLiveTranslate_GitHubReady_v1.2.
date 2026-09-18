@@ -570,15 +570,15 @@ internal class GeminiScreenDescriptionLiveClient(
                 .toString()
         }
 
+        internal const val HEARTBEAT_TEXT =
+            "Quan sát hình ảnh mới nhất và diễn biến kể từ lần mô tả trước. " +
+                "Nếu có thay đổi quan trọng chưa được mô tả, hãy mô tả ngay theo đúng quy tắc. " +
+                "Nếu không có thay đổi đáng kể, không cần nói gì và hãy kết thúc lượt."
+
         internal fun createHeartbeatMessage(): String = JSONObject()
             .put(
                 "realtimeInput",
-                JSONObject().put(
-                    "text",
-                    "Quan sát hình ảnh mới nhất và diễn biến kể từ lần mô tả trước. " +
-                        "Nếu có thay đổi quan trọng chưa được mô tả, hãy mô tả ngay theo đúng quy tắc. " +
-                        "Nếu không có thay đổi đáng kể, không cần nói gì và hãy kết thúc lượt.",
-                ),
+                JSONObject().put("text", HEARTBEAT_TEXT),
             )
             .toString()
 

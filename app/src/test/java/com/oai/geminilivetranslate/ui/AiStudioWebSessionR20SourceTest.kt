@@ -25,8 +25,12 @@ class AiStudioWebSessionR20SourceTest {
         assertTrue(forensic.contains("MEDIA_TRACK"))
         assertTrue(forensic.contains("RESOURCE_TIMING"))
         assertTrue(forensic.contains("STATE_SNAPSHOT"))
-        assertTrue(logs.contains("MAX_MEMORY_ENTRIES = 30_000"))
-        assertTrue(logs.contains("MAX_FILE_BYTES = 16L * 1024L * 1024L"))
-        assertTrue(logs.contains("MAX_ROTATED_FILES = 7"))
+        assertTrue(forensic.contains("r20.2-compact-high-signal-forensic"))
+        assertTrue(forensic.contains("setInterval(snapshot,2000)"))
+        assertTrue(logs.contains("MAX_MEMORY_ENTRIES = 12_000"))
+        assertTrue(logs.contains("MAX_FILE_BYTES = 8L * 1024L * 1024L"))
+        assertTrue(logs.contains("MAX_ROTATED_FILES = 3"))
+        assertTrue(logs.contains("MAX_CLIPBOARD_CHARS = 220_000"))
+        assertTrue(logs.contains("clipboardExport"))
     }
 }

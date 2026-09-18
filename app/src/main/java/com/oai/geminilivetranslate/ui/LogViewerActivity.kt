@@ -54,8 +54,8 @@ class LogViewerActivity : AppCompatActivity() {
 
         root.addView(TextView(this).apply {
             text =
-                "Nhật ký được ghi đầy đủ ở nền và không hiển thị trực tiếp trên màn hình để tránh treo hoặc giật khi dữ liệu rất lớn. " +
-                    "Nhấn Sao chép nhật ký để lấy toàn bộ nhật ký hiện có trong bộ nhớ."
+                "Nhật ký được ghi ở nền và không hiển thị trực tiếp trên màn hình để tránh treo hoặc giật. " +
+                    "Sao chép nhật ký chỉ lấy phần mới nhất trong giới hạn an toàn của clipboard; Chia sẻ tạo gói ZIP đầy đủ hơn."
             textSize = 15f
             setPadding(dp(4), dp(8), dp(4), dp(12))
         })
@@ -190,24 +190,32 @@ class LogViewerActivity : AppCompatActivity() {
     private fun copyAllLog() {
         lifecycleScope.launch {
             val result = runCatching {
-                withContext(Dispatchers.Default) {
-                    val text = logger.text()
-                    val lines = if (text.isEmpty()) 0 else text.count { it == '\n' } + 1
-                    text to lines
-                }
+                withContext(Dispatchers.Default) { logger.clipboardExport() }
             }
-            result.onSuccess { (text, lines) ->
-                getSystemService(ClipboardManager::class.java).setPrimaryClip(
-                    ClipData.newPlainText("Gemini Live Translate nhật ký", text),
-                )
-                toast("Đã sao chép $lines dòng nhật ký")
+            result.onSuccess { clipboardExport ->
+                runCatching {
+                    getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                        ClipData.newPlainText("Gemini Live Translate nhật ký", clipboardExport.text),
+                    )
+                }.onSuccess {
+                    val suffix = if (clipboardExport.truncated) {
+                        " · đã giới hạn để tránh treo/văng"
+                    } else {
+                        ""
+                    }
+                    toast(
+                        "Đã sao chép ${clipboardExport.includedEntries}/${clipboardExport.totalEntries} mục mới nhất$suffix",
+                    )
+                }.onFailure {
+                    logger.log(0, "Diagnostics", "Clipboard từ chối nhật ký", it)
+                    toast("Không sao chép được nhật ký: ${it.message}")
+                }
             }.onFailure {
-                logger.log(0, "Diagnostics", "Không sao chép được nhật ký", it)
-                toast("Không sao chép được nhật ký: ${it.message}")
+                logger.log(0, "Diagnostics", "Không tạo được nội dung nhật ký để sao chép", it)
+                toast("Không tạo được nhật ký: ${it.message}")
             }
         }
     }
-
     private fun shareDiagnostics() {
         lifecycleScope.launch {
             val result = runCatching {

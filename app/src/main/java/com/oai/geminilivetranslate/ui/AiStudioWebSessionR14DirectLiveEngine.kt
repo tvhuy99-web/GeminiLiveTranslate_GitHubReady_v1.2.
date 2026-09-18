@@ -116,17 +116,23 @@ object AiStudioWebSessionR14DirectLiveEngine {
         const realtime=Array.isArray(p.parsed)&&Array.isArray(p.parsed[2])?p.parsed[2]:null;
         if(realtime&&state.screenHeartbeatText){
           try{
-            const hadAudioField=realtime.length>1&&realtime[1]!=null;
             const audioPayloadCharsBefore=p.slot&&Number(p.slot.chars||0)||0;
+            const audioPath=Array.isArray(p.slot&&p.slot.path)?p.slot.path:[];
+            const audioRealtimeIndex=audioPath.length>1&&Number(audioPath[0])===2?Number(audioPath[1]):-1;
+            const hadDirectAudioField=realtime.length>1&&realtime[1]!=null;
+            const hadDetectedAudioField=audioRealtimeIndex>=0&&audioRealtimeIndex<realtime.length&&realtime[audioRealtimeIndex]!=null;
             while(realtime.length<5)realtime.push(null);
 
             // RealtimeInput protobuf fields are represented zero-based in this jspb array:
-            // [1]=audio(field 2), [2]=audioStreamEnd(field 3), [3]=video(field 4), [4]=text(field 5).
+            // [0]=legacy mediaChunks(field 1), [1]=audio(field 2), [2]=audioStreamEnd(field 3),
+            // [3]=video(field 4), [4]=text(field 5).
             // The synthetic microphone keeps sending silent PCM forever. A text heartbeat alone
             // therefore does not create an end-of-user-activity boundary. Convert exactly one
-            // carrier request into a turn-boundary request: remove its audio blob, mark
-            // audioStreamEnd=true, and attach the heartbeat text. The next normal audio carrier
-            // reopens the stream as allowed by the Live protocol.
+            // carrier request into a turn-boundary request: remove whichever realtime field
+            // actually owns the detected PCM blob (legacy mediaChunks or audio), also clear the
+            // direct audio field defensively, mark audioStreamEnd=true, and attach heartbeat text.
+            // The next normal audio carrier reopens the stream as allowed by the Live protocol.
+            if(audioRealtimeIndex===0||audioRealtimeIndex===1)realtime[audioRealtimeIndex]=null;
             realtime[1]=null;
             realtime[2]=true;
             realtime[4]=state.screenHeartbeatText;
@@ -135,7 +141,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
             heartbeatInjected++;
             state.screenHeartbeatsInjected++;
             state.screenAudioStreamEndsInjected++;
-            if(hadAudioField||audioPayloadCharsBefore>0)state.screenHeartbeatAudioCleared++;
+            if(hadDirectAudioField||hadDetectedAudioField||audioPayloadCharsBefore>0)state.screenHeartbeatAudioCleared++;
             state.screenHeartbeatPending=false;
             state.screenTurnInFlight=true;
             state.lastScreenHeartbeatAt=Date.now();
@@ -146,7 +152,10 @@ object AiStudioWebSessionR14DirectLiveEngine {
               audioStreamEndField:3,
               realtimeTextField:5,
               audioFieldCleared:true,
-              hadAudioField:hadAudioField,
+              hadDirectAudioField:hadDirectAudioField,
+              hadDetectedAudioField:hadDetectedAudioField,
+              detectedAudioRealtimeIndex:audioRealtimeIndex,
+              audioPathDepth:audioPath.length,
               audioPayloadCharsBefore:audioPayloadCharsBefore,
               requestOrdinal:state.carrierRequests+1
             });

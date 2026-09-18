@@ -955,7 +955,7 @@ internal class AiStudioWebRealtimeClient(
             val heartbeatSetupComplete = direct.optBoolean("screenSetupComplete", false)
             if (!heartbeatEnabled || !heartbeatSetupComplete) {
                 logScreenSetupGate(
-                    "screen-control-not-ready",
+                    "WAITING_SCREEN_CONTROL",
                     "heartbeatEnabled=$heartbeatEnabled setupComplete=$heartbeatSetupComplete " +
                         "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
                         "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)} " +
@@ -977,7 +977,7 @@ internal class AiStudioWebRealtimeClient(
             val gumVideoRequests = screen.optLong("gumVideoRequests", 0L)
             if (!videoReady || !cameraTransportReady || gumVideoRequests <= 0L) {
                 logScreenSetupGate(
-                    "video-transport-not-ready",
+                    "WAITING_VIDEO_TRANSPORT",
                     "enabled=${screen.optBoolean("enabled", false)} videoTrackReady=$videoReady " +
                         "cameraTransportReady=$cameraTransportReady gumVideoRequests=$gumVideoRequests " +
                         "framesQueued=${screen.optLong("framesQueued", 0L)} framesDrawn=${screen.optLong("framesDrawn", 0L)} " +

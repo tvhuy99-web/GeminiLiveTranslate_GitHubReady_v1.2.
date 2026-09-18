@@ -162,13 +162,13 @@ class ScreenFrameCapture(
 
             val encodeStarted = SystemClock.elapsedRealtimeNanos()
             val jpeg = encodeJpeg(image, candidateId)
-            val encodeMs = (SystemClock.elapsedRealtimeNanos() - encodeStarted) / 1_000_000.0
+            val encodeUs = (SystemClock.elapsedRealtimeNanos() - encodeStarted) / 1_000L
             if (jpeg == null || jpeg.isEmpty()) {
                 encodeNulls++
                 logger.log(
                     1,
                     TAG,
-                    "FRAME_TRACE candidate=$candidateId stage=encode-empty encodeNulls=$encodeNulls encodeMs=${"%.3f".format(encodeMs)}",
+                    "FRAME_TRACE candidate=$candidateId stage=encode-empty encodeNulls=$encodeNulls encodeUs=$encodeUs",
                 )
                 return
             }
@@ -180,7 +180,7 @@ class ScreenFrameCapture(
                     3,
                     TAG,
                     "FRAME_TRACE id=$traceId candidate=$candidateId stage=jpeg-encoded encoded=$framesEncoded jpegBytes=${jpeg.size} " +
-                        "encodeMs=${"%.3f".format(encodeMs)}",
+                        "encodeUs=$encodeUs",
                 )
             }
 
@@ -195,11 +195,11 @@ class ScreenFrameCapture(
             onFrame(jpeg)
             framesDelivered++
             if (shouldTrace(traceId)) {
-                val callbackMs = (SystemClock.elapsedRealtimeNanos() - callbackStarted) / 1_000_000.0
+                val callbackUs = (SystemClock.elapsedRealtimeNanos() - callbackStarted) / 1_000L
                 logger.log(
                     3,
                     TAG,
-                    "FRAME_TRACE id=$traceId stage=callback-end delivered=$framesDelivered callbackMs=${"%.3f".format(callbackMs)}",
+                    "FRAME_TRACE id=$traceId stage=callback-end delivered=$framesDelivered callbackUs=$callbackUs",
                 )
             }
         } catch (error: Throwable) {

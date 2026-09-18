@@ -66,10 +66,13 @@ internal class ScreenDescriptionLiveClient(
         if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) connectAiStudio() else connectApi()
     }
 
-    fun sendVideoFrame(jpeg: ByteArray): SendResult {
-        if (closed.get()) return SendResult.CLOSED
+    fun sendVideoFrame(jpeg: ByteArray, diagnosticFrameId: Long = 0L): SendResult {
+        if (closed.get()) {
+            logger.log(1, TAG, "FRAME_ROUTE id=$diagnosticFrameId stage=reject reason=facade-closed")
+            return SendResult.CLOSED
+        }
         return if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) {
-            sendStudioVideoFrame(jpeg)
+            sendStudioVideoFrame(jpeg, diagnosticFrameId)
         } else {
             when (apiBackend?.sendVideoFrame(jpeg)) {
                 GeminiScreenDescriptionLiveClient.SendResult.SENT -> SendResult.SENT
@@ -177,12 +180,23 @@ internal class ScreenDescriptionLiveClient(
         backend.connect()
     }
 
-    private fun sendStudioVideoFrame(jpeg: ByteArray): SendResult {
-        if (jpeg.isEmpty()) return SendResult.SENT
-        studioAcceptedFrames.incrementAndGet()
-        if (!studioSetupComplete.get()) return SendResult.NOT_READY
+    private fun sendStudioVideoFrame(jpeg: ByteArray, diagnosticFrameId: Long): SendResult {
+        if (jpeg.isEmpty()) {
+            logger.log(1, TAG, "FRAME_ROUTE id=$diagnosticFrameId stage=reject reason=empty-jpeg")
+            return SendResult.SENT
+        }
+        val accepted = studioAcceptedFrames.incrementAndGet()
+        if (!studioSetupComplete.get()) {
+            logger.log(
+                1,
+                TAG,
+                "FRAME_ROUTE id=$diagnosticFrameId stage=gate reason=facade-setup-not-complete " +
+                    "accepted=$accepted submitted=${studioSubmittedFrames.get()} backend=ai_studio",
+            )
+            return SendResult.NOT_READY
+        }
 
-        val result = when (studioBackend?.sendVideoFrame(jpeg)) {
+        val result = when (studioBackend?.sendVideoFrame(jpeg, diagnosticFrameId)) {
             GeminiLiveClient.SendResult.SENT -> SendResult.SENT
             GeminiLiveClient.SendResult.NOT_READY -> SendResult.NOT_READY
             GeminiLiveClient.SendResult.BACKPRESSURED -> SendResult.BACKPRESSURED
@@ -198,7 +212,7 @@ internal class ScreenDescriptionLiveClient(
                     logger.log(
                         3,
                         TAG,
-                        "AI_STUDIO_VIDEO_SUBMITTED count=$sent accepted=${studioAcceptedFrames.get()} jpegBytes=${jpeg.size}",
+                        "FRAME_ROUTE id=$diagnosticFrameId stage=submitted count=$sent accepted=${studioAcceptedFrames.get()} jpegBytes=${jpeg.size}",
                     )
                 }
             }

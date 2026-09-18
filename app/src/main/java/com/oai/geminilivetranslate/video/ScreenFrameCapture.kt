@@ -217,10 +217,10 @@ class ScreenFrameCapture(
         }
     }
 
-    private fun encodeJpeg(image: Image, traceId: Long): ByteArray? {
+    private fun encodeJpeg(image: Image, candidateId: Long): ByteArray? {
         val plane = image.planes.firstOrNull()
         if (plane == null) {
-            logger.log(1, TAG, "FRAME_TRACE id=$traceId stage=encode-reject reason=no-plane planes=${image.planes.size}")
+            logger.log(1, TAG, "FRAME_TRACE candidate=$candidateId stage=encode-reject reason=no-plane planes=${image.planes.size}")
             return null
         }
 
@@ -231,18 +231,18 @@ class ScreenFrameCapture(
             logger.log(
                 1,
                 TAG,
-                "FRAME_TRACE id=$traceId stage=encode-reject reason=invalid-stride pixelStride=$pixelStride rowStride=$rowStride",
+                "FRAME_TRACE candidate=$candidateId stage=encode-reject reason=invalid-stride pixelStride=$pixelStride rowStride=$rowStride",
             )
             return null
         }
 
         val rowPadding = (rowStride - pixelStride * width).coerceAtLeast(0)
         val paddedWidth = width + rowPadding / pixelStride
-        if (shouldTrace(traceId)) {
+        if (shouldTrace(candidateId)) {
             logger.log(
                 3,
                 TAG,
-                "FRAME_TRACE id=$traceId stage=buffer-layout remaining=${buffer.remaining()} capacity=${buffer.capacity()} " +
+                "FRAME_TRACE candidate=$candidateId stage=buffer-layout remaining=${buffer.remaining()} capacity=${buffer.capacity()} " +
                     "pixelStride=$pixelStride rowStride=$rowStride rowPadding=$rowPadding paddedWidth=$paddedWidth target=${width}x$height",
             )
         }
@@ -255,33 +255,33 @@ class ScreenFrameCapture(
             cropped = if (paddedWidth == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height)
         } catch (error: Throwable) {
             padded.recycle()
-            logger.log(0, TAG, "FRAME_TRACE id=$traceId stage=bitmap-copy-error paddedWidth=$paddedWidth height=$height", error)
+            logger.log(0, TAG, "FRAME_TRACE candidate=$candidateId stage=bitmap-copy-error paddedWidth=$paddedWidth height=$height", error)
             throw error
         }
 
         return try {
-            encodeBounded(cropped, traceId)
+            encodeBounded(cropped, candidateId)
         } finally {
             if (cropped !== padded) cropped.recycle()
             padded.recycle()
         }
     }
 
-    private fun encodeBounded(bitmap: Bitmap, traceId: Long): ByteArray {
+    private fun encodeBounded(bitmap: Bitmap, candidateId: Long): ByteArray {
         for (quality in JPEG_QUALITIES) {
             val output = ByteArrayOutputStream()
             val compressed = bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)
             val bytes = output.toByteArray()
-            if (shouldTrace(traceId)) {
+            if (shouldTrace(candidateId)) {
                 logger.log(
                     3,
                     TAG,
-                    "FRAME_TRACE id=$traceId stage=jpeg-attempt quality=$quality compressed=$compressed bytes=${bytes.size} " +
+                    "FRAME_TRACE candidate=$candidateId stage=jpeg-attempt quality=$quality compressed=$compressed bytes=${bytes.size} " +
                         "limit=$MAX_FRAME_BYTES",
                 )
             }
             if (!compressed) {
-                logger.log(1, TAG, "FRAME_TRACE id=$traceId stage=jpeg-compress-false quality=$quality")
+                logger.log(1, TAG, "FRAME_TRACE candidate=$candidateId stage=jpeg-compress-false quality=$quality")
                 continue
             }
             if (bytes.size <= MAX_FRAME_BYTES || quality == JPEG_QUALITIES.last()) return bytes

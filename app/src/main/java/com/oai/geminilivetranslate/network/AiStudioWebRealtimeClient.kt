@@ -851,10 +851,13 @@ internal class AiStudioWebRealtimeClient(
 
     private fun requestStates() {
         val current = webView ?: return
-        val js = "JSON.stringify({bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,language:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,screen:window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
+        val js = "JSON.stringify({desktop:window.__AIS_R21_DESKTOP_SHARE__?window.__AIS_R21_DESKTOP_SHARE__.describe():null,bootstrap:window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.describe():null,language:window.__AIS_R183_LANGUAGE__?window.__AIS_R183_LANGUAGE__.describe():null,direct:window.__AIS_LIVE_DIRECT_ENGINE__?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null,screen:window.__AIS_R19_SCREEN_VIDEO__?window.__AIS_R19_SCREEN_VIDEO__.describe():null,output:window.__AIS_LIVE_OUTPUT_ENGINE__?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null})"
         current.evaluateJavascript(js) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull() ?: return@evaluateJavascript
+            root.optJSONObject("desktop")?.let { desktop ->
+                logger.log(3, "AiStudioDesktopShare", "STATE ${safe(desktop.toString(), 1800)}")
+            }
             root.optJSONObject("bootstrap")?.let { bootstrap ->
                 bootstrapInstalled = true
                 lastBootstrapState = bootstrap.toString()
@@ -1113,6 +1116,7 @@ internal class AiStudioWebRealtimeClient(
             val parsed = runCatching { JSONObject(text) }.getOrNull()
             val kind = parsed?.optString("kind").orEmpty()
             when {
+                kind.startsWith("R21_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioDesktopShare", "JS_$kind ${safe(text, 3200)}")
                 kind.startsWith("R17_") -> logger.log(3, "AiStudioBootstrap", "JS_$kind ${safe(text, 2800)}")
                 kind.startsWith("R183_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioLanguage", "JS_$kind ${safe(text, 2800)}")
                 kind.startsWith("R19_") -> logger.log(if (kind.contains("ERROR")) 1 else 2, "AiStudioScreenVideo", "JS_$kind ${safe(text, 2400)}")

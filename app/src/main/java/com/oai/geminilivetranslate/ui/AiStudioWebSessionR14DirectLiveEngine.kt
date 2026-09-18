@@ -158,6 +158,24 @@ object AiStudioWebSessionR14DirectLiveEngine {
     return {ok:true,accepted:accepted,rejected:rejected,dropped:dropped,queueDepth:state.queue.length,armed:state.armed};
   }
   function enqueueVideo(frame){const s=String(frame||'');if(!validVideo(s)){state.videoDropped++;emit('VIDEO_QUEUE',{accepted:0,rejected:1,videoDropped:state.videoDropped});return {ok:false,accepted:0,rejected:1,videoPending:!!state.latestVideo};}if(state.latestVideo)state.videoDropped++;state.latestVideo=s;state.videoEnqueued++;emit('VIDEO_QUEUE',{accepted:1,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped});return {ok:true,accepted:1,rejected:0,videoPending:true,videoEnqueued:state.videoEnqueued,videoDropped:state.videoDropped};}
+  function configureScreenHeartbeat(enabled,text){
+    state.screenHeartbeatEnabled=enabled===true;state.screenHeartbeatText=state.screenHeartbeatEnabled?String(text||'').trim().slice(0,4000):'';
+    if(!state.screenHeartbeatEnabled){state.screenHeartbeatPending=false;state.screenTurnInFlight=false;}
+    emit('SCREEN_HEARTBEAT_CONFIG',{enabled:state.screenHeartbeatEnabled,textChars:state.screenHeartbeatText.length,realtimeTextField:5});
+    return describe();
+  }
+  function queueScreenHeartbeat(){
+    if(!state.screenHeartbeatEnabled||!state.screenHeartbeatText)return {ok:false,enabled:state.screenHeartbeatEnabled};
+    state.screenHeartbeatPending=true;state.screenHeartbeatsQueued++;
+    if(state.screenHeartbeatsQueued===1||state.screenHeartbeatsQueued%20===0)emit('SCREEN_HEARTBEAT_QUEUED',{count:state.screenHeartbeatsQueued,inFlight:state.screenTurnInFlight});
+    return {ok:true,pending:true,inFlight:state.screenTurnInFlight,queued:state.screenHeartbeatsQueued,injects:state.screenHeartbeatsInjected};
+  }
+  function onScreenTurnComplete(){
+    if(!state.screenHeartbeatEnabled)return describe();
+    state.screenTurnInFlight=false;state.screenTurnCompletes++;
+    emit('SCREEN_TURN_COMPLETE',{count:state.screenTurnCompletes,pending:state.screenHeartbeatPending});
+    return describe();
+  }
   function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}
   function clearQueue(){const n=state.queue.length;state.queue.length=0;emit('QUEUE_CLEARED',{cleared:n});return describe();}
   function reset(){state.queue.length=0;state.latestVideo='';state.videoEnqueued=0;state.videoReplaced=0;state.videoDropped=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;emit('RESET',{version:VERSION});return describe();}

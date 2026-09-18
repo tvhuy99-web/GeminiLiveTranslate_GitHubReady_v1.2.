@@ -161,14 +161,15 @@ internal class AiStudioWebRealtimeClient(
         return result.also { updateBackpressureHighWater() }
     }
 
-    fun sendVideoFrame(jpeg: ByteArray): GeminiLiveClient.SendResult {
-        val frameSeq = screenFrameCalls.incrementAndGet()
-        val trace = frameSeq <= 10L || frameSeq % 30L == 0L
+    fun sendVideoFrame(jpeg: ByteArray, diagnosticFrameId: Long = 0L): GeminiLiveClient.SendResult {
+        val call = screenFrameCalls.incrementAndGet()
+        val frameSeq = diagnosticFrameId.takeIf { it > 0L } ?: call
+        val trace = call <= 10L || call % 30L == 0L
         if (trace) {
             logger.log(
                 3,
                 "AiStudioScreenVideo",
-                "FRAME_CAUSAL id=$frameSeq stage=client-entry jpegBytes=${jpeg.size} " +
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-entry jpegBytes=${jpeg.size} " +
                     "screenDescription=$screenDescription closed=${closed.get()} setupDelivered=${setupDelivered.get()} " +
                     "serverSetupSeen=$serverSetupSeen webView=${webView != null}",
             )
@@ -190,7 +191,7 @@ internal class AiStudioWebRealtimeClient(
             logger.log(
                 1,
                 "AiStudioScreenVideo",
-                "FRAME_CAUSAL id=$frameSeq stage=client-gate reason=setup-not-delivered notReadyCount=$count " +
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-gate reason=setup-not-delivered notReadyCount=$count " +
                     "serverSetupSeen=$serverSetupSeen bootstrap=${safe(lastBootstrapState, 700)} " +
                     "direct=${safe(lastDirectState, 700)} screen=${safe(lastScreenVideoState, 900)}",
             )
@@ -202,7 +203,7 @@ internal class AiStudioWebRealtimeClient(
             logger.log(
                 1,
                 "AiStudioScreenVideo",
-                "FRAME_CAUSAL id=$frameSeq stage=client-gate reason=webview-null notReadyCount=$count setupDelivered=true",
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=client-gate reason=webview-null notReadyCount=$count setupDelivered=true",
             )
             return GeminiLiveClient.SendResult.NOT_READY
         }
@@ -224,7 +225,7 @@ internal class AiStudioWebRealtimeClient(
             logger.log(
                 3,
                 "AiStudioScreenVideo",
-                "FRAME_CAUSAL id=$frameSeq stage=post-to-webview posted=$posted jpegBytes=${jpeg.size} " +
+                "FRAME_CAUSAL id=$frameSeq call=$call stage=post-to-webview posted=$posted jpegBytes=${jpeg.size} " +
                     "base64Chars=${encoded.length}",
             )
         }

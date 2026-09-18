@@ -477,12 +477,12 @@ internal class AiStudioWebRealtimeClient(
                     uaMetadata = runCatching {
                         val chromium = UserAgentMetadata.BrandVersion.Builder()
                             .setBrand("Chromium")
-                            .setMajorVersion("151")
-                            .setFullVersion("151.0.0.0")
+                            .setMajorVersion("138")
+                            .setFullVersion("138.0.7204.179")
                             .build()
                         val builder = UserAgentMetadata.Builder()
                             .setBrandVersionList(listOf(chromium))
-                            .setFullVersion("151.0.0.0")
+                            .setFullVersion("138.0.7204.179")
                             .setPlatform("Linux")
                             .setPlatformVersion("6.0.0")
                             .setArchitecture("x86")
@@ -1211,7 +1211,7 @@ internal class AiStudioWebRealtimeClient(
         private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
         private const val DESKTOP_SHARE_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/151.0.0.0 Safari/537.36"
+                "Chrome/138.0.7204.179 Safari/537.36"
         private const val SCREEN_SETUP_GATE_LOG_INTERVAL_MS = 2_500L
         private const val ROUTE_REPAIR_GRACE_MS = 2_500L
         private const val ROUTE_REPAIR_MIN_INTERVAL_MS = 3_000L

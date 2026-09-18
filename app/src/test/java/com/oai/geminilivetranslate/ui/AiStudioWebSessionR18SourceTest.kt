@@ -97,7 +97,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(service.contains("FILE_TRANSCRIBE backend=aistudio-file"))
         assertTrue(fileClient.contains("AppPreferences.TRANSCRIBE_FILE_MODEL"))
         assertTrue(fileClient.contains("live=false"))
-        assertTrue(bootstrap.contains("r17.11-start-before-camera-progress"))
+        assertTrue(bootstrap.contains("r17.12-positional-screen-instruction"))
         assertTrue(bootstrap.contains("TRANSLATE_MODEL='gemini-3.5-live-translate-preview'"))
         assertTrue(bootstrap.contains("TRANSCRIBE_MODEL='gemini-3.5-transcribe-live'"))
     }
@@ -118,6 +118,9 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(bootstrap.contains("modelVerified"))
         assertTrue(bootstrap.contains("targetLanguageVerified"))
         assertTrue(bootstrap.contains("setupObserved"))
+        assertTrue(bootstrap.contains("SCREEN_SETUP_POSITIONAL"))
+        assertTrue(bootstrap.contains("systemInstructionField:3"))
+        assertTrue(bootstrap.contains("node[2]=instruction"))
         assertTrue(bootstrap.contains("/v1/bidiGenerateContent"))
         assertFalse(bootstrap.contains("Authorization"))
         assertFalse(bootstrap.contains("document.cookie"))
@@ -157,7 +160,7 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("NATIVE_TAP_DEBOUNCE_MS = 1_200L"))
         assertFalse(nativeTap.contains("@Volatile private var lastTapAt = 0L"))
 
-        assertTrue(screenBridge.contains("r19.11-camera-retry-silent-audio"))
+        assertTrue(screenBridge.contains("r19.12-frame-heartbeat"))
         assertTrue(screenBridge.contains("MAX_CAMERA_TAP_ATTEMPTS=2"))
         assertTrue(screenBridge.contains("CAMERA_RETRY_NO_GUM_MS=3000"))
         assertTrue(screenBridge.contains("'CAMERA_RETRY'"))
@@ -172,6 +175,17 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(realtime.contains("cameraTransportReady"))
         assertTrue(realtime.contains("gumVideoRequests <= 0L"))
         assertTrue(realtime.contains("cameraTransportReady=true"))
+        assertTrue(realtime.contains("GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT"))
+        assertTrue(realtime.contains("configureScreenHeartbeat(true"))
+        assertTrue(realtime.contains("WAITING_SCREEN_CONTROL"))
+        val direct = source("ui/AiStudioWebSessionR14DirectLiveEngine.kt")
+        val output = source("ui/AiStudioWebSessionR16LiveOutputEngine.kt")
+        assertTrue(direct.contains("r14.4-screen-heartbeat"))
+        assertTrue(direct.contains("realtime[4]=state.screenHeartbeatText"))
+        assertTrue(direct.contains("SCREEN_HEARTBEAT_INJECTED"))
+        assertTrue(direct.contains("screenTurnInFlight"))
+        assertTrue(output.contains("r16.2-screen-turn-gate"))
+        assertTrue(output.contains("notifyDirectTurnComplete()"))
     }
 
     @Test

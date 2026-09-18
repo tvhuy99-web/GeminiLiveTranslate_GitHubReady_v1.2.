@@ -190,7 +190,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
         const xhr=this;const meta=xhr.__aisR14||{raw:'',method:'GET'};
         if(!isBidi(meta.raw))return nativeSend.apply(this,arguments);
         const rewritten=rewriteEnvelope(body);
-        if(rewritten.replaced>0){
+        if(rewritten.replaced>0||rewritten.heartbeatInjected>0){
           let successLatched=false;
           let errorLatched=false;
           function observe(phase){
@@ -228,7 +228,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     }
   }catch(e){emit('HOOK_ERROR',{target:'XMLHttpRequest',name:String(e&&e.name||'Error')});}
 
-  window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,enqueueVideoBase64:enqueueVideo,arm:arm,clearQueue:clearQueue,reset:reset};
+  window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,enqueueVideoBase64:enqueueVideo,configureScreenHeartbeat:configureScreenHeartbeat,queueScreenHeartbeat:queueScreenHeartbeat,onScreenTurnComplete:onScreenTurnComplete,arm:arm,clearQueue:clearQueue,reset:reset};
   emit('ENGINE_INSTALLED',{version:VERSION,frameBytes:1280,frameMs:40,maxQueue:MAX_QUEUE,host:safeUrl(location.href).host});
 })();
     """.trimIndent()

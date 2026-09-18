@@ -2,6 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
     const val VERSION = "2026-09-18-r19.13-causal-frame-trace"
+    const val PREVIOUS_VERSION = "2026-09-18-r19.12-frame-heartbeat"
 
     val DOCUMENT_START: String = """
 (function(){

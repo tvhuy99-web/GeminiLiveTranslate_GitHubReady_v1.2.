@@ -60,6 +60,7 @@ class AppLogRepository private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val preferences = AppPreferences(appContext)
     private val memory = ConcurrentLinkedDeque<Entry>()
+    private val memoryCount = AtomicLong(0L)
     private val sequence = AtomicLong(0L)
     private val io = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "diagnostic-log-writer").apply { isDaemon = true }
@@ -74,6 +75,7 @@ class AppLogRepository private constructor(context: Context) {
 
     init {
         logDir.mkdirs()
+        pruneOldLogFiles()
         io.scheduleAtFixedRate({ flushWriter() }, 2, 2, TimeUnit.SECONDS)
     }
 
@@ -95,8 +97,16 @@ class AppLogRepository private constructor(context: Context) {
             message = safeMessage,
             throwable = safeThrowable,
         )
-        while (memory.size >= MAX_MEMORY_ENTRIES) memory.pollFirst()
+        while (memoryCount.get() >= MAX_MEMORY_ENTRIES) {
+            if (memory.pollFirst() != null) {
+                memoryCount.decrementAndGet()
+            } else {
+                memoryCount.set(0L)
+                break
+            }
+        }
         memory.addLast(entry)
+        memoryCount.incrementAndGet()
 
         when (safeLevel) {
             0 -> Log.e(safeTag, safeMessage, throwable)
@@ -134,7 +144,7 @@ class AppLogRepository private constructor(context: Context) {
 
     fun clipboardExport(maxChars: Int = MAX_CLIPBOARD_CHARS): ClipboardExport {
         val safeCap = maxChars.coerceIn(32_000, MAX_TEXT_EXPORT_CHARS)
-        val totalEntries = memory.size
+        val totalEntries = memoryCount.get().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         if (totalEntries == 0) {
             return ClipboardExport(
                 text = "Chưa có nhật ký.",
@@ -182,6 +192,7 @@ class AppLogRepository private constructor(context: Context) {
 
     fun clear() {
         memory.clear()
+        memoryCount.set(0L)
         runCatching {
             io.submit {
                 closeWriter()
@@ -211,6 +222,16 @@ class AppLogRepository private constructor(context: Context) {
     private fun currentLogFiles(): List<File> =
         logDir.listFiles()?.filter { it.isFile && it.extension == "log" }
             ?.sortedByDescending(File::lastModified).orEmpty()
+
+    private fun pruneOldLogFiles() {
+        runCatching {
+            logDir.listFiles()
+                ?.filter { it.isFile && it.extension == "log" }
+                ?.sortedByDescending(File::lastModified)
+                ?.drop(MAX_ROTATED_FILES + 1)
+                ?.forEach(File::delete)
+        }.onFailure { Log.w("AppLogRepository", "Không dọn được log cũ", it) }
+    }
 
     fun createDiagnosticBundle(): File {
         flushBlocking()
@@ -302,6 +323,7 @@ class AppLogRepository private constructor(context: Context) {
             if (target.exists()) target.delete()
             if (source.exists()) source.renameTo(target)
         }
+        pruneOldLogFiles()
     }
 
     private fun flushBlocking() {

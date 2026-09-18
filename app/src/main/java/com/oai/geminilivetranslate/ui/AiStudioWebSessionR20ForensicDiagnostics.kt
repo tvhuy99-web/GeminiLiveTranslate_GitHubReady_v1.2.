@@ -2,16 +2,17 @@ package com.oai.geminilivetranslate.ui
 
 /** Temporary, screen-description-only forensic instrumentation. Remove after root cause is isolated. */
 object AiStudioWebSessionR20ForensicDiagnostics {
-    const val VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
+    const val VERSION = "2026-09-18-r20.2-compact-high-signal-forensic"
+    const val PREVIOUS_VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R20_FORENSIC__&&window.__AIS_R20_FORENSIC__.version)return;
 
-  const VERSION='2026-09-18-r20.1-redacted-screen-forensic';
-  const BODY_CAP=16384;
-  const CHUNK=1000;
+  const VERSION='2026-09-18-r20.2-compact-high-signal-forensic';
+  const BODY_CAP=4096;
+  const CHUNK=2048;
   const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',installedAt:Date.now()};
 
   function active(){
@@ -23,7 +24,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
     }catch(_){return false;}
   }
   function now(){try{return Math.round(performance.now()*1000)/1000;}catch(_){return -1;}}
-  function stack(){try{return String(new Error('forensic').stack||'').split('\n').slice(1,20).join('\n').slice(0,12000);}catch(_){return '';}}
+  function stack(){try{return String(new Error('forensic').stack||'').split('\n').slice(1,10).join('\n').slice(0,4000);}catch(_){return '';}}
   function bridge(kind,payload){
     if(!active())return;
     try{const b=window.AIStudioWebSessionLab;if(b&&typeof b.onJsEvent==='function')b.onJsEvent(JSON.stringify({kind:'R19_FORENSIC_'+kind,payload:payload||{}}));}catch(_){}
@@ -106,27 +107,28 @@ object AiStudioWebSessionR20ForensicDiagnostics {
       const p=X.prototype,nOpen=p.open,nSend=p.send,nAbort=p.abort,nSet=p.setRequestHeader;
       p.open=function(method,url,async,user){
         const id=++state.xhrSeq;this.__aisR20={id:id,method:String(method||'GET'),url:String(url||''),relevant:relevant(url),openedAt:Date.now(),openedP:now(),lastRespChars:0,headers:[]};
-        if(this.__aisR20.relevant){bridge('XHR_OPEN',{id:id,method:this.__aisR20.method,url:safeUrl(url),async:async!==false,userProvided:!!user,stack:stack(),t:Date.now(),p:now()});}
+        if(this.__aisR20.relevant){bridge('XHR_OPEN',{id:id,method:this.__aisR20.method,url:safeUrl(url),async:async!==false,userProvided:!!user,t:Date.now(),p:now()});}
         return nOpen.apply(this,arguments);
       };
-      p.setRequestHeader=function(name,value){try{const m=this.__aisR20;if(m&&m.relevant){m.headers.push([String(name||''),safeHeader(name,value)]);bridge('XHR_REQUEST_HEADER',{id:m.id,name:String(name||''),value:safeHeader(name,value),t:Date.now(),p:now()});}}catch(_){}return nSet.apply(this,arguments);};
+      p.setRequestHeader=function(name,value){try{const m=this.__aisR20;if(m&&m.relevant)m.headers.push([String(name||''),safeHeader(name,value)]);}catch(_){}return nSet.apply(this,arguments);};
       p.send=function(body){
         const xhr=this,m=xhr.__aisR20;
         if(m&&m.relevant){
           const text=bodyText(body);state.bodyChars+=text.length;
-          bridge('XHR_SEND',{id:m.id,method:m.method,url:safeUrl(m.url),bodyChars:text.length,headers:m.headers,timeout:Number(xhr.timeout||0),withCredentials:!!xhr.withCredentials,responseType:String(xhr.responseType||''),stack:stack(),t:Date.now(),p:now()});
+          bridge('XHR_SEND',{id:m.id,method:m.method,url:safeUrl(m.url),bodyChars:text.length,headerCount:m.headers.length,timeout:Number(xhr.timeout||0),withCredentials:!!xhr.withCredentials,responseType:String(xhr.responseType||''),t:Date.now(),p:now()});
           bridge('XHR_REQUEST_BODY_SUMMARY',Object.assign({id:m.id},bodySummary(text)));
           const snap=function(event){
             let status=0,statusText='',rs=0,responseURL='';try{status=Number(xhr.status||0);statusText=String(xhr.statusText||'');rs=Number(xhr.readyState||0);responseURL=String(xhr.responseURL||'');}catch(_){}
-            bridge('XHR_EVENT',{id:m.id,event:event,readyState:rs,status:status,statusText:statusText,responseURL:safeUrl(responseURL),elapsedMs:Date.now()-m.openedAt,t:Date.now(),p:now()});
-            if(rs>=2&&!m.responseHeadersLogged){m.responseHeadersLogged=true;chunk('XHR_RESPONSE_HEADERS',m.id,'headers',headersText(xhr));}
-            if(rs>=3){const textNow=responseText(xhr);if(textNow.length>m.lastRespChars){const delta=textNow.slice(m.lastRespChars);m.lastRespChars=textNow.length;state.responseChars+=delta.length;chunk('XHR_RESPONSE_DELTA',m.id,'rs'+rs,delta);}}
+            const failed=event==='error'||event==='timeout'||(status>=400)||(status===0&&event!=='loadend');
+            bridge('XHR_EVENT',{id:m.id,event:event,readyState:rs,status:status,statusText:statusText,responseURL:safeUrl(responseURL),elapsedMs:Date.now()-m.openedAt,failed:failed,t:Date.now(),p:now()});
+            if(failed&&!m.responseHeadersLogged){m.responseHeadersLogged=true;chunk('XHR_RESPONSE_HEADERS',m.id,'headers',headersText(xhr));}
+            if(failed){const textNow=responseText(xhr);if(textNow.length>m.lastRespChars){const delta=textNow.slice(m.lastRespChars);m.lastRespChars=textNow.length;state.responseChars+=delta.length;chunk('XHR_RESPONSE_DELTA',m.id,'terminal',delta);}resources('xhr-'+event+'-'+m.id);}
           };
-          ['readystatechange','progress','loadstart','load','error','timeout','abort','loadend'].forEach(function(name){try{xhr.addEventListener(name,function(){snap(name);if(name==='error'||name==='timeout'||name==='abort'||name==='loadend')resources('xhr-'+name+'-'+m.id);});}catch(_){}});
+          ['error','timeout','abort','loadend'].forEach(function(name){try{xhr.addEventListener(name,function(){snap(name);});}catch(_){}});
         }
         return nSend.apply(this,arguments);
       };
-      p.abort=function(){const m=this.__aisR20;if(m&&m.relevant){bridge('XHR_ABORT_CALL',{id:m.id,method:m.method,url:safeUrl(m.url),readyState:Number(this.readyState||0),status:(function(x){try{return Number(x.status||0);}catch(_){return 0;}})(this),stack:stack(),t:Date.now(),p:now()});resources('xhr-abort-call-'+m.id);}return nAbort.apply(this,arguments);};
+      p.abort=function(){const m=this.__aisR20;if(m&&m.relevant){const rs=Number(this.readyState||0),status=(function(x){try{return Number(x.status||0);}catch(_){return 0;}})(this);if(rs<4||status===0||status>=400){bridge('XHR_ABORT_CALL',{id:m.id,method:m.method,url:safeUrl(m.url),readyState:rs,status:status,stack:stack(),t:Date.now(),p:now()});resources('xhr-abort-call-'+m.id);}}return nAbort.apply(this,arguments);};
       p.__aisR20Forensic=true;
     }
   }catch(e){bridge('HOOK_ERROR',{target:'xhr',message:String(e&&e.message||e||''),stack:String(e&&e.stack||'')});}
@@ -139,7 +141,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
         try{url=typeof input==='string'?input:String(input&&input.url||'');method=String(init&&init.method||input&&input.method||'GET');body=init&&Object.prototype.hasOwnProperty.call(init,'body')?init.body:null;headers=init&&init.headers||input&&input.headers||null;}catch(_){}
         const rel=relevant(url);
         if(rel){const text=bodyText(body);bridge('FETCH_START',{id:id,method:method,url:safeUrl(url),bodyChars:text.length,bodySummary:bodySummary(text),stack:stack(),t:Date.now(),p:now()});try{const h=new Headers(headers||{});h.forEach(function(v,k){bridge('FETCH_REQUEST_HEADER',{id:id,name:k,value:safeHeader(k,v)});});}catch(_){} }
-        return nFetch.apply(this,arguments).then(function(resp){if(rel){bridge('FETCH_RESPONSE',{id:id,status:Number(resp.status||0),statusText:String(resp.statusText||''),url:safeUrl(resp.url||url),type:String(resp.type||''),redirected:!!resp.redirected,t:Date.now(),p:now()});try{const hs=[];resp.headers.forEach(function(v,k){hs.push(k+': '+safeHeader(k,v));});chunk('FETCH_RESPONSE_HEADERS',id,'headers',hs.join('\n'));}catch(_){}try{resp.clone().text().then(function(text){state.responseChars+=String(text||'').length;chunk('FETCH_RESPONSE_BODY',id,'response',text);resources('fetch-response-'+id);}).catch(function(e){bridge('FETCH_BODY_ERROR',{id:id,message:String(e&&e.message||e||'')});});}catch(_){} }return resp;},function(err){if(rel){bridge('FETCH_REJECT',{id:id,name:String(err&&err.name||''),message:String(err&&err.message||err||''),stack:String(err&&err.stack||''),t:Date.now(),p:now()});resources('fetch-reject-'+id);}throw err;});
+        return nFetch.apply(this,arguments).then(function(resp){if(rel){const status=Number(resp.status||0);bridge('FETCH_RESPONSE',{id:id,status:status,statusText:String(resp.statusText||''),url:safeUrl(resp.url||url),type:String(resp.type||''),redirected:!!resp.redirected,t:Date.now(),p:now()});if(status>=400){try{const hs=[];resp.headers.forEach(function(v,k){hs.push(k+': '+safeHeader(k,v));});chunk('FETCH_RESPONSE_HEADERS',id,'headers',hs.join('\n'));}catch(_){}try{resp.clone().text().then(function(text){state.responseChars+=String(text||'').length;chunk('FETCH_RESPONSE_BODY',id,'response',text);resources('fetch-response-error-'+id);}).catch(function(e){bridge('FETCH_BODY_ERROR',{id:id,message:String(e&&e.message||e||'')});});}catch(_){}} }return resp;},function(err){if(rel){bridge('FETCH_REJECT',{id:id,name:String(err&&err.name||''),message:String(err&&err.message||err||''),stack:String(err&&err.stack||''),t:Date.now(),p:now()});resources('fetch-reject-'+id);}throw err;});
       };
       wFetch.__aisR20Forensic=true;window.fetch=wFetch;
     }
@@ -160,14 +162,12 @@ object AiStudioWebSessionR20ForensicDiagnostics {
   }catch(e){bridge('HOOK_ERROR',{target:'media',message:String(e&&e.message||e||''),stack:String(e&&e.stack||'')});}
 
   try{
-    const names=['error','warn','info','log','debug'];names.forEach(function(name){const n=console&&console[name];if(typeof n!=='function'||n.__aisR20Forensic)return;const w=function(){if(active()){const args=[];for(let i=0;i<arguments.length&&i<12;i++){try{args.push(typeof arguments[i]==='string'?arguments[i]:JSON.stringify(arguments[i]));}catch(_){args.push(String(arguments[i]));}}chunk('CONSOLE',0,name,args.join(' | '));}return n.apply(this,arguments);};w.__aisR20Forensic=true;console[name]=w;});
+    const names=['error','warn'];names.forEach(function(name){const n=console&&console[name];if(typeof n!=='function'||n.__aisR20Forensic)return;const w=function(){if(active()){const args=[];for(let i=0;i<arguments.length&&i<12;i++){try{args.push(typeof arguments[i]==='string'?arguments[i]:JSON.stringify(arguments[i]));}catch(_){args.push(String(arguments[i]));}}chunk('CONSOLE',0,name,args.join(' | '));}return n.apply(this,arguments);};w.__aisR20Forensic=true;console[name]=w;});
   }catch(_){}
 
   try{window.addEventListener('error',function(ev){if(active()){bridge('WINDOW_ERROR',{message:String(ev&&ev.message||''),source:safeUrl(ev&&ev.filename||''),line:Number(ev&&ev.lineno||0),column:Number(ev&&ev.colno||0),name:String(ev&&ev.error&&ev.error.name||''),stack:String(ev&&ev.error&&ev.error.stack||''),t:Date.now(),p:now()});resources('window-error');}},true);}catch(_){}
   try{window.addEventListener('unhandledrejection',function(ev){if(active()){const r=ev&&ev.reason;bridge('UNHANDLED_REJECTION',{name:String(r&&r.name||''),message:String(r&&r.message||r||''),stack:String(r&&r.stack||''),t:Date.now(),p:now()});resources('unhandled-rejection');}},true);}catch(_){}
   ['visibilitychange','pageshow','pagehide','online','offline','beforeunload'].forEach(function(name){try{window.addEventListener(name,function(){if(active())bridge('PAGE_LIFECYCLE',{event:name,readyState:document.readyState,visibility:document.visibilityState,online:navigator.onLine,href:safeUrl(location.href),t:Date.now(),p:now()});},true);}catch(_){}});
-
-  try{if(window.PerformanceObserver){const po=new PerformanceObserver(function(list){if(!active())return;list.getEntries().forEach(function(e){if(relevant(e.name))bridge('RESOURCE',{name:safeUrl(e.name),initiatorType:e.initiatorType,startTime:e.startTime,duration:e.duration,fetchStart:e.fetchStart,requestStart:e.requestStart,responseStart:e.responseStart,responseEnd:e.responseEnd,transferSize:e.transferSize,encodedBodySize:e.encodedBodySize,decodedBodySize:e.decodedBodySize,nextHopProtocol:e.nextHopProtocol});});});po.observe({type:'resource',buffered:true});}}catch(e){bridge('HOOK_ERROR',{target:'performance',message:String(e&&e.message||e||'')});}
 
   function snapshot(){
     if(!active())return;
@@ -180,8 +180,8 @@ object AiStudioWebSessionR20ForensicDiagnostics {
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};
-  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'temporary-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
-  setInterval(snapshot,1000);
+  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'compact-high-signal-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
+  setInterval(snapshot,2000);
 })();
     """.trimIndent()
 }

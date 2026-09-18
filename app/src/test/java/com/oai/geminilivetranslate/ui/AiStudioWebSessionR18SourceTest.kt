@@ -150,9 +150,10 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun screenDescriptionCameraTapAndReadyGateRequireRealVideoAttachment() {
+    fun screenDescriptionDesktopSharePathUsesDisplayMediaAndDisablesManualHeartbeat() {
         val nativeTap = source("network/AiStudioNativeTapDebugSupport.kt")
         val screenBridge = source("ui/AiStudioWebSessionR19ScreenVideoBridge.kt")
+        val desktopShare = source("ui/AiStudioWebSessionR21DesktopShareScreenExperiment.kt")
         val realtime = source("network/AiStudioWebRealtimeClient.kt")
 
         assertTrue(nativeTap.contains("r18.12-per-purpose-touch-debounce"))
@@ -160,26 +161,33 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("NATIVE_TAP_DEBOUNCE_MS = 1_200L"))
         assertFalse(nativeTap.contains("@Volatile private var lastTapAt = 0L"))
 
-        assertTrue(screenBridge.contains("r19.12-frame-heartbeat"))
-        assertTrue(screenBridge.contains("MAX_CAMERA_TAP_ATTEMPTS=2"))
-        assertTrue(screenBridge.contains("CAMERA_RETRY_NO_GUM_MS=3000"))
-        assertTrue(screenBridge.contains("'CAMERA_RETRY'"))
-        assertTrue(screenBridge.contains("'CAMERA_RETRY_EXHAUSTED'"))
-        assertTrue(screenBridge.contains("SILENT_AUDIO_READY"))
-        assertTrue(screenBridge.contains("allowRealMicInput"))
-        assertTrue(screenBridge.contains("realAudio:false,silentAudio:true"))
+        assertTrue(screenBridge.contains("r19.15-desktop-share-screen-bridge"))
+        assertTrue(screenBridge.contains("DESKTOP_SHARE_EXPERIMENT=true"))
+        assertTrue(screenBridge.contains("DISPLAY_HOOK_INSTALLED"))
+        assertTrue(screenBridge.contains("DISPLAY_REQUEST_ENTER"))
+        assertTrue(screenBridge.contains("DISPLAY_STREAM_RETURNED"))
+        assertTrue(screenBridge.contains("DISPLAY_PIPELINE_STATE"))
+        assertTrue(screenBridge.contains("if(!md.getDisplayMedia||!md.getDisplayMedia.__aisR19ScreenVideo)"))
+        assertTrue(screenBridge.contains("apiSynthesized"))
+        assertTrue(screenBridge.contains("cameraAutomation:false"))
 
+        assertTrue(desktopShare.contains("r21.1-desktop-share-screen-environment"))
+        assertTrue(desktopShare.contains("mobile:false"))
+        assertTrue(desktopShare.contains("platform:'Linux'"))
+        assertTrue(desktopShare.contains("displaySurface:true"))
+        assertTrue(desktopShare.contains("__AIS_DESKTOP_SHARE_EXPERIMENT__"))
+
+        assertTrue(realtime.contains("DESKTOP_SHARE_USER_AGENT"))
+        assertTrue(realtime.contains("AiStudioWebSessionR21DesktopShareScreenExperiment.DOCUMENT_START"))
+        assertTrue(realtime.contains("AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START"))
         assertTrue(realtime.contains(".configure(true,false)"))
-        assertTrue(realtime.contains("val allowRealMic = !screenDescription"))
-        assertTrue(realtime.contains("WAITING_VIDEO_TRANSPORT"))
-        assertTrue(realtime.contains("cameraTransportReady"))
-        assertTrue(realtime.contains("gumVideoRequests <= 0L"))
-        assertTrue(realtime.contains("cameraTransportReady=true"))
-        assertTrue(realtime.contains("GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT"))
-        assertTrue(realtime.contains("configureScreenHeartbeat(true"))
-        assertTrue(realtime.contains("WAITING_SCREEN_CONTROL"))
+        assertTrue(realtime.contains("WAITING_DESKTOP_SHARE_STREAM"))
+        assertTrue(realtime.contains("displayStreamsReturned <= 0L"))
+        assertTrue(realtime.contains("configureScreenHeartbeat(false"))
+        assertFalse(realtime.contains("configureScreenHeartbeat(true"))
+        assertFalse(realtime.contains("WAITING_SCREEN_CONTROL"))
         assertFalse(realtime.contains("instructionApplied="))
-        assertTrue(realtime.contains("screenSetupComplete"))
+
         val direct = source("ui/AiStudioWebSessionR14DirectLiveEngine.kt")
         val output = source("ui/AiStudioWebSessionR16LiveOutputEngine.kt")
         assertTrue(direct.contains("r14.5-postsetup-heartbeat"))
@@ -188,9 +196,6 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(direct.contains("screenTurnInFlight"))
         assertTrue(output.contains("r16.3-postsetup-heartbeat"))
         assertTrue(output.contains("notifyDirectSetupComplete()"))
-        assertTrue(output.contains("notifyDirectTurnComplete()"))
-        assertTrue(direct.contains("markScreenSetupComplete"))
-        assertTrue(direct.contains("state.screenSetupComplete&&state.screenHeartbeatPending"))
     }
 
     @Test

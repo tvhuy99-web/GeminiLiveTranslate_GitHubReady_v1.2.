@@ -846,15 +846,14 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         if (screenDescription) {
-            val bootstrap = runCatching { JSONObject(lastBootstrapState) }.getOrNull() ?: return
             val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
-            val instructionApplied = bootstrap.optBoolean("instructionApplied", false)
             val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
-            if (!instructionApplied || !heartbeatEnabled) {
+            val heartbeatSetupComplete = direct.optBoolean("screenSetupComplete", false)
+            if (!heartbeatEnabled || !heartbeatSetupComplete) {
                 logger.log(
                     2,
                     "AiStudioScreenVideo",
-                    "WAITING_SCREEN_CONTROL instructionApplied=$instructionApplied heartbeatEnabled=$heartbeatEnabled " +
+                    "WAITING_SCREEN_CONTROL heartbeatEnabled=$heartbeatEnabled setupComplete=$heartbeatSetupComplete " +
                         "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
                         "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)}",
                 )

@@ -2,7 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-18-web-session-r14.5-postsetup-heartbeat"
+    const val VERSION = "2026-09-18-web-session-r14.6-audio-stream-end-heartbeat"
+    const val PREVIOUS_VERSION = "2026-09-18-web-session-r14.5-postsetup-heartbeat"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
@@ -11,7 +12,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   'use strict';
   if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-18-web-session-r14.5-postsetup-heartbeat';
+  const VERSION='2026-09-18-web-session-r14.6-audio-stream-end-heartbeat';
   const MAX_QUEUE=256;
   const state={
     armed:false,
@@ -42,6 +43,11 @@ object AiStudioWebSessionR14DirectLiveEngine {
     screenTurnInFlight:false,
     screenHeartbeatsQueued:0,
     screenHeartbeatsInjected:0,
+    screenAudioStreamEndsInjected:0,
+    screenHeartbeatAudioCleared:0,
+    screenHeartbeatProtocolErrors:0,
+    screenTurnStallWarnings:0,
+    lastScreenTurnStallLogAt:0,
     screenTurnCompletes:0,
     lastScreenHeartbeatAt:0
   };
@@ -111,11 +117,68 @@ object AiStudioWebSessionR14DirectLiveEngine {
       if(state.screenHeartbeatEnabled&&state.screenSetupComplete&&state.screenHeartbeatPending&&!state.screenTurnInFlight&&!heartbeatInjected){
         const realtime=Array.isArray(p.parsed)&&Array.isArray(p.parsed[2])?p.parsed[2]:null;
         if(realtime&&state.screenHeartbeatText){
-          while(realtime.length<5)realtime.push(null);
-          realtime[4]=state.screenHeartbeatText;
-          sp.set(name,JSON.stringify(p.parsed));
-          heartbeatInjected++;state.screenHeartbeatsInjected++;state.screenHeartbeatPending=false;state.screenTurnInFlight=true;state.lastScreenHeartbeatAt=Date.now();
-          emit('SCREEN_HEARTBEAT_INJECTED',{count:state.screenHeartbeatsInjected,textChars:state.screenHeartbeatText.length,realtimeTextField:5,requestOrdinal:state.carrierRequests+1});
+          try{
+            const audioPayloadCharsBefore=p.slot&&Number(p.slot.chars||0)||0;
+            const audioPath=Array.isArray(p.slot&&p.slot.path)?p.slot.path:[];
+            const audioRealtimeIndex=audioPath.length>1&&Number(audioPath[0])===2?Number(audioPath[1]):-1;
+            const hadDirectAudioField=realtime.length>1&&realtime[1]!=null;
+            const hadDetectedAudioField=audioRealtimeIndex>=0&&audioRealtimeIndex<realtime.length&&realtime[audioRealtimeIndex]!=null;
+            while(realtime.length<5)realtime.push(null);
+
+            // RealtimeInput protobuf fields are represented zero-based in this jspb array:
+            // [0]=legacy mediaChunks(field 1), [1]=audio(field 2), [2]=audioStreamEnd(field 3),
+            // [3]=video(field 4), [4]=text(field 5).
+            // The synthetic microphone keeps sending silent PCM forever. A text heartbeat alone
+            // therefore does not create an end-of-user-activity boundary. Convert exactly one
+            // carrier request into a turn-boundary request: remove whichever realtime field
+            // actually owns the detected PCM blob (legacy mediaChunks or audio), also clear the
+            // direct audio field defensively, mark audioStreamEnd=true, and attach heartbeat text.
+            // The next normal audio carrier reopens the stream as allowed by the Live protocol.
+            if(audioRealtimeIndex===0||audioRealtimeIndex===1)realtime[audioRealtimeIndex]=null;
+            realtime[1]=null;
+            realtime[2]=true;
+            realtime[4]=state.screenHeartbeatText;
+
+            sp.set(name,JSON.stringify(p.parsed));
+            heartbeatInjected++;
+            state.screenHeartbeatsInjected++;
+            state.screenAudioStreamEndsInjected++;
+            if(hadDirectAudioField||hadDetectedAudioField||audioPayloadCharsBefore>0)state.screenHeartbeatAudioCleared++;
+            state.screenHeartbeatPending=false;
+            state.screenTurnInFlight=true;
+            state.lastScreenHeartbeatAt=Date.now();
+            emit('SCREEN_HEARTBEAT_TURN_BOUNDARY',{
+              count:state.screenHeartbeatsInjected,
+              textChars:state.screenHeartbeatText.length,
+              realtimeAudioField:2,
+              audioStreamEndField:3,
+              realtimeTextField:5,
+              audioFieldCleared:true,
+              hadDirectAudioField:hadDirectAudioField,
+              hadDetectedAudioField:hadDetectedAudioField,
+              detectedAudioRealtimeIndex:audioRealtimeIndex,
+              audioPathDepth:audioPath.length,
+              audioPayloadCharsBefore:audioPayloadCharsBefore,
+              requestOrdinal:state.carrierRequests+1
+            });
+            emit('SCREEN_HEARTBEAT_INJECTED',{
+              count:state.screenHeartbeatsInjected,
+              textChars:state.screenHeartbeatText.length,
+              realtimeTextField:5,
+              audioStreamEnd:true,
+              audioFieldCleared:true,
+              requestOrdinal:state.carrierRequests+1
+            });
+            continue;
+          }catch(e){
+            state.screenHeartbeatProtocolErrors++;
+            emit('SCREEN_HEARTBEAT_PROTOCOL_ERROR',{
+              count:state.screenHeartbeatProtocolErrors,
+              name:String(e&&e.name||'Error'),
+              message:String(e&&e.message||'').slice(0,400),
+              requestOrdinal:state.carrierRequests+1
+            });
+          }
         }
       }
       if(state.armed&&state.latestVideo){
@@ -145,7 +208,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     return {body:body,carrierFrames:carrierFrames,replaced:0,videoReplaced:0,heartbeatInjected:0};
   }
   function describe(){
-    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,videoPending:!!state.latestVideo,videoEnqueued:state.videoEnqueued,videoReplaced:state.videoReplaced,videoDropped:state.videoDropped,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus,screenHeartbeatEnabled:state.screenHeartbeatEnabled,screenSetupComplete:state.screenSetupComplete,screenHeartbeatPending:state.screenHeartbeatPending,screenTurnInFlight:state.screenTurnInFlight,screenHeartbeatsQueued:state.screenHeartbeatsQueued,screenHeartbeatsInjected:state.screenHeartbeatsInjected,screenTurnCompletes:state.screenTurnCompletes,lastScreenHeartbeatAgeMs:state.lastScreenHeartbeatAt?Date.now()-state.lastScreenHeartbeatAt:-1};
+    return {ok:true,version:VERSION,armed:state.armed,queueDepth:state.queue.length,videoPending:!!state.latestVideo,videoEnqueued:state.videoEnqueued,videoReplaced:state.videoReplaced,videoDropped:state.videoDropped,carrierRequests:state.carrierRequests,carrierFrames:state.carrierFrames,replacedFrames:state.replacedFrames,rejectedFrames:state.rejectedFrames,droppedFrames:state.droppedFrames,injectedRequests:state.injectedRequests,injectedHttp2xx:state.injectedHttp2xx,injectedHttpError:state.injectedHttpError,injectedZeroStatusEnd:state.injectedZeroStatusEnd,templateObserved:state.templateObserved,templateMime:state.templateMime,templatePayloadChars:state.templatePayloadChars,lastCarrierAgeMs:state.lastCarrierAt?Date.now()-state.lastCarrierAt:-1,lastReplaceAgeMs:state.lastReplaceAt?Date.now()-state.lastReplaceAt:-1,lastStatus:state.lastStatus,screenHeartbeatEnabled:state.screenHeartbeatEnabled,screenSetupComplete:state.screenSetupComplete,screenHeartbeatPending:state.screenHeartbeatPending,screenTurnInFlight:state.screenTurnInFlight,screenHeartbeatsQueued:state.screenHeartbeatsQueued,screenHeartbeatsInjected:state.screenHeartbeatsInjected,screenAudioStreamEndsInjected:state.screenAudioStreamEndsInjected,screenHeartbeatAudioCleared:state.screenHeartbeatAudioCleared,screenHeartbeatProtocolErrors:state.screenHeartbeatProtocolErrors,screenTurnStallWarnings:state.screenTurnStallWarnings,screenTurnCompletes:state.screenTurnCompletes,lastScreenHeartbeatAgeMs:state.lastScreenHeartbeatAt?Date.now()-state.lastScreenHeartbeatAt:-1};
   }
   function enqueue(frames){
     const input=Array.isArray(frames)?frames:[frames];let accepted=0,rejected=0,dropped=0;
@@ -177,18 +240,25 @@ object AiStudioWebSessionR14DirectLiveEngine {
   function queueScreenHeartbeat(){
     if(!state.screenHeartbeatEnabled||!state.screenHeartbeatText||!state.screenSetupComplete)return {ok:false,enabled:state.screenHeartbeatEnabled,setupComplete:state.screenSetupComplete};
     state.screenHeartbeatPending=true;state.screenHeartbeatsQueued++;
-    if(state.screenHeartbeatsQueued===1||state.screenHeartbeatsQueued%20===0)emit('SCREEN_HEARTBEAT_QUEUED',{count:state.screenHeartbeatsQueued,inFlight:state.screenTurnInFlight});
-    return {ok:true,pending:true,inFlight:state.screenTurnInFlight,queued:state.screenHeartbeatsQueued,injects:state.screenHeartbeatsInjected};
+    const now=Date.now();
+    const inFlightAgeMs=state.screenTurnInFlight&&state.lastScreenHeartbeatAt?now-state.lastScreenHeartbeatAt:-1;
+    if(state.screenTurnInFlight&&inFlightAgeMs>=5000&&(state.lastScreenTurnStallLogAt===0||now-state.lastScreenTurnStallLogAt>=5000)){
+      state.lastScreenTurnStallLogAt=now;state.screenTurnStallWarnings++;
+      emit('SCREEN_TURN_STALLED',{count:state.screenTurnStallWarnings,inFlightAgeMs:inFlightAgeMs,queued:state.screenHeartbeatsQueued,injects:state.screenHeartbeatsInjected,turnCompletes:state.screenTurnCompletes,http2xx:state.injectedHttp2xx,httpErrors:state.injectedHttpError,pending:state.screenHeartbeatPending});
+    }
+    if(state.screenHeartbeatsQueued===1||state.screenHeartbeatsQueued%20===0)emit('SCREEN_HEARTBEAT_QUEUED',{count:state.screenHeartbeatsQueued,inFlight:state.screenTurnInFlight,inFlightAgeMs:inFlightAgeMs});
+    return {ok:true,pending:true,inFlight:state.screenTurnInFlight,inFlightAgeMs:inFlightAgeMs,queued:state.screenHeartbeatsQueued,injects:state.screenHeartbeatsInjected};
   }
   function onScreenTurnComplete(){
     if(!state.screenHeartbeatEnabled)return describe();
-    state.screenTurnInFlight=false;state.screenTurnCompletes++;
-    emit('SCREEN_TURN_COMPLETE',{count:state.screenTurnCompletes,pending:state.screenHeartbeatPending});
+    const ageMs=state.lastScreenHeartbeatAt?Date.now()-state.lastScreenHeartbeatAt:-1;
+    state.screenTurnInFlight=false;state.screenTurnCompletes++;state.lastScreenTurnStallLogAt=0;
+    emit('SCREEN_TURN_COMPLETE',{count:state.screenTurnCompletes,pending:state.screenHeartbeatPending,turnAgeMs:ageMs,injects:state.screenHeartbeatsInjected});
     return describe();
   }
   function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}
   function clearQueue(){const n=state.queue.length;state.queue.length=0;emit('QUEUE_CLEARED',{cleared:n});return describe();}
-  function reset(){state.queue.length=0;state.latestVideo='';state.videoEnqueued=0;state.videoReplaced=0;state.videoDropped=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;state.screenHeartbeatEnabled=false;state.screenSetupComplete=false;state.screenHeartbeatText='';state.screenHeartbeatPending=false;state.screenTurnInFlight=false;state.screenHeartbeatsQueued=0;state.screenHeartbeatsInjected=0;state.screenTurnCompletes=0;state.lastScreenHeartbeatAt=0;emit('RESET',{version:VERSION});return describe();}
+  function reset(){state.queue.length=0;state.latestVideo='';state.videoEnqueued=0;state.videoReplaced=0;state.videoDropped=0;state.armed=false;state.carrierRequests=0;state.carrierFrames=0;state.replacedFrames=0;state.rejectedFrames=0;state.droppedFrames=0;state.injectedRequests=0;state.injectedHttp2xx=0;state.injectedHttpError=0;state.injectedZeroStatusEnd=0;state.templateObserved=false;state.templateMime='';state.templatePayloadChars=0;state.lastCarrierAt=0;state.lastReplaceAt=0;state.lastStatus=0;state.screenHeartbeatEnabled=false;state.screenSetupComplete=false;state.screenHeartbeatText='';state.screenHeartbeatPending=false;state.screenTurnInFlight=false;state.screenHeartbeatsQueued=0;state.screenHeartbeatsInjected=0;state.screenAudioStreamEndsInjected=0;state.screenHeartbeatAudioCleared=0;state.screenHeartbeatProtocolErrors=0;state.screenTurnStallWarnings=0;state.lastScreenTurnStallLogAt=0;state.screenTurnCompletes=0;state.lastScreenHeartbeatAt=0;emit('RESET',{version:VERSION});return describe();}
 
   try{
     const X=window.XMLHttpRequest;
@@ -210,13 +280,13 @@ object AiStudioWebSessionR14DirectLiveEngine {
               if(!successLatched&&status>=200&&status<300&&xhr.readyState>=2){
                 successLatched=true;
                 state.injectedHttp2xx++;
-                emit('INJECT_HTTP_2XX',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,queueDepth:state.queue.length,total2xx:state.injectedHttp2xx});
+                emit('INJECT_HTTP_2XX',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,heartbeatInjected:rewritten.heartbeatInjected||0,queueDepth:state.queue.length,total2xx:state.injectedHttp2xx,screenTurnInFlight:state.screenTurnInFlight});
                 return;
               }
               if(!successLatched&&!errorLatched&&status>=400&&xhr.readyState>=2){
                 errorLatched=true;
                 state.injectedHttpError++;
-                emit('INJECT_HTTP_ERROR',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,queueDepth:state.queue.length,totalErrors:state.injectedHttpError});
+                emit('INJECT_HTTP_ERROR',{status:status,readyState:Number(xhr.readyState||0),phase:phase,replaced:rewritten.replaced,heartbeatInjected:rewritten.heartbeatInjected||0,queueDepth:state.queue.length,totalErrors:state.injectedHttpError,screenTurnInFlight:state.screenTurnInFlight});
               }
             }catch(_){}
           }

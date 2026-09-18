@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-18-r17.13-desktop-share-setup-passthrough"
+    const val VERSION = "2026-09-18-r17.14-talk-then-native-share-screen"
     const val PREVIOUS_VERSION = "2026-09-18-r17.12-desktop-share-screen-start"
     const val LEGACY_VERSION = "2026-09-17-r17.11-start-before-camera-progress"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
@@ -15,7 +15,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-18-r17.13-desktop-share-setup-passthrough';
+  const VERSION='2026-09-18-r17.14-talk-then-native-share-screen';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
@@ -29,7 +29,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     deepElements:0,interactiveControls:0,shadowRoots:0,frameDocuments:0,discoveryScans:0,
     streamScans:0,streamCandidates:0,streamAttempts:0,modelScans:0,modelCandidates:0,modelAttempts:0,modelSearchAttempts:0,
     startScans:0,startCandidates:0,startAttempts:0,startAckTimeouts:0,startStableScans:0,lastStartSignature:'',modelGuardInstalled:false,modelGuardRequests:0,
-    screenShareCandidates:0,screenShareClicks:0,lastScreenShareSignature:'',
+    screenShareCandidates:0,screenShareClicks:0,screenShareNativeTapRequests:0,screenShareStage:'waiting-live-setup',screenShareLastClickAt:0,lastScreenShareSignature:'',
     screenSetupPassThroughRequests:0,screenSetupPassThroughModelPresent:0,screenSetupPassThroughChars:0,
     screenVideoWaitScans:0,modelRewriteRequests:0,modelRewriteCount:0,routeKind:'other'
   };
@@ -77,13 +77,105 @@ object AiStudioWebSessionR17ProductionBootstrap {
       state.lastAction=reason;state.lastActionAt=now;diag('AUTO_ACTION',{reason:reason,tag:tag(el)||'none',role:role(el)||'none'});return true;
     }catch(e){diag('AUTO_ACTION_ERROR',{reason:reason,name:String(e&&e.name||'Error')});return false;}
   }
+  function nativeTapElement(el,purpose){
+    try{
+      const bridge=window.AIStudioNativeTapBridge;
+      if(!bridge||typeof bridge.requestNativeTap!=='function')return false;
+      let r=el&&el.getBoundingClientRect?el.getBoundingClientRect():null;
+      if(!r||r.width<=1||r.height<=1)return false;
+      const vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1);
+      const vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||1);
+      let cx=r.left+r.width/2,cy=r.top+r.height/2;
+      if(cx<0||cy<0||cx>vw||cy>vh){
+        try{el.scrollIntoView({block:'center',inline:'center'});}catch(_){}
+        r=el.getBoundingClientRect();cx=r.left+r.width/2;cy=r.top+r.height/2;
+      }
+      if(cx<0||cy<0||cx>vw||cy>vh)return false;
+      state.screenShareNativeTapRequests++;
+      const ua=window.navigator&&navigator.userActivation;
+      diag('SCREEN_SHARE_NATIVE_TAP_REQUEST',{
+        request:state.screenShareNativeTapRequests,
+        purpose:String(purpose||'share-screen'),
+        label:safeText(label(el),240),
+        xRatio:cx/vw,yRatio:cy/vh,
+        userActivationActive:!!(ua&&ua.isActive),
+        userActivationHasBeenActive:!!(ua&&ua.hasBeenActive)
+      });
+      bridge.requestNativeTap(JSON.stringify({
+        xRatio:cx/vw,yRatio:cy/vh,tag:tag(el)||'none',role:role(el)||'none',purpose:purpose||'share-screen'
+      }));
+      return true;
+    }catch(e){
+      diag('SCREEN_SHARE_NATIVE_TAP_ERROR',{name:String(e&&e.name||'Error'),message:safeText(e&&e.message||'',260)});
+      return false;
+    }
+  }
+
+  function shareScore(el){
+    const l=label(el),r=role(el),t=tag(el);
+    if(!l||attr(el,'disabled')||attr(el,'aria-disabled')==='true')return 0;
+    if(!(t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link'))return 0;
+    return /share screen|screen share|present screen|share display|screenshot_monitor/.test(l)?120:0;
+  }
+
+  function displayState(){
+    try{const x=window.__AIS_R19_SCREEN_VIDEO__;return x&&typeof x.describe==='function'?x.describe():null;}catch(_){return null;}
+  }
+
+  function tryShareScreen(snapshot){
+    if(!state.screenDescription||!state.setupObserved)return false;
+    const d=displayState();
+    if(d&&Number(d.displayStreamsReturned||0)>0){
+      state.screenShareStage='stream-returned';state.lastBlocker='none';return true;
+    }
+    if(d&&Number(d.displayRequests||0)>0){
+      state.screenShareStage='display-request-seen';state.lastBlocker='waiting-display-stream';return true;
+    }
+    const now=Date.now();
+    if(state.screenShareLastClickAt&&now-state.screenShareLastClickAt<3500){
+      state.screenShareStage='native-tap-sent';state.lastBlocker='waiting-display-request';return true;
+    }
+    const candidates=[],labels=[];
+    for(let i=0;i<snapshot.interactive.length;i++){
+      const score=shareScore(snapshot.interactive[i]);
+      if(score>0){candidates.push({el:snapshot.interactive[i],score:score});labels.push(safeText(label(snapshot.interactive[i]),220));}
+    }
+    state.screenShareCandidates=candidates.length;
+    const sig='post-setup|'+labels.slice(0,6).join('|');
+    if(sig!==state.lastScreenShareSignature){
+      state.lastScreenShareSignature=sig;
+      diag('SCREEN_SHARE_DISCOVERY',{candidates:candidates.length,labels:labels.slice(0,6),interactiveControls:snapshot.interactive.length,stage:'post-setup'});
+    }
+    if(!candidates.length){
+      state.screenShareStage='waiting-control';state.lastBlocker='share-screen-control-not-found';return false;
+    }
+    candidates.sort(function(a,b){return b.score-a.score;});
+    const best=candidates[0];
+    if(nativeTapElement(best.el,'share-screen')){
+      state.screenShareClicks++;
+      state.screenShareLastClickAt=now;
+      state.screenShareStage='native-tap-sent';
+      state.lastAction='share-screen';state.lastActionAt=now;
+      state.lastBlocker='waiting-display-request';
+      diag('SCREEN_SHARE_CLICK',{
+        clicks:state.screenShareClicks,mode:'native-trusted-tap',score:best.score,
+        label:safeText(label(best.el),240),expectedApi:'getDisplayMedia',
+        path:'desktop-share-screen',setupObserved:true
+      });
+      return true;
+    }
+    state.screenShareStage='native-tap-unavailable';state.lastBlocker='share-screen-native-tap-unavailable';
+    return false;
+  }
+
   function setupSeen(){try{const e=window.__AIS_LIVE_OUTPUT_ENGINE__;return !!(e&&typeof e.describe==='function'&&Number(e.describe().setupCompleteEvents||0)>0);}catch(_){return false;}}
   function startScore(el){
     const l=label(el),r=role(el),t=tag(el);if(!l||attr(el,'disabled')||attr(el,'aria-disabled')==='true'||l.indexOf('stop')>=0)return 0;
     if(!(t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link'))return 0;
     if(state.screenDescription){
-      if(/share screen|screen share|present screen|share display|screenshot_monitor/.test(l))return 120;
-      if(/\b(webcam|camera|talk|microphone|mic|speak)\b|videocam/.test(l))return 0;
+      if(/share screen|screen share|present screen|share display|screenshot_monitor/.test(l))return 0;
+      if(/\b(webcam|camera)\b|videocam/.test(l))return 0;
+      if(/\b(talk|speak|microphone|mic)\b/.test(l))return 120;
     }
     let s=0;if(/\b(start|begin|connect|talk|speak|join)\b/.test(l))s+=9;if(l.indexOf('go live')>=0||l.indexOf('start session')>=0||l.indexOf('start live')>=0)s+=10;
     if(l.indexOf('microphone')>=0||l.indexOf(' mic')>=0)s+=5;if(l.indexOf('live')>=0||l.indexOf('stream')>=0)s+=2;return s;
@@ -96,7 +188,17 @@ object AiStudioWebSessionR17ProductionBootstrap {
     return {progress:false,kind:'none'};
   }
   function tryStart(snapshot){
-    state.startScans++;if(setupSeen()){state.setupObserved=true;state.stage='setup-complete';state.lastBlocker='none';return;}
+    state.startScans++;
+    if(setupSeen()){
+      if(!state.setupObserved){
+        state.setupObserved=true;
+        state.screenShareStage=state.screenDescription?'ready-to-share':'not-applicable';
+        diag('LIVE_SETUP_READY',{screenDescription:state.screenDescription,next:state.screenDescription?'share-screen':'none'});
+      }
+      state.stage='setup-complete';
+      if(state.screenDescription){tryShareScreen(snapshot);return;}
+      state.lastBlocker='none';return;
+    }
     if(!state.streamSelected){state.lastBlocker='waiting-stream';return;}if(!state.modelSeen&&!state.modelGuardInstalled){state.lastBlocker='waiting-model';return;}
     const now=Date.now();
     if(state.lastAction==='start-live'&&state.lastActionAt){
@@ -129,10 +231,12 @@ object AiStudioWebSessionR17ProductionBootstrap {
       if(clickElement(best.el,'start-live')){
         state.stage='start-clicked';state.lastBlocker='waiting-start-ack';
         if(state.screenDescription){
-          state.screenShareClicks++;
+          state.screenShareStage='waiting-live-setup';
           state.carrierActive=false;state.syntheticCarrier=false;
-          diag('SCREEN_SHARE_CLICK',{clicks:state.screenShareClicks,score:best.score,label:safeText(label(best.el),240),expectedApi:'getDisplayMedia',path:'desktop-share-screen'});
-          diag('SCREEN_REAL_MEDIA_START',{syntheticCarrier:false,startBeforeCamera:false,desktopShareScreen:true});
+          diag('SCREEN_LIVE_START',{
+            attempt:state.startAttempts,score:best.score,label:safeText(label(best.el),240),
+            sequence:'talk-then-share-screen',shareDeferredUntilSetup:true
+          });
         }
         else buildSyntheticCarrier();
         diag('START_ATTEMPT',{attempt:state.startAttempts,score:best.score,stableScans:state.startStableScans,screenDescription:state.screenDescription});return;
@@ -273,7 +377,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;}
     const requested=safeText(requestedModel||'',160).replace(/^models\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
     state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;
-    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription,startPath:state.screenDescription?'desktop-share-screen':'talk'});tick();return describe();
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription,startPath:state.screenDescription?'talk-then-desktop-share-screen':'talk'});tick();return describe();
   }
   function describe(){
     return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,
@@ -283,7 +387,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,
       deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,
       streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,
-      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenShareCandidates:state.screenShareCandidates,screenShareClicks:state.screenShareClicks,screenSetupPassThroughRequests:state.screenSetupPassThroughRequests,screenSetupPassThroughModelPresent:state.screenSetupPassThroughModelPresent,screenSetupPassThroughChars:state.screenSetupPassThroughChars,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
+      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenShareCandidates:state.screenShareCandidates,screenShareClicks:state.screenShareClicks,screenShareNativeTapRequests:state.screenShareNativeTapRequests,screenShareStage:state.screenShareStage,screenShareLastClickAgeMs:state.screenShareLastClickAt?Date.now()-state.screenShareLastClickAt:-1,screenSetupPassThroughRequests:state.screenSetupPassThroughRequests,screenSetupPassThroughModelPresent:state.screenSetupPassThroughModelPresent,screenSetupPassThroughChars:state.screenSetupPassThroughChars,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
       routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
   function resetAutomation(){state.startAttempts=0;state.startCandidates=0;state.startAckTimeouts=0;state.startStableScans=0;state.screenVideoWaitScans=0;state.lastStartSignature='';state.setupObserved=false;state.lastAction='';state.lastActionAt=0;state.stage='discover';state.lastBlocker='waiting-start';tick();return describe();}
@@ -291,7 +395,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   installModelGuard();installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};
   setInterval(tick,700);setTimeout(tick,0);setTimeout(tick,900);setTimeout(tick,2200);
-  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenPath:'desktop-share-screen',screenSetupPolicy:'page-owned-unmodified',screenCameraGate:false,startBeforeCamera:false});
+  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenPath:'talk-then-desktop-share-screen',screenSetupPolicy:'page-owned-unmodified',screenShareActivation:'native-trusted-tap-after-setup',screenCameraGate:false,startBeforeCamera:false});
 })();
     """.trimIndent()
 }

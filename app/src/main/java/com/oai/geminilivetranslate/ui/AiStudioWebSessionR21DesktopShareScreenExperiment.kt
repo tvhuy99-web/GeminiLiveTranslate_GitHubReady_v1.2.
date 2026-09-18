@@ -5,18 +5,26 @@ package com.oai.geminilivetranslate.ui
  * from Android WebView. This branch is intentionally isolated from main.
  */
 object AiStudioWebSessionR21DesktopShareScreenExperiment {
-    const val VERSION = "2026-09-18-r21.1-desktop-share-screen-environment"
+    const val VERSION = "2026-09-18-r21.2-desktop-identity-and-viewport"
+    const val PREVIOUS_VERSION = "2026-09-18-r21.1-desktop-share-screen-environment"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
   if(window.__AIS_R21_DESKTOP_SHARE__&&window.__AIS_R21_DESKTOP_SHARE__.version)return;
 
-  const VERSION='2026-09-18-r21.1-desktop-share-screen-environment';
+  const VERSION='2026-09-18-r21.2-desktop-identity-and-viewport';
+  const DESKTOP_UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
+  const DESKTOP_CSS_WIDTH=1280;
   const state={
     installedAt:Date.now(),
     platformOverride:false,
+    userAgentOverride:false,
+    appVersionOverride:false,
     userAgentDataOverride:false,
+    touchOverride:false,
+    viewportOverride:false,
+    viewportMutationCount:0,
     supportedConstraintsOverride:false,
     mediaDevicesPresent:!!navigator.mediaDevices,
     getDisplayMediaAtInstall:!!(navigator.mediaDevices&&typeof navigator.mediaDevices.getDisplayMedia==='function'),
@@ -32,6 +40,21 @@ object AiStudioWebSessionR21DesktopShareScreenExperiment {
   }
 
   function overrideNavigatorEnvironment(){
+    try{
+      Object.defineProperty(navigator,'userAgent',{configurable:true,get:function(){return DESKTOP_UA;}});
+      state.userAgentOverride=String(navigator.userAgent||'')===DESKTOP_UA;
+    }catch(e){diag('ENV_OVERRIDE_ERROR',{target:'userAgent',name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});}
+
+    try{
+      Object.defineProperty(navigator,'appVersion',{configurable:true,get:function(){return DESKTOP_UA.replace(/^Mozilla\//,'');}});
+      state.appVersionOverride=true;
+    }catch(e){diag('ENV_OVERRIDE_ERROR',{target:'appVersion',name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});}
+
+    try{
+      Object.defineProperty(navigator,'maxTouchPoints',{configurable:true,get:function(){return 0;}});
+      state.touchOverride=Number(navigator.maxTouchPoints||0)===0;
+    }catch(e){diag('ENV_OVERRIDE_ERROR',{target:'maxTouchPoints',name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});}
+
     try{
       const descriptor=Object.getOwnPropertyDescriptor(Navigator.prototype,'platform');
       if(!descriptor||descriptor.configurable!==false){
@@ -66,6 +89,41 @@ object AiStudioWebSessionR21DesktopShareScreenExperiment {
     }catch(e){diag('ENV_OVERRIDE_ERROR',{target:'userAgentData',name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});}
   }
 
+  function forceDesktopViewport(){
+    const desired='width='+DESKTOP_CSS_WIDTH+', initial-scale=0.33125, minimum-scale=0.1, maximum-scale=5.0, user-scalable=yes';
+    const apply=function(reason){
+      try{
+        const head=document.head||document.querySelector('head');
+        if(!head)return false;
+        let meta=document.querySelector('meta[name="viewport"]');
+        if(!meta){
+          meta=document.createElement('meta');
+          meta.setAttribute('name','viewport');
+          head.insertBefore(meta,head.firstChild||null);
+        }
+        if(meta.getAttribute('content')!==desired){
+          meta.setAttribute('content',desired);
+          state.viewportMutationCount++;
+          diag('VIEWPORT_APPLIED',{reason:String(reason||''),count:state.viewportMutationCount,content:desired});
+        }
+        state.viewportOverride=meta.getAttribute('content')===desired;
+        return state.viewportOverride;
+      }catch(e){
+        diag('ENV_OVERRIDE_ERROR',{target:'viewport',name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});
+        return false;
+      }
+    };
+    apply('document-start');
+    try{
+      const root=document.documentElement||document;
+      const observer=new MutationObserver(function(){apply('mutation');});
+      observer.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['content','name']});
+    }catch(_){}
+    setTimeout(function(){apply('t+50');},50);
+    setTimeout(function(){apply('t+250');},250);
+    setTimeout(function(){apply('t+1000');},1000);
+  }
+
   function patchSupportedConstraints(){
     try{
       const md=navigator.mediaDevices;
@@ -98,9 +156,15 @@ object AiStudioWebSessionR21DesktopShareScreenExperiment {
       userAgentDataPlatform:(function(){try{return navigator.userAgentData?safe(navigator.userAgentData.platform,120):'';}catch(_){return '';}})(),
       innerWidth:Number(window.innerWidth||0),
       innerHeight:Number(window.innerHeight||0),
+      documentClientWidth:Number(document.documentElement&&document.documentElement.clientWidth||0),
+      visualViewportWidth:Number(window.visualViewport&&window.visualViewport.width||0),
+      viewportMeta:(function(){try{const m=document.querySelector('meta[name="viewport"]');return safe(m&&m.getAttribute('content')||'',300);}catch(_){return '';}})(),
       screenWidth:Number(screen&&screen.width||0),
       screenHeight:Number(screen&&screen.height||0),
       devicePixelRatio:Number(window.devicePixelRatio||0),
+      maxTouchPoints:Number(navigator.maxTouchPoints||0),
+      coarsePointer:(function(){try{return !!window.matchMedia&&window.matchMedia('(pointer: coarse)').matches;}catch(_){return null;}})(),
+      hoverCapable:(function(){try{return !!window.matchMedia&&window.matchMedia('(hover: hover)').matches;}catch(_){return null;}})(),
       mediaDevicesPresent:!!navigator.mediaDevices,
       getUserMedia:!!(navigator.mediaDevices&&typeof navigator.mediaDevices.getUserMedia==='function'),
       getDisplayMedia:!!(navigator.mediaDevices&&typeof navigator.mediaDevices.getDisplayMedia==='function'),
@@ -108,7 +172,12 @@ object AiStudioWebSessionR21DesktopShareScreenExperiment {
       supportedLogicalSurface:!!supported.logicalSurface,
       supportedCursor:!!supported.cursor,
       platformOverride:state.platformOverride,
+      userAgentOverride:state.userAgentOverride,
+      appVersionOverride:state.appVersionOverride,
       userAgentDataOverride:state.userAgentDataOverride,
+      touchOverride:state.touchOverride,
+      viewportOverride:state.viewportOverride,
+      viewportMutationCount:state.viewportMutationCount,
       supportedConstraintsOverride:state.supportedConstraintsOverride
     };
     diag('ENVIRONMENT',payload);
@@ -118,21 +187,23 @@ object AiStudioWebSessionR21DesktopShareScreenExperiment {
   function describe(){
     return {
       ok:true,version:VERSION,installedAt:state.installedAt,
-      platformOverride:state.platformOverride,userAgentDataOverride:state.userAgentDataOverride,
-      supportedConstraintsOverride:state.supportedConstraintsOverride,
+      platformOverride:state.platformOverride,userAgentOverride:state.userAgentOverride,appVersionOverride:state.appVersionOverride,
+      userAgentDataOverride:state.userAgentDataOverride,touchOverride:state.touchOverride,viewportOverride:state.viewportOverride,
+      viewportMutationCount:state.viewportMutationCount,supportedConstraintsOverride:state.supportedConstraintsOverride,
       mediaDevicesPresent:state.mediaDevicesPresent,getDisplayMediaAtInstall:state.getDisplayMediaAtInstall,
       environmentReports:state.environmentReports
     };
   }
 
   overrideNavigatorEnvironment();
+  forceDesktopViewport();
   patchSupportedConstraints();
   window.__AIS_DESKTOP_SHARE_EXPERIMENT__={enabled:true,version:VERSION,mode:'desktop-share-screen'};
   window.__AIS_R21_DESKTOP_SHARE__={version:VERSION,describe:describe,environment:environment};
   environment('document-start');
   try{window.addEventListener('DOMContentLoaded',function(){environment('dom-content-loaded');},{once:true});}catch(_){}
   try{window.addEventListener('load',function(){environment('window-load');},{once:true});}catch(_){}
-  diag('ENGINE_INSTALLED',{version:VERSION,mode:'desktop-share-screen',desktopEnvironment:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,mode:'desktop-share-screen',desktopEnvironment:true,desktopCssWidth:DESKTOP_CSS_WIDTH});
 })();
     """.trimIndent()
 }

@@ -13,6 +13,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
@@ -22,6 +23,13 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class AppLogRepository private constructor(context: Context) {
+    data class ClipboardExport(
+        val text: String,
+        val includedEntries: Int,
+        val totalEntries: Int,
+        val truncated: Boolean,
+    )
+
     data class Entry(
         val sequence: Long,
         val epochMs: Long,
@@ -52,6 +60,7 @@ class AppLogRepository private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val preferences = AppPreferences(appContext)
     private val memory = ConcurrentLinkedDeque<Entry>()
+    private val memoryCount = AtomicLong(0L)
     private val sequence = AtomicLong(0L)
     private val io = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "diagnostic-log-writer").apply { isDaemon = true }
@@ -66,6 +75,7 @@ class AppLogRepository private constructor(context: Context) {
 
     init {
         logDir.mkdirs()
+        pruneOldLogFiles()
         io.scheduleAtFixedRate({ flushWriter() }, 2, 2, TimeUnit.SECONDS)
     }
 
@@ -87,8 +97,16 @@ class AppLogRepository private constructor(context: Context) {
             message = safeMessage,
             throwable = safeThrowable,
         )
-        while (memory.size >= MAX_MEMORY_ENTRIES) memory.pollFirst()
+        while (memoryCount.get() >= MAX_MEMORY_ENTRIES) {
+            if (memory.pollFirst() != null) {
+                memoryCount.decrementAndGet()
+            } else {
+                memoryCount.set(0L)
+                break
+            }
+        }
         memory.addLast(entry)
+        memoryCount.incrementAndGet()
 
         when (safeLevel) {
             0 -> Log.e(safeTag, safeMessage, throwable)
@@ -124,8 +142,57 @@ class AppLogRepository private constructor(context: Context) {
         entries(maxLevel, tag, query).joinToString("\n", transform = Entry::format)
             .ifBlank { "Chưa có nhật ký phù hợp bộ lọc." }
 
+    fun clipboardExport(maxChars: Int = MAX_CLIPBOARD_CHARS): ClipboardExport {
+        val safeCap = maxChars.coerceIn(32_000, MAX_TEXT_EXPORT_CHARS)
+        val totalEntries = memoryCount.get().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        if (totalEntries == 0) {
+            return ClipboardExport(
+                text = "Chưa có nhật ký.",
+                includedEntries = 0,
+                totalEntries = 0,
+                truncated = false,
+            )
+        }
+
+        val newestFirst = ArrayDeque<String>()
+        var usedChars = 0
+        var includedEntries = 0
+        val iterator = memory.descendingIterator()
+        while (iterator.hasNext()) {
+            val line = iterator.next().format()
+            val extra = line.length + if (newestFirst.isEmpty()) 0 else 1
+            if (usedChars + extra > safeCap) break
+            newestFirst.addFirst(line)
+            usedChars += extra
+            includedEntries++
+        }
+
+        val truncated = includedEntries < totalEntries
+        val header = buildString {
+            appendLine("Gemini Live Translate - Nhật ký sao chép an toàn")
+            appendLine("Đã lấy $includedEntries/$totalEntries mục mới nhất.")
+            if (truncated) {
+                appendLine(
+                    "Nội dung clipboard đã được giới hạn để tránh treo/văng ứng dụng. " +
+                        "Dùng Chia sẻ để lấy gói chẩn đoán đầy đủ.",
+                )
+            }
+            appendLine()
+        }
+        val body = newestFirst.joinToString("\n")
+        val available = (safeCap - header.length).coerceAtLeast(0)
+        val safeBody = if (body.length <= available) body else body.takeLast(available)
+        return ClipboardExport(
+            text = header + safeBody,
+            includedEntries = includedEntries,
+            totalEntries = totalEntries,
+            truncated = truncated || body.length > available,
+        )
+    }
+
     fun clear() {
         memory.clear()
+        memoryCount.set(0L)
         runCatching {
             io.submit {
                 closeWriter()
@@ -156,6 +223,16 @@ class AppLogRepository private constructor(context: Context) {
         logDir.listFiles()?.filter { it.isFile && it.extension == "log" }
             ?.sortedByDescending(File::lastModified).orEmpty()
 
+    private fun pruneOldLogFiles() {
+        runCatching {
+            logDir.listFiles()
+                ?.filter { it.isFile && it.extension == "log" }
+                ?.sortedByDescending(File::lastModified)
+                ?.drop(MAX_ROTATED_FILES + 1)
+                ?.forEach(File::delete)
+        }.onFailure { Log.w("AppLogRepository", "Không dọn được log cũ", it) }
+    }
+
     fun createDiagnosticBundle(): File {
         flushBlocking()
         val shareDir = File(appContext.cacheDir, "diagnostic-share").apply { mkdirs() }
@@ -164,7 +241,8 @@ class AppLogRepository private constructor(context: Context) {
         val output = File(shareDir, "GeminiLiveTranslate_diagnostics_$stamp.zip")
         ZipOutputStream(FileOutputStream(output).buffered()).use { zip ->
             addText(zip, "diagnostic-summary.txt", diagnosticSummary())
-            addText(zip, "memory-log.txt", text())
+            val memoryTail = clipboardExport(MAX_BUNDLE_MEMORY_TAIL_CHARS)
+            addText(zip, "memory-tail.txt", memoryTail.text)
             logFiles().forEach { file ->
                 zip.putNextEntry(ZipEntry("logs/${file.name}"))
                 file.inputStream().buffered().use { it.copyTo(zip) }
@@ -245,6 +323,7 @@ class AppLogRepository private constructor(context: Context) {
             if (target.exists()) target.delete()
             if (source.exists()) source.renameTo(target)
         }
+        pruneOldLogFiles()
     }
 
     private fun flushBlocking() {
@@ -297,12 +376,15 @@ class AppLogRepository private constructor(context: Context) {
     }
 
     companion object {
-        private const val MAX_MEMORY_ENTRIES = 30_000
-        private const val MAX_MESSAGE_CHARS = 64_000
-        private const val MAX_THROWABLE_CHARS = 64_000
-        private const val MAX_STACK_FRAMES = 120
-        private const val MAX_FILE_BYTES = 16L * 1024L * 1024L
-        private const val MAX_ROTATED_FILES = 7
+        private const val MAX_MEMORY_ENTRIES = 12_000
+        private const val MAX_MESSAGE_CHARS = 16_000
+        private const val MAX_THROWABLE_CHARS = 24_000
+        private const val MAX_STACK_FRAMES = 80
+        private const val MAX_FILE_BYTES = 8L * 1024L * 1024L
+        private const val MAX_ROTATED_FILES = 3
+        private const val MAX_CLIPBOARD_CHARS = 220_000
+        private const val MAX_BUNDLE_MEMORY_TAIL_CHARS = 350_000
+        private const val MAX_TEXT_EXPORT_CHARS = 400_000
         private const val SHARE_TTL_MS = 24L * 60L * 60L * 1_000L
         private const val MAX_SHARED_REPORTS = 5
 

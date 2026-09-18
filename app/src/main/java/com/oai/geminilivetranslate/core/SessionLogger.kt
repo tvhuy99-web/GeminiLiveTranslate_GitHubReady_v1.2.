@@ -16,6 +16,7 @@ class SessionLogger(context: Context, @Suppress("UNUSED_PARAMETER") preferences:
         repository.entries(maxLevel, tag, query)
 
     fun tags(): List<String> = repository.tags()
+    fun clipboardExport(): AppLogRepository.ClipboardExport = repository.clipboardExport()
     fun clear() = repository.clear()
     fun flush() = repository.flush()
     fun logFiles(): List<File> = repository.logFiles()

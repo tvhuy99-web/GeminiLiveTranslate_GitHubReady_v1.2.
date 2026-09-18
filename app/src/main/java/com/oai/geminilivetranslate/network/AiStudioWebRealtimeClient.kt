@@ -23,6 +23,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
+import androidx.webkit.UserAgentMetadata
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.oai.geminilivetranslate.GeminiTranslateApp
@@ -319,19 +321,25 @@ internal class AiStudioWebRealtimeClient(
         configureWebView(created)
         created.addJavascriptInterface(DiagnosticBridge(), DIAGNOSTIC_BRIDGE_NAME)
         created.addJavascriptInterface(AiStudioNativeTapController(created, logger), NATIVE_TAP_BRIDGE_NAME)
-        AiStudioDebugWebViewHost.attach(created, logger)
-
-        WebViewCompat.addDocumentStartJavaScript(
+        AiStudioDebugWebViewHost.attach(
             created,
-            AiStudioNativeTapDocumentStart.DOCUMENT_START,
-            setOf(AI_STUDIO_ORIGIN),
+            logger,
+            desktopShareExperiment = screenDescription,
         )
+
         if (screenDescription) {
             WebViewCompat.addDocumentStartJavaScript(
                 created,
                 AiStudioWebSessionR21DesktopShareScreenExperiment.DOCUMENT_START,
                 setOf(AI_STUDIO_ORIGIN),
             )
+        }
+        WebViewCompat.addDocumentStartJavaScript(
+            created,
+            AiStudioNativeTapDocumentStart.DOCUMENT_START,
+            setOf(AI_STUDIO_ORIGIN),
+        )
+        if (screenDescription) {
             WebViewCompat.addDocumentStartJavaScript(
                 created,
                 AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START,
@@ -464,11 +472,35 @@ internal class AiStudioWebRealtimeClient(
                 userAgentString = DESKTOP_SHARE_USER_AGENT
                 useWideViewPort = true
                 loadWithOverviewMode = true
+                var uaMetadata = "unsupported"
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {
+                    uaMetadata = runCatching {
+                        val chromium = UserAgentMetadata.BrandVersion.Builder()
+                            .setBrand("Chromium")
+                            .setMajorVersion("151")
+                            .setFullVersion("151.0.0.0")
+                            .build()
+                        val builder = UserAgentMetadata.Builder()
+                            .setBrandVersionList(listOf(chromium))
+                            .setFullVersion("151.0.0.0")
+                            .setPlatform("Linux")
+                            .setPlatformVersion("6.0.0")
+                            .setArchitecture("x86")
+                            .setMobile(false)
+                            .setModel(null)
+                        if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA_FORM_FACTORS)) {
+                            builder.setFormFactors(listOf(UserAgentMetadata.FORM_FACTOR_DESKTOP))
+                        }
+                        WebSettingsCompat.setUserAgentMetadata(this, builder.build())
+                        "desktop-linux"
+                    }.getOrElse { "error:${it.javaClass.simpleName}:${it.message.orEmpty().take(120)}" }
+                }
                 logger.log(
                     2,
                     "AiStudioDesktopShare",
                     "DESKTOP_WEBVIEW_MODE enabled=true originalUa=${safe(originalUa, 260)} " +
-                        "desktopUa=${safe(userAgentString.orEmpty(), 260)} wideViewport=$useWideViewPort overview=$loadWithOverviewMode",
+                        "desktopUa=${safe(userAgentString.orEmpty(), 260)} wideViewport=$useWideViewPort overview=$loadWithOverviewMode " +
+                        "uaMetadata=$uaMetadata",
                 )
             }
             domStorageEnabled = true

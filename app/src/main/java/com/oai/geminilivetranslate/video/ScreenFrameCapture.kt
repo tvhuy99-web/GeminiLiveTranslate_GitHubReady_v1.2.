@@ -148,36 +148,37 @@ class ScreenFrameCapture(
             }
 
             lastFrameAt = now
-            traceId = ++candidateFrames
-            if (shouldTrace(traceId)) {
+            val candidateId = ++candidateFrames
+            if (shouldTrace(candidateId)) {
                 logger.log(
                     3,
                     TAG,
-                    "FRAME_TRACE id=$traceId stage=image-acquired callback=$imageCallbacks acquired=$acquiredImages " +
+                    "FRAME_TRACE candidate=$candidateId stage=image-acquired callback=$imageCallbacks acquired=$acquiredImages " +
                         "image=${image.width}x${image.height} format=${image.format} planes=${image.planes.size} " +
                         "timestampNs=${image.timestamp} surfaceValid=${runCatching { reader.surface.isValid }.getOrDefault(false)}",
                 )
             }
 
             val encodeStarted = SystemClock.elapsedRealtimeNanos()
-            val jpeg = encodeJpeg(image, traceId)
+            val jpeg = encodeJpeg(image, candidateId)
             val encodeMs = (SystemClock.elapsedRealtimeNanos() - encodeStarted) / 1_000_000.0
             if (jpeg == null || jpeg.isEmpty()) {
                 encodeNulls++
                 logger.log(
                     1,
                     TAG,
-                    "FRAME_TRACE id=$traceId stage=encode-empty encodeNulls=$encodeNulls encodeMs=${"%.3f".format(encodeMs)}",
+                    "FRAME_TRACE candidate=$candidateId stage=encode-empty encodeNulls=$encodeNulls encodeMs=${"%.3f".format(encodeMs)}",
                 )
                 return
             }
 
             framesEncoded++
+            traceId = framesEncoded
             if (shouldTrace(traceId)) {
                 logger.log(
                     3,
                     TAG,
-                    "FRAME_TRACE id=$traceId stage=jpeg-encoded encoded=$framesEncoded jpegBytes=${jpeg.size} " +
+                    "FRAME_TRACE id=$traceId candidate=$candidateId stage=jpeg-encoded encoded=$framesEncoded jpegBytes=${jpeg.size} " +
                         "encodeMs=${"%.3f".format(encodeMs)}",
                 )
             }

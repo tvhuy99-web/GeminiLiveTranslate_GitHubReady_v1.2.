@@ -2,7 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-18-r17.12-desktop-share-screen-start"
+    const val VERSION = "2026-09-18-r17.13-desktop-share-setup-passthrough"
+    const val PREVIOUS_VERSION = "2026-09-18-r17.12-desktop-share-screen-start"
     const val PREVIOUS_VERSION = "2026-09-17-r17.11-start-before-camera-progress"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
@@ -14,7 +15,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-18-r17.12-desktop-share-screen-start';
+  const VERSION='2026-09-18-r17.13-desktop-share-setup-passthrough';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
@@ -29,6 +30,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     streamScans:0,streamCandidates:0,streamAttempts:0,modelScans:0,modelCandidates:0,modelAttempts:0,modelSearchAttempts:0,
     startScans:0,startCandidates:0,startAttempts:0,startAckTimeouts:0,startStableScans:0,lastStartSignature:'',modelGuardInstalled:false,modelGuardRequests:0,
     screenShareCandidates:0,screenShareClicks:0,lastScreenShareSignature:'',
+    screenSetupPassThroughRequests:0,screenSetupPassThroughModelPresent:0,screenSetupPassThroughChars:0,
     screenVideoWaitScans:0,modelRewriteRequests:0,modelRewriteCount:0,routeKind:'other'
   };
   let synthetic=null,carrierGain=null,carrierContext=null,carrierOscillator=null,lastDiscoverySignature='';
@@ -181,6 +183,24 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function rewriteSetupBody(body){
     try{
+      if(state.screenDescription&&window.__AIS_DESKTOP_SHARE_EXPERIMENT__&&window.__AIS_DESKTOP_SHARE_EXPERIMENT__.enabled){
+        const text=typeof body==='string'?body:(body instanceof URLSearchParams?body.toString():'');
+        if(text){
+          const hasTarget=text.toLowerCase().indexOf(String(state.targetModel||'').toLowerCase())>=0;
+          state.screenSetupPassThroughRequests++;
+          state.screenSetupPassThroughChars=text.length;
+          if(hasTarget){state.modelSeen=true;state.modelVerified=true;state.screenSetupPassThroughModelPresent++;}
+          diag('SCREEN_SETUP_PASSTHROUGH',{
+            count:state.screenSetupPassThroughRequests,
+            bodyChars:text.length,
+            targetModel:state.targetModel,
+            targetModelPresent:hasTarget,
+            modelPresentCount:state.screenSetupPassThroughModelPresent,
+            policy:'page-owned-unmodified'
+          });
+        }
+        return body;
+      }
       let params=null,asString=false;if(typeof body==='string'){params=new URLSearchParams(body);asString=true;}else if(body instanceof URLSearchParams){params=new URLSearchParams(body.toString());}else return body;
       let anyChanged=false,modelRewrites=0,translationChanges=0,translationSeen=0,screenChanges=0,screenSeen=0,touched=false;const updates=[];
       params.forEach(function(value,key){
@@ -263,7 +283,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,
       deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,
       streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,
-      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenShareCandidates:state.screenShareCandidates,screenShareClicks:state.screenShareClicks,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
+      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenShareCandidates:state.screenShareCandidates,screenShareClicks:state.screenShareClicks,screenSetupPassThroughRequests:state.screenSetupPassThroughRequests,screenSetupPassThroughModelPresent:state.screenSetupPassThroughModelPresent,screenSetupPassThroughChars:state.screenSetupPassThroughChars,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
       routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
   function resetAutomation(){state.startAttempts=0;state.startCandidates=0;state.startAckTimeouts=0;state.startStableScans=0;state.screenVideoWaitScans=0;state.lastStartSignature='';state.setupObserved=false;state.lastAction='';state.lastActionAt=0;state.stage='discover';state.lastBlocker='waiting-start';tick();return describe();}
@@ -271,7 +291,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   installModelGuard();installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};
   setInterval(tick,700);setTimeout(tick,0);setTimeout(tick,900);setTimeout(tick,2200);
-  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenPath:'desktop-share-screen',screenCameraGate:false,startBeforeCamera:false});
+  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenPath:'desktop-share-screen',screenSetupPolicy:'page-owned-unmodified',screenCameraGate:false,startBeforeCamera:false});
 })();
     """.trimIndent()
 }

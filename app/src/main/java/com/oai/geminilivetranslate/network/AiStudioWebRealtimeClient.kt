@@ -34,6 +34,7 @@ import com.oai.geminilivetranslate.ui.AiStudioWebSessionR16LiveOutputEngine
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR17ProductionBootstrap
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR18LanguageGuard
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR19ScreenVideoBridge
+import com.oai.geminilivetranslate.ui.AiStudioWebSessionR20ForensicDiagnostics
 import com.oai.geminilivetranslate.ui.AiStudioWebSessionR21DesktopShareScreenExperiment
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -329,6 +330,11 @@ internal class AiStudioWebRealtimeClient(
             WebViewCompat.addDocumentStartJavaScript(
                 created,
                 AiStudioWebSessionR21DesktopShareScreenExperiment.DOCUMENT_START,
+                setOf(AI_STUDIO_ORIGIN),
+            )
+            WebViewCompat.addDocumentStartJavaScript(
+                created,
+                AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START,
                 setOf(AI_STUDIO_ORIGIN),
             )
         }

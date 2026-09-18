@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-16-web-session-r14.3-aistudio-video-carrier"
+    const val VERSION = "2026-09-18-web-session-r14.4-screen-heartbeat"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
@@ -11,7 +11,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   'use strict';
   if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-16-web-session-r14.3-aistudio-video-carrier';
+  const VERSION='2026-09-18-web-session-r14.4-screen-heartbeat';
   const MAX_QUEUE=256;
   const state={
     armed:false,
@@ -34,7 +34,15 @@ object AiStudioWebSessionR14DirectLiveEngine {
     templatePayloadChars:0,
     lastCarrierAt:0,
     lastReplaceAt:0,
-    lastStatus:0
+    lastStatus:0,
+    screenHeartbeatEnabled:false,
+    screenHeartbeatText:'',
+    screenHeartbeatPending:false,
+    screenTurnInFlight:false,
+    screenHeartbeatsQueued:0,
+    screenHeartbeatsInjected:0,
+    screenTurnCompletes:0,
+    lastScreenHeartbeatAt:0
   };
 
   function bridge(kind,payload){

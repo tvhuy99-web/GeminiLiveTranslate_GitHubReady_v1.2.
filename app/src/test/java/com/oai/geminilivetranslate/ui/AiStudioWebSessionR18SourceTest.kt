@@ -152,6 +152,7 @@ class AiStudioWebSessionR18SourceTest {
     @Test
     fun screenDescriptionDesktopSharePathUsesDisplayMediaAndDisablesManualHeartbeat() {
         val nativeTap = source("network/AiStudioNativeTapDebugSupport.kt")
+        val bootstrap = source("ui/AiStudioWebSessionR17ProductionBootstrap.kt")
         val screenBridge = source("ui/AiStudioWebSessionR19ScreenVideoBridge.kt")
         val desktopShare = source("ui/AiStudioWebSessionR21DesktopShareScreenExperiment.kt")
         val realtime = source("network/AiStudioWebRealtimeClient.kt")
@@ -163,6 +164,10 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("R26_DESKTOP_PROFILE_PRESERVED"))
         assertTrue(nativeTap.contains("desktopShareExperiment"))
 
+        assertTrue(bootstrap.contains("r17.13-desktop-share-setup-passthrough"))
+        assertTrue(bootstrap.contains("SCREEN_SETUP_PASSTHROUGH"))
+        assertTrue(bootstrap.contains("page-owned-unmodified"))
+        assertTrue(bootstrap.contains("return body;"))
         assertTrue(screenBridge.contains("r19.15-desktop-share-screen-bridge"))
         assertTrue(screenBridge.contains("DESKTOP_SHARE_EXPERIMENT=true"))
         assertTrue(screenBridge.contains("DISPLAY_HOOK_INSTALLED"))

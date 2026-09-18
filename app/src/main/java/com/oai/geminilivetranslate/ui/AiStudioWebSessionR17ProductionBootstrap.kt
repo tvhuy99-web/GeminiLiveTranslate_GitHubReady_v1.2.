@@ -4,7 +4,7 @@ package com.oai.geminilivetranslate.ui
 object AiStudioWebSessionR17ProductionBootstrap {
     const val VERSION = "2026-09-18-r17.13-desktop-share-setup-passthrough"
     const val PREVIOUS_VERSION = "2026-09-18-r17.12-desktop-share-screen-start"
-    const val PREVIOUS_VERSION = "2026-09-17-r17.11-start-before-camera-progress"
+    const val LEGACY_VERSION = "2026-09-17-r17.11-start-before-camera-progress"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"

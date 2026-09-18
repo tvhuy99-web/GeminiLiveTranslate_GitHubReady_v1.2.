@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /** Foreground owner for a visual-only Gemini Live screen-description session. */
 class LiveVideoDescriptionService : Service() {
@@ -39,6 +40,8 @@ class LiveVideoDescriptionService : Service() {
     private var outputPlayer: StreamingPcmPlayer? = null
     private var projectionCallback: MediaProjection.Callback? = null
     private val stopping = AtomicBoolean(false)
+    private val frameDispatchSeq = AtomicLong(0L)
+    private val setupCompleteCallbacks = AtomicLong(0L)
     private val transcript = StringBuilder()
     private var lastTranscriptChunk = ""
 
@@ -136,18 +139,56 @@ class LiveVideoDescriptionService : Service() {
             mediaProjection = projection,
             logger = logger,
         ) { jpeg ->
-            when (liveClient?.sendVideoFrame(jpeg)) {
+            val seq = frameDispatchSeq.incrementAndGet()
+            val clientSnapshot = liveClient
+            val trace = seq <= 10L || seq % 30L == 0L
+            if (trace) {
+                logger.log(
+                    3,
+                    TAG,
+                    "FRAME_PIPELINE id=$seq stage=service-dispatch-begin jpegBytes=${jpeg.size} " +
+                        "clientPresent=${clientSnapshot != null} stopping=${stopping.get()} thread=${Thread.currentThread().name}",
+                )
+            }
+            val result = clientSnapshot?.sendVideoFrame(jpeg)
+            if (trace || result == ScreenDescriptionLiveClient.SendResult.NOT_READY || result == null) {
+                logger.log(
+                    if (result == ScreenDescriptionLiveClient.SendResult.NOT_READY || result == null) 1 else 3,
+                    TAG,
+                    "FRAME_PIPELINE id=$seq stage=service-dispatch-result result=${result ?: "NO_CLIENT"} " +
+                        "jpegBytes=${jpeg.size} setupCallbacks=${setupCompleteCallbacks.get()}",
+                )
+            }
+            when (result) {
                 ScreenDescriptionLiveClient.SendResult.FAILED,
                 ScreenDescriptionLiveClient.SendResult.CLOSED -> {
-                    logger.log(1, TAG, "Frame không gửi được vì Live socket đã đóng")
+                    logger.log(1, TAG, "FRAME_PIPELINE id=$seq stage=drop reason=live-client-closed result=$result")
                 }
                 ScreenDescriptionLiveClient.SendResult.BACKPRESSURED -> {
-                    logger.log(3, TAG, "Bỏ frame hiện tại do backpressure; không xếp hàng frame cũ")
+                    logger.log(3, TAG, "FRAME_PIPELINE id=$seq stage=drop reason=backpressure")
+                }
+                ScreenDescriptionLiveClient.SendResult.NOT_READY -> {
+                    logger.log(
+                        1,
+                        TAG,
+                        "FRAME_PIPELINE id=$seq stage=hold reason=live-client-not-ready " +
+                            "captureAlreadyRunning=true setupCallbacks=${setupCompleteCallbacks.get()}",
+                    )
+                }
+                null -> {
+                    logger.log(1, TAG, "FRAME_PIPELINE id=$seq stage=drop reason=live-client-null")
                 }
                 else -> Unit
             }
         }
         frameCapture = capture
+        logger.log(
+            2,
+            TAG,
+            "FRAME_PIPELINE_CAPTURE_DEFERRED captureCreated=true captureStarted=false " +
+                "startCondition=listener.onSetupComplete connectionMode=$connectionMode " +
+                "note=no-Android-JPEG-is-produced-before-this-callback",
+        )
 
         val outputLanguage = LanguageCatalog.displayName(settings.targetLanguage)
         val selectedBackend = if (connectionMode == AiConnectionModeStore.MODE_AI_STUDIO) "ai_studio" else "api_key"
@@ -159,9 +200,25 @@ class LiveVideoDescriptionService : Service() {
             logger = logger,
             listener = object : ScreenDescriptionLiveClient.Listener {
                 override fun onSetupComplete() {
-                    if (stopping.get()) return
+                    val callbackIndex = setupCompleteCallbacks.incrementAndGet()
+                    logger.log(
+                        2,
+                        TAG,
+                        "FRAME_PIPELINE_SETUP_CALLBACK index=$callbackIndex stopping=${stopping.get()} " +
+                            "dispatchesBeforeSetup=${frameDispatchSeq.get()} action=start-screen-capture",
+                    )
+                    if (stopping.get()) {
+                        logger.log(1, TAG, "FRAME_PIPELINE_CAPTURE_START_SKIP reason=service-stopping")
+                        return
+                    }
                     runCatching { capture.start() }
                         .onSuccess {
+                            logger.log(
+                                2,
+                                TAG,
+                                "FRAME_PIPELINE_CAPTURE_ACTIVE setupCallback=$callbackIndex " +
+                                    "dispatchesBeforeStart=${frameDispatchSeq.get()}",
+                            )
                             publish("Đang mô tả thời gian thực", running = true)
                             logger.log(
                                 2,
@@ -212,6 +269,12 @@ class LiveVideoDescriptionService : Service() {
                 "audioOutput=true connectionMode=$connectionMode backend=$selectedBackend " +
                     "promptSource=${if (customPrompt == null) "default" else "custom"} " +
                 "promptChars=${customPrompt?.length ?: 0}",
+        )
+        logger.log(
+            2,
+            TAG,
+            "FRAME_PIPELINE_DEPENDENCY captureStart=after-client-onSetupComplete " +
+                "captureStarted=false framesDispatched=0 backend=$selectedBackend",
         )
         client.connect()
     }

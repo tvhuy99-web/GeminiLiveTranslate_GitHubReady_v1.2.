@@ -2,7 +2,7 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-17-r17.11-start-before-camera-progress"
+    const val VERSION = "2026-09-18-r17.12-positional-screen-instruction"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"
@@ -13,7 +13,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-17-r17.11-start-before-camera-progress';
+  const VERSION='2026-09-18-r17.12-positional-screen-instruction';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
@@ -137,7 +137,23 @@ object AiStudioWebSessionR17ProductionBootstrap {
   }
   function patchScreenDescriptionTree(node,depth){
     const d=depth||0;if(d>12||node==null||typeof node!=='object')return {changed:0,seen:0};let changed=0,seen=0;
-    if(Array.isArray(node)){for(let i=0;i<node.length;i++){const r=patchScreenDescriptionTree(node[i],d+1);changed+=r.changed;seen+=r.seen;}return {changed:changed,seen:seen};}
+    if(Array.isArray(node)){
+      const target=String(state.targetModel||'').toLowerCase().replace(/^models\//,'');
+      const positionalModel=typeof node[0]==='string'?String(node[0]).toLowerCase().replace(/^models\//,''):'';
+      if(positionalModel&&positionalModel===target&&Array.isArray(node[1])){
+        seen++;
+        const prompt=String(state.systemPrompt||'').trim();
+        if(prompt){
+          while(node.length<3)node.push(null);
+          const instruction=[[[null,prompt]]];
+          if(JSON.stringify(node[2])!==JSON.stringify(instruction)){node[2]=instruction;changed++;}
+          state.instructionApplied=true;
+          diag('SCREEN_SETUP_POSITIONAL',{model:target,systemInstructionField:3,promptChars:prompt.length,changed:changed>0});
+        }
+      }
+      for(let i=0;i<node.length;i++){const r=patchScreenDescriptionTree(node[i],d+1);changed+=r.changed;seen+=r.seen;}
+      return {changed:changed,seen:seen};
+    }
     const model=typeof node.model==='string'?String(node.model).toLowerCase().replace(/^models\//,''):'';
     if(model&&model===String(state.targetModel||'').toLowerCase().replace(/^models\//,'')){
       seen++;
@@ -225,7 +241,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     const snapshot=collectDeep();tryStart(snapshot);reportDiscovery();
   }
   function configure(targetLanguage,transcribeOnly,echoTargetLanguage,requestedModel,screenDescription,systemPrompt){
-    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.screenDescription=!!screenDescription;state.echoTargetLanguage=echoTargetLanguage===true;state.systemPrompt=String(systemPrompt||'').trim().slice(0,20000);
+    state.targetLanguage=safeText(targetLanguage||'vi',60)||'vi';state.transcribeOnly=!!transcribeOnly;state.screenDescription=!!screenDescription;state.echoTargetLanguage=echoTargetLanguage===true;state.systemPrompt=String(systemPrompt||'').trim().slice(0,20000);state.instructionApplied=false;
     if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;}
     const requested=safeText(requestedModel||'',160).replace(/^models\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
     state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;

@@ -700,6 +700,7 @@ internal class AiStudioWebRealtimeClient(
         val screenJs = if (screenDescription) "true" else "false"
         val requestedModel = JSONObject.quote(targetLiveModel())
         val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
+        val screenHeartbeat = JSONObject.quote(GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT)
         val languageCall = if (transcribe || screenDescription) {
             "null"
         } else {
@@ -710,27 +711,35 @@ internal class AiStudioWebRealtimeClient(
         } else {
             "null"
         }
+        val directScreenCall = if (screenDescription) {
+            "(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat(true,$screenHeartbeat):({ok:false,error:'r14-screen-heartbeat-not-installed'}))"
+        } else {
+            "null"
+        }
         current.evaluateJavascript(
-            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall,screen:$screenCall})",
+            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall,screen:$screenCall,directScreen:$directScreenCall})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull()
             val bootstrap = root?.optJSONObject("bootstrap")
             val languageGuard = root?.optJSONObject("language")
             val screenBridge = root?.optJSONObject("screen")
+            val directScreen = root?.optJSONObject("directScreen")
             val bootstrapOk = bootstrap?.optBoolean("ok") == true
             val languageOk = transcribe || screenDescription || languageGuard?.optBoolean("ok") == true
             val screenOk = !screenDescription || screenBridge?.optBoolean("ok") == true
-            if (bootstrapOk && languageOk && screenOk) {
+            val directScreenOk = !screenDescription || directScreen?.optBoolean("ok") == true
+            if (bootstrapOk && languageOk && screenOk && directScreenOk) {
                 configured = true
                 languageGuardConfigured = !transcribe && !screenDescription && languageOk
                 lastBootstrapState = bootstrap.toString()
                 if (!transcribe && languageGuard != null) lastLanguageGuardState = languageGuard.toString()
                 if (screenBridge != null) lastScreenVideoState = screenBridge.toString()
+                if (directScreen != null) lastDirectState = directScreen.toString()
                 updateBootstrapProgress(bootstrap)
-                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured")
+                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured screenHeartbeat=${directScreen?.optBoolean("screenHeartbeatEnabled", false) == true}")
             } else if (decoded.isNotBlank()) {
-                logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk ${safe(decoded, 1200)}")
+                logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk screenOk=$screenOk directScreenOk=$directScreenOk ${safe(decoded, 1200)}")
             }
         }
     }
@@ -837,6 +846,20 @@ internal class AiStudioWebRealtimeClient(
             }
         }
         if (screenDescription) {
+            val bootstrap = runCatching { JSONObject(lastBootstrapState) }.getOrNull() ?: return
+            val direct = runCatching { JSONObject(lastDirectState) }.getOrNull() ?: return
+            val instructionApplied = bootstrap.optBoolean("instructionApplied", false)
+            val heartbeatEnabled = direct.optBoolean("screenHeartbeatEnabled", false)
+            if (!instructionApplied || !heartbeatEnabled) {
+                logger.log(
+                    2,
+                    "AiStudioScreenVideo",
+                    "WAITING_SCREEN_CONTROL instructionApplied=$instructionApplied heartbeatEnabled=$heartbeatEnabled " +
+                        "heartbeatPending=${direct.optBoolean("screenHeartbeatPending", false)} " +
+                        "heartbeatInjected=${direct.optLong("screenHeartbeatsInjected", 0L)}",
+                )
+                return
+            }
             val screen = runCatching { JSONObject(lastScreenVideoState) }.getOrNull() ?: return
             val videoReady = screen.optBoolean("videoTrackReady", false)
             val cameraTransportReady = screen.optBoolean("cameraTransportReady", false)

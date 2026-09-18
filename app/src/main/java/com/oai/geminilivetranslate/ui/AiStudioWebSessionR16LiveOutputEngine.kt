@@ -2,14 +2,14 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR16LiveOutputEngine {
-    const val VERSION = "2026-09-03-web-session-r16.1-jspb-live-output"
+    const val VERSION = "2026-09-18-web-session-r16.2-screen-turn-gate"
 
     val DOCUMENT_START = """
 (function(){
   'use strict';
   if(window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-03-web-session-r16.1-jspb-live-output';
+  const VERSION='2026-09-18-web-session-r16.2-screen-turn-gate';
   const MAX_BUFFER_CHARS=2200000;
   const MAX_NESTED_JSON_CHARS=1500000;
   const state={
@@ -109,13 +109,19 @@ object AiStudioWebSessionR16LiveOutputEngine {
     }catch(_){}
     return emitted;
   }
+  function notifyDirectTurnComplete(){
+    try{
+      const d=window.__AIS_LIVE_DIRECT_ENGINE__;
+      if(d&&typeof d.onScreenTurnComplete==='function')d.onScreenTurnComplete();
+    }catch(_){}
+  }
   function handleJspbServerContent(sc){
     if(!Array.isArray(sc))return false;
     state.jspbServerContentMessages++;
     try{
       jspbModelText(sc[0]);
       if(asTrue(sc[4])){state.generationCompleteEvents++;bridgeSignal('generationComplete','true');}
-      if(asTrue(sc[1])){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');}
+      if(asTrue(sc[1])){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');notifyDirectTurnComplete();}
       if(asTrue(sc[2])){state.interruptedEvents++;bridgeSignal('interrupted','true');}
       const input=jspbTranscriptionText(sc[5]);if(input)bridgeText('inputTranscription',input);
       const outputText=jspbTranscriptionText(sc[6]);if(outputText)bridgeText('outputTranscription',outputText);
@@ -179,7 +185,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
           const part=parts[i];if(!part||typeof part!=='object'||Array.isArray(part))continue;
           if(!outputText&&typeof part.text==='string'&&part.text)bridgeText('modelText',part.text);
         }
-        if(sc.turnComplete===true||sc.turn_complete===true){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');}
+        if(sc.turnComplete===true||sc.turn_complete===true){state.turnCompleteEvents++;bridgeSignal('turnComplete','true');notifyDirectTurnComplete();}
         if(sc.waitingForInput===true||sc.waiting_for_input===true){state.waitingForInputEvents++;bridgeSignal('waitingForInput','true');}
       }
       const resume=obj.sessionResumptionUpdate||obj.session_resumption_update;

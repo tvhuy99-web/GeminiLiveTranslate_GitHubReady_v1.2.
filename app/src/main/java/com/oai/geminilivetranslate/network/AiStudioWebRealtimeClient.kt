@@ -300,7 +300,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts",
+            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()}",
         )
     }
 
@@ -699,6 +699,19 @@ internal class AiStudioWebRealtimeClient(
                     } else {
                         "AI_STUDIO_LIVE_SETUP_STALLED"
                     }
+                    logger.log(
+                        0,
+                        "AiStudioScreenVideo",
+                        "SETUP_TIMEOUT_FORENSIC reason=$reason totalMs=$totalFor stalledMs=$stalledFor " +
+                            "bootstrapInstalled=$bootstrapInstalled configured=$configured serverSetupSeen=$serverSetupSeen " +
+                            "setupDelivered=${setupDelivered.get()} frameCalls=${screenFrameCalls.get()} " +
+                            "frameNotReady=${screenFrameNotReady.get()} framePosted=${screenFramePosted.get()} " +
+                            "jsCallbacks=${screenFrameJsCallbacks.get()} recoveryAttempts=$bootstrapRecoveryAttempts " +
+                            "lastInstall=${safe(lastBootstrapInstallError, 400)} " +
+                            "bootstrap=${safe(lastBootstrapState, 2400)} direct=${safe(lastDirectState, 2400)} " +
+                            "screen=${safe(lastScreenVideoState, 3200)} output=${safe(lastOutputState, 2400)} " +
+                            "language=${safe(lastLanguageGuardState, 1800)}",
+                    )
                     fail(IllegalStateException("$reason bootstrapInstalled=$bootstrapInstalled configured=$configured recoveryAttempts=$bootstrapRecoveryAttempts lastInstall=$lastBootstrapInstallError"))
                     return
                 }

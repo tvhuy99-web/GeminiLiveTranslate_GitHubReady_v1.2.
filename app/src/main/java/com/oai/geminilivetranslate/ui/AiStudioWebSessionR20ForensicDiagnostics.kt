@@ -171,12 +171,13 @@ object AiStudioWebSessionR20ForensicDiagnostics {
 
   function snapshot(){
     if(!active())return;
-    let r17=null,r19=null,r16=null,r14=null;
+    let r21=null,r17=null,r19=null,r16=null,r14=null;
+    try{r21=window.__AIS_R21_DESKTOP_SHARE__&&window.__AIS_R21_DESKTOP_SHARE__.describe?window.__AIS_R21_DESKTOP_SHARE__.describe():null;}catch(_){}
     try{r17=window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.describe?window.__AIS_R17_PRODUCTION__.describe():null;}catch(_){}
     try{r19=window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.describe?window.__AIS_R19_SCREEN_VIDEO__.describe():null;}catch(_){}
     try{r16=window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.describe?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null;}catch(_){}
     try{r14=window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.describe?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null;}catch(_){}
-    const s=JSON.stringify({r17:r17,r19:r19,r16:r16,r14:r14});if(s!==state.lastState){state.lastState=s;chunk('STATE_SNAPSHOT',0,'state',s);}
+    const s=JSON.stringify({r21:r21,r17:r17,r19:r19,r16:r16,r14:r14});if(s!==state.lastState){state.lastState=s;chunk('STATE_SNAPSHOT',0,'state',s);}
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};

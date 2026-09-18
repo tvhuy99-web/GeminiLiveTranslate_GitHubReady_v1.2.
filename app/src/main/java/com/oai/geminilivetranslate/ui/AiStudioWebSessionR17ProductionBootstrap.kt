@@ -2,7 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR17ProductionBootstrap {
-    const val VERSION = "2026-09-17-r17.11-start-before-camera-progress"
+    const val VERSION = "2026-09-18-r17.12-desktop-share-screen-start"
+    const val PREVIOUS_VERSION = "2026-09-17-r17.11-start-before-camera-progress"
     const val TRANSLATE_MODEL = "gemini-3.5-live-translate-preview"
     const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe-live"
     const val SCREEN_DESCRIPTION_MODEL = "gemini-3.8-live"
@@ -13,7 +14,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   'use strict';
   if(window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.version)return;
 
-  const VERSION='2026-09-17-r17.11-start-before-camera-progress';
+  const VERSION='2026-09-18-r17.12-desktop-share-screen-start';
   const TRANSLATE_MODEL='gemini-3.5-live-translate-preview';
   const TRANSCRIBE_MODEL='gemini-3.5-transcribe-live';
   const SCREEN_DESCRIPTION_MODEL='gemini-3.8-live';
@@ -27,6 +28,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     deepElements:0,interactiveControls:0,shadowRoots:0,frameDocuments:0,discoveryScans:0,
     streamScans:0,streamCandidates:0,streamAttempts:0,modelScans:0,modelCandidates:0,modelAttempts:0,modelSearchAttempts:0,
     startScans:0,startCandidates:0,startAttempts:0,startAckTimeouts:0,startStableScans:0,lastStartSignature:'',modelGuardInstalled:false,modelGuardRequests:0,
+    screenShareCandidates:0,screenShareClicks:0,lastScreenShareSignature:'',
     screenVideoWaitScans:0,modelRewriteRequests:0,modelRewriteCount:0,routeKind:'other'
   };
   let synthetic=null,carrierGain=null,carrierContext=null,carrierOscillator=null,lastDiscoverySignature='';
@@ -77,6 +79,10 @@ object AiStudioWebSessionR17ProductionBootstrap {
   function startScore(el){
     const l=label(el),r=role(el),t=tag(el);if(!l||attr(el,'disabled')||attr(el,'aria-disabled')==='true'||l.indexOf('stop')>=0)return 0;
     if(!(t==='BUTTON'||t==='A'||r==='button'||r==='menuitem'||r==='tab'||r==='link'))return 0;
+    if(state.screenDescription){
+      if(/share screen|screen share|present screen|share display|screenshot_monitor/.test(l))return 120;
+      if(/\b(webcam|camera|talk|microphone|mic|speak)\b|videocam/.test(l))return 0;
+    }
     let s=0;if(/\b(start|begin|connect|talk|speak|join)\b/.test(l))s+=9;if(l.indexOf('go live')>=0||l.indexOf('start session')>=0||l.indexOf('start live')>=0)s+=10;
     if(l.indexOf('microphone')>=0||l.indexOf(' mic')>=0)s+=5;if(l.indexOf('live')>=0||l.indexOf('stream')>=0)s+=2;return s;
   }
@@ -97,8 +103,21 @@ object AiStudioWebSessionR17ProductionBootstrap {
       state.startAckTimeouts++;diag('START_ACK_TIMEOUT',{attempt:state.startAttempts,ageMs:age,ackTimeouts:state.startAckTimeouts,progress:progress.progress,progressKind:progress.kind,limitMs:limit});
       state.lastAction='start-ack-timeout';state.lastActionAt=0;state.startStableScans=0;state.lastStartSignature='';
     }
-    const scored=[];for(let i=0;i<snapshot.interactive.length;i++){const score=startScore(snapshot.interactive[i]);if(score>=7)scored.push({el:snapshot.interactive[i],score:score});}
+    const scored=[];const shareLabels=[];
+    for(let i=0;i<snapshot.interactive.length;i++){
+      const l=label(snapshot.interactive[i]);
+      if(state.screenDescription&&/share screen|screen share|present screen|share display|screenshot_monitor/.test(l))shareLabels.push(safeText(l,220));
+      const score=startScore(snapshot.interactive[i]);if(score>=7)scored.push({el:snapshot.interactive[i],score:score});
+    }
     scored.sort(function(a,b){return b.score-a.score;});state.startCandidates=scored.length;
+    if(state.screenDescription){
+      state.screenShareCandidates=shareLabels.length;
+      const shareSig=shareLabels.slice(0,6).join('|');
+      if(shareSig!==state.lastScreenShareSignature){
+        state.lastScreenShareSignature=shareSig;
+        diag('SCREEN_SHARE_DISCOVERY',{candidates:shareLabels.length,labels:shareLabels.slice(0,6),interactiveControls:snapshot.interactive.length,routeKind:state.routeKind});
+      }
+    }
     if(!scored.length){state.startStableScans=0;state.lastStartSignature='';state.lastBlocker='start-control-not-found';return;}
     const best=scored[0],sig=[tag(best.el),role(best.el),label(best.el).slice(0,180)].join('|');
     if(sig===state.lastStartSignature)state.startStableScans++;else{state.lastStartSignature=sig;state.startStableScans=1;}
@@ -107,7 +126,12 @@ object AiStudioWebSessionR17ProductionBootstrap {
       state.startAttempts++;
       if(clickElement(best.el,'start-live')){
         state.stage='start-clicked';state.lastBlocker='waiting-start-ack';
-        if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;diag('SCREEN_REAL_MEDIA_START',{syntheticCarrier:false,startBeforeCamera:true});}
+        if(state.screenDescription){
+          state.screenShareClicks++;
+          state.carrierActive=false;state.syntheticCarrier=false;
+          diag('SCREEN_SHARE_CLICK',{clicks:state.screenShareClicks,score:best.score,label:safeText(label(best.el),240),expectedApi:'getDisplayMedia',path:'desktop-share-screen'});
+          diag('SCREEN_REAL_MEDIA_START',{syntheticCarrier:false,startBeforeCamera:false,desktopShareScreen:true});
+        }
         else buildSyntheticCarrier();
         diag('START_ATTEMPT',{attempt:state.startAttempts,score:best.score,stableScans:state.startStableScans,screenDescription:state.screenDescription});return;
       }
@@ -229,7 +253,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
     if(state.screenDescription){state.carrierActive=false;state.syntheticCarrier=false;}
     const requested=safeText(requestedModel||'',160).replace(/^models\//,'');state.targetModel=state.screenDescription?(requested||SCREEN_DESCRIPTION_MODEL):(state.transcribeOnly?TRANSCRIBE_MODEL:TRANSLATE_MODEL);
     state.configured=true;state.stage='discover';state.lastBlocker='waiting-start';state.modelSeen=routeHasTargetModel();state.modelRouteRequested=state.modelSeen;state.modelVerified=false;state.targetLanguageVerified=state.transcribeOnly||state.screenDescription;
-    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription,startBeforeCamera:state.screenDescription});tick();return describe();
+    diag('FUNCTION_MODEL',{transcribeOnly:state.transcribeOnly,screenDescription:state.screenDescription,targetModel:state.targetModel,targetLanguageCode:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,promptChars:state.systemPrompt.length,syntheticCarrierAllowed:!state.screenDescription,startPath:state.screenDescription?'desktop-share-screen':'talk'});tick();return describe();
   }
   function describe(){
     return {ok:true,version:VERSION,targetModel:state.targetModel,configured:state.configured,transcribeOnly:state.transcribeOnly,targetLanguage:state.targetLanguage,echoTargetLanguage:state.echoTargetLanguage,
@@ -239,7 +263,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
       carrierActive:state.carrierActive,syntheticCarrier:state.syntheticCarrier,syntheticErrors:state.syntheticErrors,pageOutputMuted:state.pageOutputMuted,authRequired:state.authRequired,stage:state.stage,lastBlocker:state.lastBlocker,
       deepElements:state.deepElements,interactiveControls:state.interactiveControls,shadowRoots:state.shadowRoots,frameDocuments:state.frameDocuments,discoveryScans:state.discoveryScans,
       streamScans:state.streamScans,streamCandidates:state.streamCandidates,streamAttempts:state.streamAttempts,modelScans:state.modelScans,modelCandidates:state.modelCandidates,modelAttempts:state.modelAttempts,
-      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
+      startScans:state.startScans,startCandidates:state.startCandidates,startAttempts:state.startAttempts,startAckTimeouts:state.startAckTimeouts,startStableScans:state.startStableScans,screenShareCandidates:state.screenShareCandidates,screenShareClicks:state.screenShareClicks,screenVideoWaitScans:state.screenVideoWaitScans,modelGuardInstalled:state.modelGuardInstalled,modelGuardRequests:state.modelGuardRequests,modelRewriteRequests:state.modelRewriteRequests,modelRewriteCount:state.modelRewriteCount,
       routeKind:state.routeKind,lastAction:state.lastAction,lastActionAgeMs:state.lastActionAt?Date.now()-state.lastActionAt:-1,lastTickAgeMs:state.lastTickAt?Date.now()-state.lastTickAt:-1};
   }
   function resetAutomation(){state.startAttempts=0;state.startCandidates=0;state.startAckTimeouts=0;state.startStableScans=0;state.screenVideoWaitScans=0;state.lastStartSignature='';state.setupObserved=false;state.lastAction='';state.lastActionAt=0;state.stage='discover';state.lastBlocker='waiting-start';tick();return describe();}
@@ -247,7 +271,7 @@ object AiStudioWebSessionR17ProductionBootstrap {
   installModelGuard();installSyntheticGum();installOutputMute();
   window.__AIS_R17_PRODUCTION__={version:VERSION,configure:configure,setCarrierActive:setCarrierActive,describe:describe,resetAutomation:resetAutomation};
   setInterval(tick,700);setTimeout(tick,0);setTimeout(tick,900);setTimeout(tick,2200);
-  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenCameraGate:false,startBeforeCamera:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,top:window.top===window,modelGuardInstalled:state.modelGuardInstalled,screenPath:'desktop-share-screen',screenCameraGate:false,startBeforeCamera:false});
 })();
     """.trimIndent()
 }

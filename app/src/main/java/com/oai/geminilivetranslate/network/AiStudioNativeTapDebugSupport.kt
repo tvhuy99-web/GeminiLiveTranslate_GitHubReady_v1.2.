@@ -295,14 +295,19 @@ internal object AiStudioDebugWebViewHost {
     private val main = Handler(Looper.getMainLooper())
     private val panels = WeakHashMap<WebView, WeakReference<ViewGroup>>()
 
-    fun attach(webView: WebView, logger: SessionLogger?, retry: Int = 0) {
+    fun attach(
+        webView: WebView,
+        logger: SessionLogger?,
+        retry: Int = 0,
+        desktopShareExperiment: Boolean = false,
+    ) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            main.post { attach(webView, logger, retry) }
+            main.post { attach(webView, logger, retry, desktopShareExperiment) }
             return
         }
         val activity = GeminiTranslateApp.currentActivity()
         if (activity == null) {
-            if (retry < 12) main.postDelayed({ attach(webView, logger, retry + 1) }, 150L)
+            if (retry < 12) main.postDelayed({ attach(webView, logger, retry + 1, desktopShareExperiment) }, 150L)
             else logger?.log(1, "AiStudioDebugWeb", "VISIBLE_WEBVIEW_ATTACH_FAILED reason=no-foreground-activity")
             return
         }
@@ -310,7 +315,7 @@ internal object AiStudioDebugWebViewHost {
         val liveScreenMode =
             prefs.loadProcessingMode() == AppPreferences.PROCESSING_MODE_VIDEO_DESCRIPTION &&
                 prefs.loadVideoDescriptionMode() == AppPreferences.VIDEO_DESCRIPTION_LIVE
-        if (liveScreenMode) {
+        if (liveScreenMode && !desktopShareExperiment) {
             webView.settings.apply {
                 userAgentString = null
                 useWideViewPort = false
@@ -320,6 +325,14 @@ internal object AiStudioDebugWebViewHost {
                 2,
                 "AiStudioDebugWeb",
                 "R26_MOBILE_PROFILE enabled=true reason=live-screen-description transport=camera-gum ua=default-webview wideViewport=false overview=false",
+            )
+        } else if (liveScreenMode) {
+            logger?.log(
+                2,
+                "AiStudioDebugWeb",
+                "R26_DESKTOP_PROFILE_PRESERVED enabled=true reason=desktop-share-screen-experiment " +
+                    "ua=${webView.settings.userAgentString.orEmpty().take(260)} " +
+                    "wideViewport=${webView.settings.useWideViewPort} overview=${webView.settings.loadWithOverviewMode}",
             )
         }
 
@@ -346,7 +359,11 @@ internal object AiStudioDebugWebViewHost {
         }
         val label = TextView(activity).apply {
             text = if (liveScreenMode) {
-                "AI Studio Live mobile - phiên đang dùng cho Mô tả thời gian thực"
+                if (desktopShareExperiment) {
+                    "AI Studio Live desktop - thử nghiệm Share Screen"
+                } else {
+                    "AI Studio Live mobile - phiên đang dùng cho Mô tả thời gian thực"
+                }
             } else {
                 "AI Studio kiểm tra tạm thời - đây là chính phiên AI Studio ứng dụng đang dùng"
             }
@@ -379,7 +396,8 @@ internal object AiStudioDebugWebViewHost {
         logger?.log(
             2,
             "AiStudioDebugWeb",
-            "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible} desktop=false mobileProfile=$liveScreenMode immediate=$visible",
+            "AI_STUDIO_WEBVIEW_ATTACHED visible=$visible height=$height screenHeight=$screenHeight hiddenOffscreen=${!visible} " +
+                "desktop=$desktopShareExperiment mobileProfile=${liveScreenMode && !desktopShareExperiment} immediate=$visible",
         )
     }
 

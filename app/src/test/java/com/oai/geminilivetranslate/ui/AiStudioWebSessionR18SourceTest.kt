@@ -160,6 +160,8 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("lastTapAtByPurpose[purpose]"))
         assertTrue(nativeTap.contains("NATIVE_TAP_DEBOUNCE_MS = 1_200L"))
         assertFalse(nativeTap.contains("@Volatile private var lastTapAt = 0L"))
+        assertTrue(nativeTap.contains("R26_DESKTOP_PROFILE_PRESERVED"))
+        assertTrue(nativeTap.contains("desktopShareExperiment"))
 
         assertTrue(screenBridge.contains("r19.15-desktop-share-screen-bridge"))
         assertTrue(screenBridge.contains("DESKTOP_SHARE_EXPERIMENT=true"))
@@ -171,13 +173,18 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(screenBridge.contains("apiSynthesized"))
         assertTrue(screenBridge.contains("cameraAutomation:false"))
 
-        assertTrue(desktopShare.contains("r21.1-desktop-share-screen-environment"))
+        assertTrue(desktopShare.contains("r21.2-desktop-identity-and-viewport"))
         assertTrue(desktopShare.contains("mobile:false"))
         assertTrue(desktopShare.contains("platform:'Linux'"))
+        assertTrue(desktopShare.contains("DESKTOP_CSS_WIDTH=1280"))
+        assertTrue(desktopShare.contains("meta[name=\"viewport\"]"))
+        assertTrue(desktopShare.contains("maxTouchPoints"))
         assertTrue(desktopShare.contains("displaySurface:true"))
         assertTrue(desktopShare.contains("__AIS_DESKTOP_SHARE_EXPERIMENT__"))
 
         assertTrue(realtime.contains("DESKTOP_SHARE_USER_AGENT"))
+        assertTrue(realtime.contains("WebSettingsCompat.setUserAgentMetadata"))
+        assertTrue(realtime.contains("FORM_FACTOR_DESKTOP"))
         assertTrue(realtime.contains("AiStudioWebSessionR21DesktopShareScreenExperiment.DOCUMENT_START"))
         assertTrue(realtime.contains("AiStudioWebSessionR20ForensicDiagnostics.DOCUMENT_START"))
         assertTrue(realtime.contains(".configure(true,false)"))

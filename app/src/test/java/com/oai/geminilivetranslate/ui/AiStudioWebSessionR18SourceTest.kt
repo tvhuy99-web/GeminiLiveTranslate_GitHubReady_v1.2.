@@ -164,10 +164,17 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(nativeTap.contains("R26_DESKTOP_PROFILE_PRESERVED"))
         assertTrue(nativeTap.contains("desktopShareExperiment"))
 
-        assertTrue(bootstrap.contains("r17.13-desktop-share-setup-passthrough"))
+        assertTrue(bootstrap.contains("r17.14-talk-then-native-share-screen"))
         assertTrue(bootstrap.contains("SCREEN_SETUP_PASSTHROUGH"))
         assertTrue(bootstrap.contains("page-owned-unmodified"))
         assertTrue(bootstrap.contains("return body;"))
+        assertTrue(bootstrap.contains("talk-then-desktop-share-screen"))
+        assertTrue(bootstrap.contains("SCREEN_LIVE_START"))
+        assertTrue(bootstrap.contains("LIVE_SETUP_READY"))
+        assertTrue(bootstrap.contains("SCREEN_SHARE_NATIVE_TAP_REQUEST"))
+        assertTrue(bootstrap.contains("native-trusted-tap"))
+        assertTrue(bootstrap.contains("shareDeferredUntilSetup:true"))
+
         assertTrue(screenBridge.contains("r19.15-desktop-share-screen-bridge"))
         assertTrue(screenBridge.contains("DESKTOP_SHARE_EXPERIMENT=true"))
         assertTrue(screenBridge.contains("DISPLAY_HOOK_INSTALLED"))

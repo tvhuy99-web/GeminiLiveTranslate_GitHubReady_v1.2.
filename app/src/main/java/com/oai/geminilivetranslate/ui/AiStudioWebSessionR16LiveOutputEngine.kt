@@ -143,7 +143,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
     const setup=Array.isArray(msg[1])?msg[1]:null;
     if(!sc&&!ga&&!resume&&!setup)return false;
     state.jspbServerMessages++;
-    if(setup&&!sc&&!ga&&!resume){state.setupCompleteEvents++;bridgeSignal('setupComplete','true');notifyDirectSetupComplete();notifyDirectSetupComplete();}
+    if(setup&&!sc&&!ga&&!resume){state.setupCompleteEvents++;bridgeSignal('setupComplete','true');notifyDirectSetupComplete();}
     if(sc)handleJspbServerContent(sc);
     if(ga){
       state.goAwayEvents++;
@@ -176,7 +176,7 @@ object AiStudioWebSessionR16LiveOutputEngine {
     if(!obj||typeof obj!=='object'||Array.isArray(obj))return;
     try{
       if(Object.prototype.hasOwnProperty.call(obj,'setupComplete')||Object.prototype.hasOwnProperty.call(obj,'setup_complete')){
-        state.setupCompleteEvents++;bridgeSignal('setupComplete','true');
+        state.setupCompleteEvents++;bridgeSignal('setupComplete','true');notifyDirectSetupComplete();
       }
       const sc=obj.serverContent||obj.server_content;
       if(sc&&typeof sc==='object'&&!Array.isArray(sc)){

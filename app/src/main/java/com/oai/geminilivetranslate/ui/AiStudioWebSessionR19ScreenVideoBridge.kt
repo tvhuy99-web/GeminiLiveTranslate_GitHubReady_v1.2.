@@ -1,7 +1,7 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-18-r19.13-causal-frame-trace"
+    const val VERSION = "2026-09-18-r19.14-webrtc-sender-trace"
     const val PREVIOUS_VERSION = "2026-09-18-r19.12-frame-heartbeat"
 
     val DOCUMENT_START: String = """
@@ -9,7 +9,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-18-r19.13-causal-frame-trace';
+  const VERSION='2026-09-18-r19.14-webrtc-sender-trace';
   const CAMERA_POST_START_MIN_MS=350;
   const CAMERA_RETRY_NO_GUM_MS=3000;
   const MAX_CAMERA_TAP_ATTEMPTS=2;
@@ -90,9 +90,29 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     lastNetworkAt:0,
     lastFrameAt:0,
     lastDrawSeq:0,
+    masterTrackId:'',
+    lastCloneTrackId:'',
+    visualHash:'',
+    visualChanges:0,
+    visualSignatureErrors:0,
+    rtcVideoSendersSeen:0,
+    rtcReplaceTrackCalls:0,
+    rtcStatsPolls:0,
+    rtcStatsErrors:0,
+    rtcFramesEncoded:0,
+    rtcFramesSent:0,
+    rtcBytesSent:0,
+    rtcPacketsSent:0,
+    rtcLastStatsAt:0,
+    rtcLastSenderTrackId:'',
+    rtcLastDeltaFramesEncoded:0,
+    rtcLastDeltaBytesSent:0,
     configuredAt:0
   };
   const pageErrorSignatures=new Map();
+  const rtcVideoSenders=[];
+  const rtcSeenSenders=typeof WeakSet==='function'?new WeakSet():null;
+  let rtcSenderSeq=0,visualCanvas=null,visualCtx=null;
 
   function diag(kind,payload){
     try{const b=window.AIStudioWebSessionLab;if(b&&typeof b.onJsEvent==='function')b.onJsEvent(JSON.stringify({kind:'R19_'+kind,payload:payload||{}}));}catch(_){}
@@ -304,6 +324,142 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     }catch(e){diag('PAGE_DIAGNOSTICS_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});}
   }
 
+  function visualSignature(canvas){
+    try{
+      if(!canvas)return {hash:'',changed:false};
+      if(!visualCanvas){
+        visualCanvas=document.createElement('canvas');visualCanvas.width=16;visualCanvas.height=16;
+        visualCtx=visualCanvas.getContext('2d',{alpha:false,willReadFrequently:true});
+      }
+      if(!visualCtx)throw new Error('visual-signature-context-unavailable');
+      visualCtx.drawImage(canvas,0,0,16,16);
+      const data=visualCtx.getImageData(0,0,16,16).data;
+      let h=2166136261>>>0;
+      for(let i=0;i<data.length;i+=4){
+        h^=data[i];h=Math.imul(h,16777619)>>>0;
+        h^=data[i+1];h=Math.imul(h,16777619)>>>0;
+        h^=data[i+2];h=Math.imul(h,16777619)>>>0;
+      }
+      const hash=('00000000'+h.toString(16)).slice(-8);
+      const previous=state.visualHash;
+      const changed=!!previous&&previous!==hash;
+      if(changed)state.visualChanges++;
+      state.visualHash=hash;
+      return {hash:hash,previous:previous,changed:changed,changes:state.visualChanges};
+    }catch(e){
+      state.visualSignatureErrors++;
+      if(state.visualSignatureErrors<=3)diag('VISUAL_SIGNATURE_ERROR',{count:state.visualSignatureErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',240)});
+      return {hash:state.visualHash||'',changed:false,error:true,changes:state.visualChanges};
+    }
+  }
+
+  function senderTrackInfo(sender){
+    try{
+      const t=sender&&sender.track;
+      return {kind:String(t&&t.kind||''),id:String(t&&t.id||''),label:safe(t&&t.label||'',160),readyState:String(t&&t.readyState||''),enabled:!!(t&&t.enabled),muted:!!(t&&t.muted)};
+    }catch(_){return {kind:'',id:'',label:'',readyState:'',enabled:false,muted:false};}
+  }
+
+  function registerVideoSender(sender,source){
+    try{
+      if(!sender)return;
+      if(rtcSeenSenders&&rtcSeenSenders.has(sender))return;
+      const info=senderTrackInfo(sender);
+      if(info.kind!=='video')return;
+      if(rtcSeenSenders)rtcSeenSenders.add(sender);
+      const item={id:++rtcSenderSeq,sender:sender,source:String(source||'unknown'),lastFramesEncoded:-1,lastFramesSent:-1,lastBytesSent:-1,lastPacketsSent:-1,lastLoggedAt:0};
+      rtcVideoSenders.push(item);state.rtcVideoSendersSeen++;
+      diag('RTC_VIDEO_SENDER',{senderId:item.id,source:item.source,track:info,masterTrackId:state.masterTrackId,lastCloneTrackId:state.lastCloneTrackId,sendersSeen:state.rtcVideoSendersSeen});
+    }catch(e){state.rtcStatsErrors++;diag('RTC_SENDER_REGISTER_ERROR',{count:state.rtcStatsErrors,source:String(source||''),message:safe(e&&e.message||'',260)});}
+  }
+
+  function installWebRtcDiagnostics(){
+    try{
+      const P=window.RTCPeerConnection&&window.RTCPeerConnection.prototype;
+      if(P&&typeof P.addTrack==='function'&&!P.addTrack.__aisR19Rtc){
+        const nativeAddTrack=P.addTrack;
+        const wrapped=function(track){
+          const sender=nativeAddTrack.apply(this,arguments);
+          try{registerVideoSender(sender,'pc.addTrack');}catch(_){}
+          return sender;
+        };
+        wrapped.__aisR19Rtc=true;P.addTrack=wrapped;
+      }
+      if(P&&typeof P.addTransceiver==='function'&&!P.addTransceiver.__aisR19Rtc){
+        const nativeAddTransceiver=P.addTransceiver;
+        const wrapped=function(trackOrKind){
+          const transceiver=nativeAddTransceiver.apply(this,arguments);
+          try{registerVideoSender(transceiver&&transceiver.sender,'pc.addTransceiver');}catch(_){}
+          return transceiver;
+        };
+        wrapped.__aisR19Rtc=true;P.addTransceiver=wrapped;
+      }
+      const S=window.RTCRtpSender&&window.RTCRtpSender.prototype;
+      if(S&&typeof S.replaceTrack==='function'&&!S.replaceTrack.__aisR19Rtc){
+        const nativeReplace=S.replaceTrack;
+        const wrapped=function(track){
+          state.rtcReplaceTrackCalls++;
+          const sender=this;
+          const result=nativeReplace.apply(sender,arguments);
+          return Promise.resolve(result).then(function(value){
+            try{registerVideoSender(sender,'sender.replaceTrack');diag('RTC_REPLACE_TRACK',{count:state.rtcReplaceTrackCalls,track:senderTrackInfo(sender),masterTrackId:state.masterTrackId,lastCloneTrackId:state.lastCloneTrackId});}catch(_){}
+            return value;
+          },function(error){
+            diag('RTC_REPLACE_TRACK_ERROR',{count:state.rtcReplaceTrackCalls,name:String(error&&error.name||'Error'),message:safe(error&&error.message||'',260)});
+            throw error;
+          });
+        };
+        wrapped.__aisR19Rtc=true;S.replaceTrack=wrapped;
+      }
+    }catch(e){state.rtcStatsErrors++;diag('RTC_HOOK_ERROR',{count:state.rtcStatsErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});}
+  }
+
+  function pollRtcVideoStats(){
+    state.rtcStatsPolls++;
+    for(let i=0;i<rtcVideoSenders.length;i++){
+      const item=rtcVideoSenders[i],sender=item&&item.sender;
+      if(!sender||typeof sender.getStats!=='function')continue;
+      Promise.resolve(sender.getStats()).then(function(report){
+        let outbound=null;
+        try{
+          report.forEach(function(stat){
+            if(!stat||stat.type!=='outbound-rtp')return;
+            const kind=String(stat.kind||stat.mediaType||'').toLowerCase();
+            if(kind==='video'||(!kind&&stat.framesEncoded!=null))outbound=stat;
+          });
+        }catch(_){}
+        if(!outbound)return;
+        const framesEncoded=Number(outbound.framesEncoded||0);
+        const framesSent=Number(outbound.framesSent||0);
+        const bytesSent=Number(outbound.bytesSent||0);
+        const packetsSent=Number(outbound.packetsSent||0);
+        const deltaFrames=item.lastFramesEncoded<0?0:framesEncoded-item.lastFramesEncoded;
+        const deltaBytes=item.lastBytesSent<0?0:bytesSent-item.lastBytesSent;
+        const changed=item.lastFramesEncoded<0||deltaFrames!==0||deltaBytes!==0||framesSent!==item.lastFramesSent||packetsSent!==item.lastPacketsSent;
+        item.lastFramesEncoded=framesEncoded;item.lastFramesSent=framesSent;item.lastBytesSent=bytesSent;item.lastPacketsSent=packetsSent;
+        state.rtcFramesEncoded=framesEncoded;state.rtcFramesSent=framesSent;state.rtcBytesSent=bytesSent;state.rtcPacketsSent=packetsSent;state.rtcLastStatsAt=Date.now();
+        state.rtcLastSenderTrackId=String(sender&&sender.track&&sender.track.id||'');
+        state.rtcLastDeltaFramesEncoded=deltaFrames;state.rtcLastDeltaBytesSent=deltaBytes;
+        const now=Date.now();
+        if(changed||now-item.lastLoggedAt>=5000){
+          item.lastLoggedAt=now;
+          diag('RTC_VIDEO_STATS',{
+            senderId:item.id,source:item.source,track:senderTrackInfo(sender),
+            nativeFrameSeq:state.lastNativeFrameSeq,framesDrawn:state.framesDrawn,visualHash:state.visualHash,visualChanges:state.visualChanges,
+            framesEncoded:framesEncoded,deltaFramesEncoded:deltaFrames,framesSent:framesSent,
+            bytesSent:bytesSent,deltaBytesSent:deltaBytes,packetsSent:packetsSent,
+            frameWidth:Number(outbound.frameWidth||0),frameHeight:Number(outbound.frameHeight||0),
+            framesPerSecond:Number(outbound.framesPerSecond||0),qualityLimitationReason:String(outbound.qualityLimitationReason||''),
+            encoderImplementation:safe(outbound.encoderImplementation||'',160)
+          });
+        }
+      }).catch(function(e){
+        state.rtcStatsErrors++;
+        if(state.rtcStatsErrors<=3||state.rtcStatsErrors%20===0)diag('RTC_STATS_ERROR',{count:state.rtcStatsErrors,senderId:item.id,message:safe(e&&e.message||e||'',260)});
+      });
+    }
+  }
+
   function ensureVideo(){
     if(state.videoTrack&&state.videoTrack.readyState!=='ended')return true;
     try{
@@ -314,9 +470,9 @@ object AiStudioWebSessionR19ScreenVideoBridge {
       if(typeof capture!=='function')throw new Error('canvas-captureStream-unavailable');
       const stream=capture.call(canvas,1);const track=stream&&stream.getVideoTracks?stream.getVideoTracks()[0]:null;
       if(!track)throw new Error('canvas-video-track-unavailable');
-      state.canvas=canvas;state.ctx=ctx;state.videoStream=stream;state.videoTrack=track;
+      state.canvas=canvas;state.ctx=ctx;state.videoStream=stream;state.videoTrack=track;state.masterTrackId=String(track.id||'');
       try{track.addEventListener('ended',function(){state.masterTrackEnds++;state.cameraTransportReady=false;diag('MASTER_TRACK_ENDED',{count:state.masterTrackEnds,readyState:String(track.readyState||'')});},{once:true});}catch(_){}
-      diag('VIDEO_TRACK_READY',{width:canvas.width,height:canvas.height,readyState:String(track.readyState||''),requestFrame:typeof track.requestFrame==='function'});
+      diag('VIDEO_TRACK_READY',{width:canvas.width,height:canvas.height,trackId:state.masterTrackId,readyState:String(track.readyState||''),requestFrame:typeof track.requestFrame==='function'});
       return true;
     }catch(e){diag('VIDEO_TRACK_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300)});return false;}
   }
@@ -325,11 +481,11 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(!ensureVideo()||!state.videoTrack)return null;
     try{
       const clone=typeof state.videoTrack.clone==='function'?state.videoTrack.clone():state.videoTrack;
-      state.videoClonesCreated++;
+      state.videoClonesCreated++;state.lastCloneTrackId=String(clone&&clone.id||'');
       if(clone!==state.videoTrack){
         try{clone.addEventListener('ended',function(){state.videoClonesEnded++;diag('CLONE_TRACK_ENDED',{created:state.videoClonesCreated,ended:state.videoClonesEnded,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});},{once:true});}catch(_){}
       }
-      diag('VIDEO_TRACK_CLONED',{created:state.videoClonesCreated,cloneReadyState:String(clone.readyState||''),masterReadyState:String(state.videoTrack.readyState||'')});
+      diag('VIDEO_TRACK_CLONED',{created:state.videoClonesCreated,cloneTrackId:state.lastCloneTrackId,masterTrackId:state.masterTrackId,cloneReadyState:String(clone.readyState||''),masterReadyState:String(state.videoTrack.readyState||'')});
       return clone;
     }catch(e){diag('VIDEO_TRACK_CLONE_ERROR',{name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',260)});return null;}
   }
@@ -634,6 +790,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         if(trace)diag('FRAME_DRAW_BEGIN',{call:call,nativeSeq:nseq,seq:seq,width:canvas.width,height:canvas.height,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||'')});
         ctx.drawImage(img,0,0,canvas.width,canvas.height);
         state.lastDrawSeq=seq;state.framesDrawn++;state.lastFrameAt=Date.now();
+        const visual=visualSignature(canvas);
         let requestFrame=false,requestFrameError='';
         try{
           if(state.videoTrack&&typeof state.videoTrack.requestFrame==='function'){
@@ -655,7 +812,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           state.heartbeatErrors++;heartbeatError=safe(e&&e.message||e||'heartbeat-error',240);
           diag('FRAME_HEARTBEAT_ERROR',{call:call,nativeSeq:nseq,seq:seq,count:state.heartbeatErrors,message:heartbeatError});
         }
-        if(trace||state.framesDrawn===1||state.framesDrawn%20===0)diag('FRAME_DRAWN',{call:call,nativeSeq:nseq,seq:seq,frames:state.framesDrawn,width:canvas.width,height:canvas.height,base64Chars:s.length,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||''),requestFrame:requestFrame,requestFrameAttempts:state.frameRequestAttempts,requestFrameErrors:state.frameRequestErrors,heartbeatAttempted:heartbeatAttempted,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,heartbeatResult:heartbeatResult,requestFrameError:requestFrameError,heartbeatError:heartbeatError,cameraTransportReady:state.cameraTransportReady});
+        if(trace||state.framesDrawn===1||state.framesDrawn%20===0)diag('FRAME_DRAWN',{call:call,nativeSeq:nseq,seq:seq,frames:state.framesDrawn,width:canvas.width,height:canvas.height,base64Chars:s.length,masterReadyState:String(state.videoTrack&&state.videoTrack.readyState||''),requestFrame:requestFrame,requestFrameAttempts:state.frameRequestAttempts,requestFrameErrors:state.frameRequestErrors,heartbeatAttempted:heartbeatAttempted,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,heartbeatResult:heartbeatResult,requestFrameError:requestFrameError,heartbeatError:heartbeatError,cameraTransportReady:state.cameraTransportReady,visualHash:visual.hash,visualChanged:visual.changed,visualChanges:visual.changes,rtcVideoSendersSeen:state.rtcVideoSendersSeen,rtcFramesEncoded:state.rtcFramesEncoded,rtcFramesSent:state.rtcFramesSent,rtcBytesSent:state.rtcBytesSent});
       }catch(e){
         state.frameErrors++;diag('FRAME_DRAW_ERROR',{call:call,nativeSeq:nseq,seq:seq,count:state.frameErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300),stack:safe(e&&e.stack||'',900)});
       }
@@ -668,14 +825,15 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   }
 
   function configure(enabled,allowRealMicInput){
-    state.enabled=enabled!==false;state.allowRealMicInput=allowRealMicInput===true;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();if(state.enabled)ensureVideo();
+    state.enabled=enabled!==false;state.allowRealMicInput=allowRealMicInput===true;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();installWebRtcDiagnostics();if(state.enabled)ensureVideo();
     diag('CONFIG',{enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
   }
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,silentAudioRequests:state.silentAudioRequests,silentAudioTracks:state.silentAudioTracks,silentAudioErrors:state.silentAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framePushCalls:state.framePushCalls,frameRejectDisabled:state.frameRejectDisabled,frameRejectEmpty:state.frameRejectEmpty,frameRejectTooLarge:state.frameRejectTooLarge,frameRejectVideoUnavailable:state.frameRejectVideoUnavailable,frameDecodeStarts:state.frameDecodeStarts,frameDecodeSuccess:state.frameDecodeSuccess,frameRequestAttempts:state.frameRequestAttempts,frameRequestErrors:state.frameRequestErrors,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,lastNativeFrameSeq:state.lastNativeFrameSeq,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,silentAudioRequests:state.silentAudioRequests,silentAudioTracks:state.silentAudioTracks,silentAudioErrors:state.silentAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framePushCalls:state.framePushCalls,frameRejectDisabled:state.frameRejectDisabled,frameRejectEmpty:state.frameRejectEmpty,frameRejectTooLarge:state.frameRejectTooLarge,frameRejectVideoUnavailable:state.frameRejectVideoUnavailable,frameDecodeStarts:state.frameDecodeStarts,frameDecodeSuccess:state.frameDecodeSuccess,frameRequestAttempts:state.frameRequestAttempts,frameRequestErrors:state.frameRequestErrors,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,lastNativeFrameSeq:state.lastNativeFrameSeq,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1,masterTrackId:state.masterTrackId,lastCloneTrackId:state.lastCloneTrackId,visualHash:state.visualHash,visualChanges:state.visualChanges,visualSignatureErrors:state.visualSignatureErrors,rtcVideoSendersSeen:state.rtcVideoSendersSeen,rtcReplaceTrackCalls:state.rtcReplaceTrackCalls,rtcStatsPolls:state.rtcStatsPolls,rtcStatsErrors:state.rtcStatsErrors,rtcFramesEncoded:state.rtcFramesEncoded,rtcFramesSent:state.rtcFramesSent,rtcBytesSent:state.rtcBytesSent,rtcPacketsSent:state.rtcPacketsSent,rtcLastStatsAgeMs:state.rtcLastStatsAt?Date.now()-state.rtcLastStatsAt:-1,rtcLastSenderTrackId:state.rtcLastSenderTrackId,rtcLastDeltaFramesEncoded:state.rtcLastDeltaFramesEncoded,rtcLastDeltaBytesSent:state.rtcLastDeltaBytesSent};}
 
-  installPageDiagnostics();installTransportDiagnostics();installMediaHooks();
+  installPageDiagnostics();installTransportDiagnostics();installMediaHooks();installWebRtcDiagnostics();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
-  setInterval(function(){installMediaHooks();installTransportDiagnostics();tryEnableVideoInput();},800);
+  setInterval(function(){installMediaHooks();installTransportDiagnostics();installWebRtcDiagnostics();tryEnableVideoInput();},800);
+  setInterval(function(){if(state.enabled)pollRtcVideoStats();},1000);
   setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);
   diag('ENGINE_INSTALLED',{version:VERSION,transport:'camera-gum',cameraBeforeStart:false,cameraAfterStartProgress:true,singleCameraClick:false,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,displayMediaPassiveFallback:true,silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});
 })();

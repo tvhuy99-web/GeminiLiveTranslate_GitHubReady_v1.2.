@@ -822,7 +822,7 @@ internal class AiStudioWebRealtimeClient(
             "null"
         }
         current.evaluateJavascript(
-            "JSON.stringify({bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall,screen:$screenCall,directScreen:$directScreenCall})",
+            "JSON.stringify({screen:$screenCall,directScreen:$directScreenCall,bootstrap:(window.__AIS_R17_PRODUCTION__?window.__AIS_R17_PRODUCTION__.configure($language,$transcribeJs,false,$requestedModel,$screenJs,$requestedPrompt):({ok:false,error:'r17-not-installed'})),language:$languageCall})",
         ) { raw ->
             val decoded = decodeEvalValue(raw)
             val root = runCatching { JSONObject(decoded) }.getOrNull()

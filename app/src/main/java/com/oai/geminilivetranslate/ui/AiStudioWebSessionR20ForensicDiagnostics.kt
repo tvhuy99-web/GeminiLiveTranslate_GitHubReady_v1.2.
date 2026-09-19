@@ -2,18 +2,20 @@ package com.oai.geminilivetranslate.ui
 
 /** Temporary, screen-description-only forensic instrumentation. Remove after root cause is isolated. */
 object AiStudioWebSessionR20ForensicDiagnostics {
-    const val VERSION = "2026-09-18-r20.2-compact-high-signal-forensic"
-    const val PREVIOUS_VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
+    const val VERSION = "2026-09-19-r20.5-hot-upgrade-output-state"
+    const val PREVIOUS_VERSION = "2026-09-19-r20.4-output-turn-state"
+    const val LEGACY_VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
-  if(window.__AIS_R20_FORENSIC__&&window.__AIS_R20_FORENSIC__.version)return;
-
-  const VERSION='2026-09-18-r20.2-compact-high-signal-forensic';
+  const VERSION='2026-09-19-r20.5-hot-upgrade-output-state';
+  const previousForensic=window.__AIS_R20_FORENSIC__||null;
+  const previousVersion=previousForensic&&previousForensic.version?String(previousForensic.version):'';
+  if(previousVersion===VERSION)return;
   const BODY_CAP=4096;
   const CHUNK=2048;
-  const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',installedAt:Date.now()};
+  const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',lastOutputTurnState:'',installedAt:Date.now()};
 
   function active(){
     try{
@@ -58,16 +60,42 @@ object AiStudioWebSessionR20ForensicDiagnostics {
       return String(body);
     }catch(e){return '<body-read-error '+String(e&&e.message||e||'')+'>';}
   }
+  function safeShape(value,depth){
+    const d=depth||0;if(d>4)return '<depth>';
+    if(value===null)return 'null';
+    if(Array.isArray(value)){
+      const items=[];for(let i=0;i<value.length&&i<12;i++)items.push(safeShape(value[i],d+1));
+      return {type:'array',length:value.length,items:items};
+    }
+    const t=typeof value;
+    if(t==='object'){
+      const keys=Object.keys(value).slice(0,20),fields={};
+      for(let i=0;i<keys.length;i++)fields[keys[i]]=safeShape(value[keys[i]],d+1);
+      return {type:'object',keys:keys,fields:fields};
+    }
+    if(t==='string')return '<str:'+String(value).length+'>';
+    if(t==='number')return '<number>';
+    if(t==='boolean')return '<bool>';
+    return '<'+t+'>';
+  }
   function bodySummary(text){
     const s=String(text==null?'':text);
-    const out={chars:s.length,form:false,keys:[],requestPayloads:0,audioPcm:false,imageJpeg:false,model38:false};
+    const out={chars:s.length,form:false,keys:[],requestPayloads:0,audioPcm:false,imageJpeg:false,model38:false,payloads:[]};
     try{
       const p=new URLSearchParams(s);let seen=0;
       p.forEach(function(v,k){
         if(seen<40)out.keys.push(String(k||'').slice(0,80));
         seen++;
         const key=String(k||''),value=String(v||'');
-        if(/^req\d+___data__$/.test(key)){out.requestPayloads++;if(/audio\/pcm/i.test(value))out.audioPcm=true;if(/image\/jpeg/i.test(value))out.imageJpeg=true;if(/gemini-3\.8-live/i.test(value))out.model38=true;}
+        if(/^req\d+___data__$/.test(key)){
+          out.requestPayloads++;
+          const item={key:key,valueChars:value.length,json:false,shape:null};
+          if(/audio\/pcm/i.test(value))out.audioPcm=true;
+          if(/image\/jpeg/i.test(value))out.imageJpeg=true;
+          if(/gemini-3\.8-live/i.test(value))out.model38=true;
+          try{const parsed=JSON.parse(value);item.json=true;item.shape=safeShape(parsed,0);}catch(_){}
+          if(out.payloads.length<4)out.payloads.push(item);
+        }
       });
       out.form=seen>0;
     }catch(_){}
@@ -106,7 +134,7 @@ object AiStudioWebSessionR20ForensicDiagnostics {
     if(X&&X.prototype&&!X.prototype.__aisR20Forensic){
       const p=X.prototype,nOpen=p.open,nSend=p.send,nAbort=p.abort,nSet=p.setRequestHeader;
       p.open=function(method,url,async,user){
-        const id=++state.xhrSeq;this.__aisR20={id:id,method:String(method||'GET'),url:String(url||''),relevant:relevant(url),openedAt:Date.now(),openedP:now(),lastRespChars:0,headers:[]};
+        const id=++state.xhrSeq;this.__aisR20={id:id,method:String(method||'GET'),url:String(url||''),relevant:relevant(url),openedAt:Date.now(),openedP:now(),lastRespChars:0,headers:[],firstResponseLogged:false,firstResponseChars:0};
         if(this.__aisR20.relevant){bridge('XHR_OPEN',{id:id,method:this.__aisR20.method,url:safeUrl(url),async:async!==false,userProvided:!!user,t:Date.now(),p:now()});}
         return nOpen.apply(this,arguments);
       };
@@ -117,13 +145,30 @@ object AiStudioWebSessionR20ForensicDiagnostics {
           const text=bodyText(body);state.bodyChars+=text.length;
           bridge('XHR_SEND',{id:m.id,method:m.method,url:safeUrl(m.url),bodyChars:text.length,headerCount:m.headers.length,timeout:Number(xhr.timeout||0),withCredentials:!!xhr.withCredentials,responseType:String(xhr.responseType||''),t:Date.now(),p:now()});
           bridge('XHR_REQUEST_BODY_SUMMARY',Object.assign({id:m.id},bodySummary(text)));
+          const captureHandshake=function(event){
+            try{
+              if(m.firstResponseLogged)return;
+              const rs=Number(xhr.readyState||0);if(rs<3)return;
+              const textNow=responseText(xhr);if(!textNow)return;
+              m.firstResponseLogged=true;m.firstResponseChars=textNow.length;
+              state.responseChars+=Math.min(textNow.length,BODY_CAP);
+              bridge('XHR_HANDSHAKE_RESPONSE_META',{
+                id:m.id,event:event,readyState:rs,status:Number(xhr.status||0),
+                chars:textNow.length,elapsedMs:Date.now()-m.openedAt,url:safeUrl(m.url)
+              });
+              chunk('XHR_HANDSHAKE_RESPONSE',m.id,'first-response',textNow);
+            }catch(e){bridge('XHR_HANDSHAKE_CAPTURE_ERROR',{id:m.id,event:event,message:String(e&&e.message||e||'')});}
+          };
           const snap=function(event){
             let status=0,statusText='',rs=0,responseURL='';try{status=Number(xhr.status||0);statusText=String(xhr.statusText||'');rs=Number(xhr.readyState||0);responseURL=String(xhr.responseURL||'');}catch(_){}
+            captureHandshake(event);
             const failed=event==='error'||event==='timeout'||(status>=400)||(status===0&&event!=='loadend');
             bridge('XHR_EVENT',{id:m.id,event:event,readyState:rs,status:status,statusText:statusText,responseURL:safeUrl(responseURL),elapsedMs:Date.now()-m.openedAt,failed:failed,t:Date.now(),p:now()});
             if(failed&&!m.responseHeadersLogged){m.responseHeadersLogged=true;chunk('XHR_RESPONSE_HEADERS',m.id,'headers',headersText(xhr));}
             if(failed){const textNow=responseText(xhr);if(textNow.length>m.lastRespChars){const delta=textNow.slice(m.lastRespChars);m.lastRespChars=textNow.length;state.responseChars+=delta.length;chunk('XHR_RESPONSE_DELTA',m.id,'terminal',delta);}resources('xhr-'+event+'-'+m.id);}
           };
+          try{xhr.addEventListener('readystatechange',function(){captureHandshake('readystatechange');});}catch(_){}
+          try{xhr.addEventListener('progress',function(){captureHandshake('progress');});}catch(_){}
           ['error','timeout','abort','loadend'].forEach(function(name){try{xhr.addEventListener(name,function(){snap(name);});}catch(_){}});
         }
         return nSend.apply(this,arguments);
@@ -171,16 +216,66 @@ object AiStudioWebSessionR20ForensicDiagnostics {
 
   function snapshot(){
     if(!active())return;
-    let r17=null,r19=null,r16=null,r14=null;
+    let r21=null,r17=null,r19=null,r16=null,r14=null;
+    try{r21=window.__AIS_R21_DESKTOP_SHARE__&&window.__AIS_R21_DESKTOP_SHARE__.describe?window.__AIS_R21_DESKTOP_SHARE__.describe():null;}catch(_){}
     try{r17=window.__AIS_R17_PRODUCTION__&&window.__AIS_R17_PRODUCTION__.describe?window.__AIS_R17_PRODUCTION__.describe():null;}catch(_){}
     try{r19=window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.describe?window.__AIS_R19_SCREEN_VIDEO__.describe():null;}catch(_){}
     try{r16=window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.describe?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null;}catch(_){}
     try{r14=window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.describe?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null;}catch(_){}
-    const s=JSON.stringify({r17:r17,r19:r19,r16:r16,r14:r14});if(s!==state.lastState){state.lastState=s;chunk('STATE_SNAPSHOT',0,'state',s);}
+    const s=JSON.stringify({r21:r21,r17:r17,r19:r19,r16:r16,r14:r14});if(s!==state.lastState){state.lastState=s;chunk('STATE_SNAPSHOT',0,'state',s);}
+    const compact={
+      frame:{
+        drawn:Number(r19&&r19.framesDrawn||0),
+        nativeSeq:Number(r19&&r19.lastNativeFrameSeq||0),
+        visualHash:String(r19&&r19.visualHash||''),
+        visualChanges:Number(r19&&r19.visualChanges||0),
+        driverInitial:Number(r19&&r19.turnDriverInitialQueues||0),
+        driverRecurring:Number(r19&&r19.turnDriverRecurringQueues||0),
+        driverCoalesced:Number(r19&&r19.turnDriverCoalesced||0),
+        driverSkips:Number(r19&&r19.turnDriverSkips||0),
+        driverReason:String(r19&&r19.lastTurnDriverReason||''),
+        driverAgeMs:Number(r19&&r19.lastTurnDriverAgeMs||-1)
+      },
+      turn:{
+        enabled:!!(r14&&r14.screenHeartbeatEnabled),
+        setup:!!(r14&&r14.screenSetupComplete),
+        pending:!!(r14&&r14.screenHeartbeatPending),
+        pendingTextChars:Number(r14&&r14.screenHeartbeatPendingTextChars||0),
+        inFlight:!!(r14&&r14.screenTurnInFlight),
+        queued:Number(r14&&r14.screenHeartbeatsQueued||0),
+        coalesced:Number(r14&&r14.screenHeartbeatsCoalesced||0),
+        overrides:Number(r14&&r14.screenHeartbeatOverrides||0),
+        injected:Number(r14&&r14.screenHeartbeatsInjected||0),
+        audioEnds:Number(r14&&r14.screenAudioStreamEndsInjected||0),
+        completes:Number(r14&&r14.screenTurnCompletes||0),
+        stalls:Number(r14&&r14.screenTurnStallWarnings||0),
+        lastHeartbeatAgeMs:Number(r14&&r14.lastScreenHeartbeatAgeMs||-1)
+      },
+      output:{
+        browserChunks:Number(r16&&r16.browserChunks||0),
+        parsedChunks:Number(r16&&r16.parsedChunks||0),
+        serverMessages:Number(r16&&r16.jspbServerMessages||0),
+        serverContent:Number(r16&&r16.jspbServerContentMessages||0),
+        audioChunks:Number(r16&&r16.audioChunks||0),
+        audioPayloadChars:Number(r16&&r16.audioPayloadChars||0),
+        outputTranscript:Number(r16&&r16.outputTranscriptEvents||0),
+        modelText:Number(r16&&r16.modelTextEvents||0),
+        generationComplete:Number(r16&&r16.generationCompleteEvents||0),
+        turnComplete:Number(r16&&r16.turnCompleteEvents||0),
+        interrupted:Number(r16&&r16.interruptedEvents||0),
+        bridgeErrors:Number(r16&&r16.bridgeErrors||0),
+        lastAudioAgeMs:Number(r16&&r16.lastAudioAgeMs||-1)
+      }
+    };
+    const cs=JSON.stringify(compact);
+    if(cs!==state.lastOutputTurnState){state.lastOutputTurnState=cs;bridge('OUTPUT_TURN_STATE',compact);}
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};
-  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'compact-high-signal-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
+  if(active()){
+    if(previousVersion)bridge('ENGINE_UPGRADE',{from:previousVersion,to:VERSION});
+    bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'handshake-plus-output-turn-state-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');
+  }
   setInterval(snapshot,2000);
 })();
     """.trimIndent()

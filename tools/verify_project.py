@@ -210,8 +210,8 @@ def main() -> None:
         [
             "compileSdk = 36",
             "targetSdk = 36",
-            'versionName = "1.2.2"',
-            "versionCode = 10202",
+            'versionName = "1.2.3"',
+            "versionCode = 10203",
             'applicationIdSuffix = ".debug"',
             "UPDATE_STORE_FILE",
             'testImplementation("junit:junit:4.13.2")',
@@ -239,7 +239,7 @@ def main() -> None:
     print("[OK] Rotating buffered logs, redaction and diagnostic ZIP")
     print("[OK] Centralized settings validation and live/deferred application")
     print("[OK] Scoped reset paths and no obsolete apply buttons")
-    print("[OK] Android API 36, version 1.2.2 and stable update-signing configuration")
+    print("[OK] Android API 36, version 1.2.3 and stable update-signing configuration")
     print("[OK] No Lua dependency or source")
     print(f"[OK] Gradle bootstrap SHA-256: {digest}")
     print("PROJECT_STRUCTURE_OK")

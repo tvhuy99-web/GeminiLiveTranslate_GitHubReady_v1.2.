@@ -42,6 +42,8 @@ class LiveVideoDescriptionService : Service() {
     private val stopping = AtomicBoolean(false)
     private val frameDispatchSeq = AtomicLong(0L)
     private val setupCompleteCallbacks = AtomicLong(0L)
+    private val outputAudioCallbacks = AtomicLong(0L)
+    private val outputAudioBytes = AtomicLong(0L)
     private val transcript = StringBuilder()
     private var lastTranscriptChunk = ""
 
@@ -235,7 +237,19 @@ class LiveVideoDescriptionService : Service() {
                 }
 
                 override fun onAudio(pcm24kMono: ByteArray) {
-                    if (!stopping.get()) outputPlayer?.enqueue(pcm24kMono)
+                    if (stopping.get()) return
+                    val callback = outputAudioCallbacks.incrementAndGet()
+                    val bytes = outputAudioBytes.addAndGet(pcm24kMono.size.toLong())
+                    val playerPresent = outputPlayer != null
+                    outputPlayer?.enqueue(pcm24kMono)
+                    if (callback == 1L || callback % 25L == 0L) {
+                        logger.log(
+                            2,
+                            TAG,
+                            "SCREEN_OUTPUT_AUDIO callback=$callback chunkBytes=${pcm24kMono.size} totalBytes=$bytes " +
+                                "playerPresent=$playerPresent action=${if (playerPresent) "enqueue" else "drop-no-player"}",
+                        )
+                    }
                 }
 
                 override fun onTranscript(text: String) {

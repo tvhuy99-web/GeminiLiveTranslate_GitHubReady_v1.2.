@@ -1,8 +1,8 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-18-r19.16-display-after-setup-ack"
-    const val PREVIOUS_VERSION = "2026-09-18-r19.14-webrtc-sender-trace"
+    const val VERSION = "2026-09-19-r19.17-desktop-share-turn-driver"
+    const val PREVIOUS_VERSION = "2026-09-18-r19.16-display-after-setup-ack"
     const val LEGACY_VERSION = "2026-09-18-r19.12-frame-heartbeat"
 
     val DOCUMENT_START: String = """
@@ -10,8 +10,9 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   'use strict';
   if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
 
-  const VERSION='2026-09-18-r19.16-display-after-setup-ack';
+  const VERSION='2026-09-19-r19.17-desktop-share-turn-driver';
   const DESKTOP_SHARE_EXPERIMENT=true;
+  const INITIAL_SCREEN_KICKOFF='Hãy mô tả ngay nội dung quan trọng đang hiển thị trên màn hình trong một câu ngắn, bằng ngôn ngữ đầu ra đã cấu hình. Đây là lượt đầu tiên, luôn trả lời và không im lặng.';
   const CAMERA_POST_START_MIN_MS=350;
   const CAMERA_RETRY_NO_GUM_MS=3000;
   const MAX_CAMERA_TAP_ATTEMPTS=2;
@@ -68,6 +69,12 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     frameRequestErrors:0,
     heartbeatAttempts:0,
     heartbeatErrors:0,
+    turnDriverInitialQueues:0,
+    turnDriverRecurringQueues:0,
+    turnDriverCoalesced:0,
+    turnDriverSkips:0,
+    lastTurnDriverAt:0,
+    lastTurnDriverReason:'',
     lastNativeFrameSeq:0,
     framesQueued:0,
     framesDrawn:0,
@@ -926,6 +933,48 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     if(state.cameraScans===1||state.cameraScans%8===0)diag('CAMERA_SCAN',{scan:state.cameraScans,candidates:0,gateReason:state.cameraGateReason,gumVideoRequests:state.gumVideoRequests,configuredAgeMs:state.configuredAt?Date.now()-state.configuredAt:-1});
   }
 
+  function driveDesktopShareTurn(visual,nativeSeq,seq){
+    if(!DESKTOP_SHARE_EXPERIMENT)return {ok:true,skipped:true,reason:'not-desktop-share'};
+    try{
+      const d=window.__AIS_LIVE_DIRECT_ENGINE__;
+      if(!d||typeof d.queueScreenHeartbeat!=='function'||typeof d.describe!=='function'){
+        state.turnDriverSkips++;state.lastTurnDriverReason='r14-unavailable';
+        return {ok:false,skipped:true,reason:'r14-unavailable'};
+      }
+      const ds=d.describe()||{};
+      if(!ds.screenHeartbeatEnabled||!ds.screenSetupComplete){
+        state.turnDriverSkips++;state.lastTurnDriverReason='screen-turn-driver-not-ready';
+        return {ok:true,skipped:true,reason:'screen-turn-driver-not-ready',setupComplete:!!ds.screenSetupComplete};
+      }
+      const injected=Number(ds.screenHeartbeatsInjected||0);
+      if(injected===0){
+        if(ds.screenHeartbeatPending||ds.screenTurnInFlight){
+          state.turnDriverSkips++;state.lastTurnDriverReason='initial-already-pending';
+          return {ok:true,skipped:true,reason:'initial-already-pending',pending:!!ds.screenHeartbeatPending,inFlight:!!ds.screenTurnInFlight};
+        }
+        const h=d.queueScreenHeartbeat(INITIAL_SCREEN_KICKOFF);
+        state.turnDriverInitialQueues++;state.lastTurnDriverAt=Date.now();state.lastTurnDriverReason='initial';
+        diag('DESKTOP_SHARE_TURN_DRIVER',{kind:'initial',nativeSeq:Number(nativeSeq||0),seq:Number(seq||0),framesDrawn:state.framesDrawn,visualHash:state.visualHash,visualChanged:!!(visual&&visual.changed),result:h||{}});
+        return h||{ok:true};
+      }
+      if(!(visual&&visual.changed)){
+        state.turnDriverSkips++;state.lastTurnDriverReason='visual-unchanged';
+        return {ok:true,skipped:true,reason:'visual-unchanged',injects:injected};
+      }
+      const h=d.queueScreenHeartbeat();
+      if(h&&h.coalesced)state.turnDriverCoalesced++;else state.turnDriverRecurringQueues++;
+      state.lastTurnDriverAt=Date.now();state.lastTurnDriverReason=h&&h.coalesced?'recurring-coalesced':'recurring';
+      if(!(h&&h.coalesced)||state.turnDriverCoalesced===1||state.turnDriverCoalesced%20===0){
+        diag('DESKTOP_SHARE_TURN_DRIVER',{kind:h&&h.coalesced?'recurring-coalesced':'recurring',nativeSeq:Number(nativeSeq||0),seq:Number(seq||0),framesDrawn:state.framesDrawn,visualHash:state.visualHash,visualChanged:true,result:h||{}});
+      }
+      return h||{ok:true};
+    }catch(e){
+      state.heartbeatErrors++;state.lastTurnDriverReason='turn-driver-error';
+      diag('DESKTOP_SHARE_TURN_DRIVER_ERROR',{count:state.heartbeatErrors,name:String(e&&e.name||'Error'),message:safe(e&&e.message||'',300),nativeSeq:Number(nativeSeq||0),seq:Number(seq||0)});
+      return {ok:false,error:String(e&&e.message||e||'turn-driver-error')};
+    }
+  }
+
   function pushJpeg(base64,nativeSeq){
     const s=String(base64||''),call=++state.framePushCalls,nseq=Number(nativeSeq||0);
     state.lastNativeFrameSeq=nseq;
@@ -984,11 +1033,9 @@ object AiStudioWebSessionR19ScreenVideoBridge {
         try{
           const d=window.__AIS_LIVE_DIRECT_ENGINE__;
           if(d&&typeof d.queueScreenHeartbeat==='function'){
-            if(!DESKTOP_SHARE_EXPERIMENT){
-              heartbeatAttempted=true;state.heartbeatAttempts++;
-            }
-            const h=DESKTOP_SHARE_EXPERIMENT?{ok:true,skipped:true,reason:'desktop-share-screen-managed-by-page'}:d.queueScreenHeartbeat();
-            try{heartbeatResult=safe(typeof h==='string'?h:JSON.stringify(h||{}),300);}catch(_){heartbeatResult=safe(String(h||''),300);}
+            heartbeatAttempted=true;state.heartbeatAttempts++;
+            const h=DESKTOP_SHARE_EXPERIMENT?driveDesktopShareTurn(visual,nseq,seq):d.queueScreenHeartbeat();
+            try{heartbeatResult=safe(typeof h==='string'?h:JSON.stringify(h||{}),500);}catch(_){heartbeatResult=safe(String(h||''),500);}
           }
         }catch(e){
           state.heartbeatErrors++;heartbeatError=safe(e&&e.message||e||'heartbeat-error',240);
@@ -1010,7 +1057,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
     state.enabled=enabled!==false;state.allowRealMicInput=allowRealMicInput===true;state.configuredAt=Date.now();installPageDiagnostics();installTransportDiagnostics();installMediaHooks();installWebRtcDiagnostics();if(state.enabled)ensureVideo();
     diag('CONFIG',{enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),transport:'desktop-share-screen',desktopShareExperiment:DESKTOP_SHARE_EXPERIMENT,getDisplayMediaHookInstalled:state.displayHookInstalled,getDisplayMediaNativeAvailable:state.displayNativeAvailable,cameraAutomation:false,silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});return describe();
   }
-  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,transport:'desktop-share-screen',desktopShareExperiment:DESKTOP_SHARE_EXPERIMENT,cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,displayStreamsReturned:state.displayStreamsReturned,displayHookInstalled:state.displayHookInstalled,displayNativeAvailable:state.displayNativeAvailable,displayApiSynthesized:state.displayApiSynthesized,modelSetupRequests:state.modelSetupRequests,modelSetupAckSeen:state.modelSetupAckSeen,modelSetupAckAgeMs:state.modelSetupAckAt?Date.now()-state.modelSetupAckAt:-1,displayAckWaits:state.displayAckWaits,displayAckGatedResolutions:state.displayAckGatedResolutions,displayAckTimeoutResolutions:state.displayAckTimeoutResolutions,displayTrackEnds:state.displayTrackEnds,displayTrackMutes:state.displayTrackMutes,displayTrackUnmutes:state.displayTrackUnmutes,lastDisplayRequestAgeMs:state.lastDisplayRequestAt?Date.now()-state.lastDisplayRequestAt:-1,lastDisplayReturnAgeMs:state.lastDisplayReturnAt?Date.now()-state.lastDisplayReturnAt:-1,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,silentAudioRequests:state.silentAudioRequests,silentAudioTracks:state.silentAudioTracks,silentAudioErrors:state.silentAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framePushCalls:state.framePushCalls,frameRejectDisabled:state.frameRejectDisabled,frameRejectEmpty:state.frameRejectEmpty,frameRejectTooLarge:state.frameRejectTooLarge,frameRejectVideoUnavailable:state.frameRejectVideoUnavailable,frameDecodeStarts:state.frameDecodeStarts,frameDecodeSuccess:state.frameDecodeSuccess,frameRequestAttempts:state.frameRequestAttempts,frameRequestErrors:state.frameRequestErrors,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,lastNativeFrameSeq:state.lastNativeFrameSeq,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1,masterTrackId:state.masterTrackId,lastCloneTrackId:state.lastCloneTrackId,visualHash:state.visualHash,visualChanges:state.visualChanges,visualSignatureErrors:state.visualSignatureErrors,rtcVideoSendersSeen:state.rtcVideoSendersSeen,rtcReplaceTrackCalls:state.rtcReplaceTrackCalls,rtcStatsPolls:state.rtcStatsPolls,rtcStatsErrors:state.rtcStatsErrors,rtcFramesEncoded:state.rtcFramesEncoded,rtcFramesSent:state.rtcFramesSent,rtcBytesSent:state.rtcBytesSent,rtcPacketsSent:state.rtcPacketsSent,rtcLastStatsAgeMs:state.rtcLastStatsAt?Date.now()-state.rtcLastStatsAt:-1,rtcLastSenderTrackId:state.rtcLastSenderTrackId,rtcLastDeltaFramesEncoded:state.rtcLastDeltaFramesEncoded,rtcLastDeltaBytesSent:state.rtcLastDeltaBytesSent};}
+  function describe(){return {ok:true,version:VERSION,enabled:state.enabled,allowRealMicInput:state.allowRealMicInput,transport:'desktop-share-screen',desktopShareExperiment:DESKTOP_SHARE_EXPERIMENT,cameraBeforeStart:false,cameraAfterStartProgress:true,cameraTransportReady:state.cameraTransportReady,cameraTransportReadyAgeMs:state.cameraTransportReadyAt?Date.now()-state.cameraTransportReadyAt:-1,videoTrackReady:!!(state.videoTrack&&state.videoTrack.readyState!=='ended'),masterTrackEnds:state.masterTrackEnds,videoClonesCreated:state.videoClonesCreated,videoClonesEnded:state.videoClonesEnded,gumVideoRequests:state.gumVideoRequests,gumCombinedRequests:state.gumCombinedRequests,displayRequests:state.displayRequests,displayStreamsReturned:state.displayStreamsReturned,displayHookInstalled:state.displayHookInstalled,displayNativeAvailable:state.displayNativeAvailable,displayApiSynthesized:state.displayApiSynthesized,modelSetupRequests:state.modelSetupRequests,modelSetupAckSeen:state.modelSetupAckSeen,modelSetupAckAgeMs:state.modelSetupAckAt?Date.now()-state.modelSetupAckAt:-1,displayAckWaits:state.displayAckWaits,displayAckGatedResolutions:state.displayAckGatedResolutions,displayAckTimeoutResolutions:state.displayAckTimeoutResolutions,displayTrackEnds:state.displayTrackEnds,displayTrackMutes:state.displayTrackMutes,displayTrackUnmutes:state.displayTrackUnmutes,lastDisplayRequestAgeMs:state.lastDisplayRequestAt?Date.now()-state.lastDisplayRequestAt:-1,lastDisplayReturnAgeMs:state.lastDisplayReturnAt?Date.now()-state.lastDisplayReturnAt:-1,realAudioRequests:state.realAudioRequests,realAudioTracks:state.realAudioTracks,realAudioErrors:state.realAudioErrors,silentAudioRequests:state.silentAudioRequests,silentAudioTracks:state.silentAudioTracks,silentAudioErrors:state.silentAudioErrors,micPermissionRequests:state.micPermissionRequests,micPermissionTimeouts:state.micPermissionTimeouts,framePushCalls:state.framePushCalls,frameRejectDisabled:state.frameRejectDisabled,frameRejectEmpty:state.frameRejectEmpty,frameRejectTooLarge:state.frameRejectTooLarge,frameRejectVideoUnavailable:state.frameRejectVideoUnavailable,frameDecodeStarts:state.frameDecodeStarts,frameDecodeSuccess:state.frameDecodeSuccess,frameRequestAttempts:state.frameRequestAttempts,frameRequestErrors:state.frameRequestErrors,heartbeatAttempts:state.heartbeatAttempts,heartbeatErrors:state.heartbeatErrors,turnDriverInitialQueues:state.turnDriverInitialQueues,turnDriverRecurringQueues:state.turnDriverRecurringQueues,turnDriverCoalesced:state.turnDriverCoalesced,turnDriverSkips:state.turnDriverSkips,lastTurnDriverAgeMs:state.lastTurnDriverAt?Date.now()-state.lastTurnDriverAt:-1,lastTurnDriverReason:state.lastTurnDriverReason,lastNativeFrameSeq:state.lastNativeFrameSeq,framesQueued:state.framesQueued,framesDrawn:state.framesDrawn,frameErrors:state.frameErrors,staleFrameDrops:state.staleFrameDrops,cameraScans:state.cameraScans,cameraCandidates:state.cameraCandidates,cameraClicks:state.cameraClicks,cameraRetries:state.cameraRetries,maxCameraTapAttempts:MAX_CAMERA_TAP_ATTEMPTS,lastCameraClickAgeMs:state.lastCameraClickAt?Date.now()-state.lastCameraClickAt:-1,lastCameraLabel:state.lastCameraLabel,cameraGateScans:state.cameraGateScans,cameraGateReason:state.cameraGateReason,cameraBlockedByPageError:state.cameraBlockedByPageError,startAttemptSeen:state.startAttemptSeen,startObservedAgeMs:state.startObservedAt?Date.now()-state.startObservedAt:-1,postStartProgress:state.postStartProgress,postStartProgressKind:state.postStartProgressKind,postStartProgressAgeMs:state.postStartProgressAt?Date.now()-state.postStartProgressAt:-1,pageErrorCount:state.pageErrorCount,lastPageError:state.lastPageError,lastPageErrorAgeMs:state.lastPageErrorAt?Date.now()-state.lastPageErrorAt:-1,networkEvents:state.networkEvents,positiveNetworkEvents:state.positiveNetworkEvents,lastNetworkStatus:state.lastNetworkStatus,lastNetworkReadyState:state.lastNetworkReadyState,lastNetworkPath:state.lastNetworkPath,lastNetworkError:state.lastNetworkError,lastNetworkResponseError:state.lastNetworkResponseError,lastNetworkAgeMs:state.lastNetworkAt?Date.now()-state.lastNetworkAt:-1,lastFrameAgeMs:state.lastFrameAt?Date.now()-state.lastFrameAt:-1,masterTrackId:state.masterTrackId,lastCloneTrackId:state.lastCloneTrackId,visualHash:state.visualHash,visualChanges:state.visualChanges,visualSignatureErrors:state.visualSignatureErrors,rtcVideoSendersSeen:state.rtcVideoSendersSeen,rtcReplaceTrackCalls:state.rtcReplaceTrackCalls,rtcStatsPolls:state.rtcStatsPolls,rtcStatsErrors:state.rtcStatsErrors,rtcFramesEncoded:state.rtcFramesEncoded,rtcFramesSent:state.rtcFramesSent,rtcBytesSent:state.rtcBytesSent,rtcPacketsSent:state.rtcPacketsSent,rtcLastStatsAgeMs:state.rtcLastStatsAt?Date.now()-state.rtcLastStatsAt:-1,rtcLastSenderTrackId:state.rtcLastSenderTrackId,rtcLastDeltaFramesEncoded:state.rtcLastDeltaFramesEncoded,rtcLastDeltaBytesSent:state.rtcLastDeltaBytesSent};}
 
   installPageDiagnostics();installTransportDiagnostics();installMediaHooks();installWebRtcDiagnostics();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
@@ -1028,7 +1075,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
       trackEnds:state.displayTrackEnds,trackMutes:state.displayTrackMutes,trackUnmutes:state.displayTrackUnmutes
     });
   },5000);
-  diag('ENGINE_INSTALLED',{version:VERSION,transport:'desktop-share-screen',desktopShareExperiment:true,cameraAutomation:false,getDisplayMediaShim:true,displayResolvePolicy:'after-model-setup-ack',silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});
+  diag('ENGINE_INSTALLED',{version:VERSION,transport:'desktop-share-screen',desktopShareExperiment:true,cameraAutomation:false,getDisplayMediaShim:true,displayResolvePolicy:'after-model-setup-ack',turnDriver:'visual-change-coalesced',initialKickoff:'required-response',silentAudioWhenMicDisabled:true,pageDiagnostics:true,networkDiagnostics:true});
 })();
     """.trimIndent()
 }

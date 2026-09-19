@@ -2,16 +2,17 @@ package com.oai.geminilivetranslate.ui
 
 /** Temporary, screen-description-only forensic instrumentation. Remove after root cause is isolated. */
 object AiStudioWebSessionR20ForensicDiagnostics {
-    const val VERSION = "2026-09-19-r20.4-output-turn-state"
-    const val PREVIOUS_VERSION = "2026-09-18-r20.3-handshake-forensic"
+    const val VERSION = "2026-09-19-r20.5-hot-upgrade-output-state"
+    const val PREVIOUS_VERSION = "2026-09-19-r20.4-output-turn-state"
     const val LEGACY_VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
-  if(window.__AIS_R20_FORENSIC__&&window.__AIS_R20_FORENSIC__.version)return;
-
-  const VERSION='2026-09-19-r20.4-output-turn-state';
+  const VERSION='2026-09-19-r20.5-hot-upgrade-output-state';
+  const previousForensic=window.__AIS_R20_FORENSIC__||null;
+  const previousVersion=previousForensic&&previousForensic.version?String(previousForensic.version):'';
+  if(previousVersion===VERSION)return;
   const BODY_CAP=4096;
   const CHUNK=2048;
   const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',lastOutputTurnState:'',installedAt:Date.now()};
@@ -271,7 +272,10 @@ object AiStudioWebSessionR20ForensicDiagnostics {
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};
-  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'handshake-plus-output-turn-state-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
+  if(active()){
+    if(previousVersion)bridge('ENGINE_UPGRADE',{from:previousVersion,to:VERSION});
+    bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'handshake-plus-output-turn-state-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');
+  }
   setInterval(snapshot,2000);
 })();
     """.trimIndent()

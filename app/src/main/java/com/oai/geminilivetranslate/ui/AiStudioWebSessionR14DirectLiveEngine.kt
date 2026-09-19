@@ -2,17 +2,21 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-19-web-session-r14.8-coalesced-turn-driver"
-    const val PREVIOUS_VERSION = "2026-09-19-web-session-r14.7-one-shot-screen-kickoff"
+    const val VERSION = "2026-09-19-web-session-r14.9-hot-upgrade-turn-driver"
+    const val PREVIOUS_VERSION = "2026-09-19-web-session-r14.8-coalesced-turn-driver"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
     val DOCUMENT_START = """
 (function(){
   'use strict';
-  if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
-
-  const VERSION='2026-09-19-web-session-r14.8-coalesced-turn-driver';
+  const VERSION='2026-09-19-web-session-r14.9-hot-upgrade-turn-driver';
+  const previousEngine=window.__AIS_LIVE_DIRECT_ENGINE__||null;
+  const previousVersion=previousEngine&&previousEngine.version?String(previousEngine.version):'';
+  if(previousVersion===VERSION){return;}
+  if(previousEngine&&previousVersion){
+    try{if(typeof previousEngine.reset==='function')previousEngine.reset();}catch(_){}
+  }
   const MAX_QUEUE=256;
   const state={
     armed:false,
@@ -281,7 +285,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
 
   try{
     const X=window.XMLHttpRequest;
-    if(X&&X.prototype&&!X.prototype.__aisR14Wrapped){
+    if(X&&X.prototype&&(!X.prototype.__aisR14Wrapped||String(X.prototype.__aisR14Version||'')!==VERSION)){
       const nativeOpen=X.prototype.open;
       const nativeSend=X.prototype.send;
       X.prototype.open=function(method,url){this.__aisR14={raw:String(url||''),method:String(method||'GET').toUpperCase()};return nativeOpen.apply(this,arguments);};
@@ -323,11 +327,13 @@ object AiStudioWebSessionR14DirectLiveEngine {
         return nativeSend.apply(this,arguments);
       };
       X.prototype.__aisR14Wrapped=true;
-      emit('HOOK',{target:'XMLHttpRequest'});
+      X.prototype.__aisR14Version=VERSION;
+      emit('HOOK',{target:'XMLHttpRequest',version:VERSION,upgradedFrom:String(previousVersion||'')});
     }
   }catch(e){emit('HOOK_ERROR',{target:'XMLHttpRequest',name:String(e&&e.name||'Error')});}
 
   window.__AIS_LIVE_DIRECT_ENGINE__={version:VERSION,describe:describe,enqueuePcmBase64:enqueue,enqueueVideoBase64:enqueueVideo,configureScreenHeartbeat:configureScreenHeartbeat,markScreenSetupComplete:markScreenSetupComplete,queueScreenHeartbeat:queueScreenHeartbeat,onScreenTurnComplete:onScreenTurnComplete,arm:arm,clearQueue:clearQueue,reset:reset};
+  if(previousVersion)emit('ENGINE_UPGRADE',{from:previousVersion,to:VERSION});
   emit('ENGINE_INSTALLED',{version:VERSION,frameBytes:1280,frameMs:40,maxQueue:MAX_QUEUE,host:safeUrl(location.href).host});
 })();
     """.trimIndent()

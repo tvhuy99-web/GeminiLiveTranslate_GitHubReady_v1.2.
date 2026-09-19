@@ -2,8 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 /** Temporary, screen-description-only forensic instrumentation. Remove after root cause is isolated. */
 object AiStudioWebSessionR20ForensicDiagnostics {
-    const val VERSION = "2026-09-18-r20.3-handshake-forensic"
-    const val PREVIOUS_VERSION = "2026-09-18-r20.2-compact-high-signal-forensic"
+    const val VERSION = "2026-09-19-r20.4-output-turn-state"
+    const val PREVIOUS_VERSION = "2026-09-18-r20.3-handshake-forensic"
     const val LEGACY_VERSION = "2026-09-18-r20.1-redacted-screen-forensic"
 
     val DOCUMENT_START: String = """
@@ -11,10 +11,10 @@ object AiStudioWebSessionR20ForensicDiagnostics {
   'use strict';
   if(window.__AIS_R20_FORENSIC__&&window.__AIS_R20_FORENSIC__.version)return;
 
-  const VERSION='2026-09-18-r20.3-handshake-forensic';
+  const VERSION='2026-09-19-r20.4-output-turn-state';
   const BODY_CAP=4096;
   const CHUNK=2048;
-  const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',installedAt:Date.now()};
+  const state={xhrSeq:0,fetchSeq:0,bodyChars:0,responseChars:0,lastState:'',lastOutputTurnState:'',installedAt:Date.now()};
 
   function active(){
     try{
@@ -222,10 +222,56 @@ object AiStudioWebSessionR20ForensicDiagnostics {
     try{r16=window.__AIS_LIVE_OUTPUT_ENGINE__&&window.__AIS_LIVE_OUTPUT_ENGINE__.describe?window.__AIS_LIVE_OUTPUT_ENGINE__.describe():null;}catch(_){}
     try{r14=window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.describe?window.__AIS_LIVE_DIRECT_ENGINE__.describe():null;}catch(_){}
     const s=JSON.stringify({r21:r21,r17:r17,r19:r19,r16:r16,r14:r14});if(s!==state.lastState){state.lastState=s;chunk('STATE_SNAPSHOT',0,'state',s);}
+    const compact={
+      frame:{
+        drawn:Number(r19&&r19.framesDrawn||0),
+        nativeSeq:Number(r19&&r19.lastNativeFrameSeq||0),
+        visualHash:String(r19&&r19.visualHash||''),
+        visualChanges:Number(r19&&r19.visualChanges||0),
+        driverInitial:Number(r19&&r19.turnDriverInitialQueues||0),
+        driverRecurring:Number(r19&&r19.turnDriverRecurringQueues||0),
+        driverCoalesced:Number(r19&&r19.turnDriverCoalesced||0),
+        driverSkips:Number(r19&&r19.turnDriverSkips||0),
+        driverReason:String(r19&&r19.lastTurnDriverReason||''),
+        driverAgeMs:Number(r19&&r19.lastTurnDriverAgeMs||-1)
+      },
+      turn:{
+        enabled:!!(r14&&r14.screenHeartbeatEnabled),
+        setup:!!(r14&&r14.screenSetupComplete),
+        pending:!!(r14&&r14.screenHeartbeatPending),
+        pendingTextChars:Number(r14&&r14.screenHeartbeatPendingTextChars||0),
+        inFlight:!!(r14&&r14.screenTurnInFlight),
+        queued:Number(r14&&r14.screenHeartbeatsQueued||0),
+        coalesced:Number(r14&&r14.screenHeartbeatsCoalesced||0),
+        overrides:Number(r14&&r14.screenHeartbeatOverrides||0),
+        injected:Number(r14&&r14.screenHeartbeatsInjected||0),
+        audioEnds:Number(r14&&r14.screenAudioStreamEndsInjected||0),
+        completes:Number(r14&&r14.screenTurnCompletes||0),
+        stalls:Number(r14&&r14.screenTurnStallWarnings||0),
+        lastHeartbeatAgeMs:Number(r14&&r14.lastScreenHeartbeatAgeMs||-1)
+      },
+      output:{
+        browserChunks:Number(r16&&r16.browserChunks||0),
+        parsedChunks:Number(r16&&r16.parsedChunks||0),
+        serverMessages:Number(r16&&r16.jspbServerMessages||0),
+        serverContent:Number(r16&&r16.jspbServerContentMessages||0),
+        audioChunks:Number(r16&&r16.audioChunks||0),
+        audioPayloadChars:Number(r16&&r16.audioPayloadChars||0),
+        outputTranscript:Number(r16&&r16.outputTranscriptEvents||0),
+        modelText:Number(r16&&r16.modelTextEvents||0),
+        generationComplete:Number(r16&&r16.generationCompleteEvents||0),
+        turnComplete:Number(r16&&r16.turnCompleteEvents||0),
+        interrupted:Number(r16&&r16.interruptedEvents||0),
+        bridgeErrors:Number(r16&&r16.bridgeErrors||0),
+        lastAudioAgeMs:Number(r16&&r16.lastAudioAgeMs||-1)
+      }
+    };
+    const cs=JSON.stringify(compact);
+    if(cs!==state.lastOutputTurnState){state.lastOutputTurnState=cs;bridge('OUTPUT_TURN_STATE',compact);}
   }
 
   window.__AIS_R20_FORENSIC__={version:VERSION,describe:function(){return {ok:true,version:VERSION,active:active(),xhrSeq:state.xhrSeq,fetchSeq:state.fetchSeq,bodyChars:state.bodyChars,responseChars:state.responseChars,ageMs:Date.now()-state.installedAt};},dumpResources:function(){resources('manual');return true;}};
-  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'handshake-focused-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
+  if(active()){bridge('INSTALL',{version:VERSION,mode:'screen-description-only',bodyCap:BODY_CAP,chunkChars:CHUNK,warning:'handshake-plus-output-turn-state-redacted-forensic-logging'});bridge('ENVIRONMENT',env());resources('install');}
   setInterval(snapshot,2000);
 })();
     """.trimIndent()

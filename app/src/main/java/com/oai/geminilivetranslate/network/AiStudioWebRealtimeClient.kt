@@ -272,7 +272,9 @@ internal class AiStudioWebRealtimeClient(
             ?: GeminiScreenDescriptionLiveClient.systemInstruction(
                 if (targetLanguage.equals("vi", ignoreCase = true)) "tiếng Việt" else targetLanguage,
             )
-        return (base + "\n\n" + GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT)
+        val heartbeat = GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT.trim()
+        val baseBudget = (SCREEN_KICKOFF_MAX_CHARS - heartbeat.length - 2).coerceAtLeast(0)
+        return (base.take(baseBudget) + "\n\n" + heartbeat)
             .trim()
             .take(SCREEN_KICKOFF_MAX_CHARS)
     }

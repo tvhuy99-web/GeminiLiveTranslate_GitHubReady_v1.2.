@@ -56,7 +56,7 @@ jobs:
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apksigner.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee badging.txt
-          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10202' versionName='1.2.2-debug'" badging.txt
+          grep -q "package: name='com.oai.geminilivetranslate.debug' versionCode='10203' versionName='1.2.3-debug'" badging.txt
           ACTUAL_CERT="$(awk -F': ' '/certificate SHA-256 digest:/ {print $NF; exit}' apksigner.txt | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL_CERT" = "$EXPECTED_CERT_SHA256"
           ACTUAL_APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"

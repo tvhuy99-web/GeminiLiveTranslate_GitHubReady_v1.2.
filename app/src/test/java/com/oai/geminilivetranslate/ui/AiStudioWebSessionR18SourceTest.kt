@@ -225,12 +225,17 @@ class AiStudioWebSessionR18SourceTest {
 
         val direct = source("ui/AiStudioWebSessionR14DirectLiveEngine.kt")
         val output = source("ui/AiStudioWebSessionR16LiveOutputEngine.kt")
-        assertTrue(direct.contains("r14.5-postsetup-heartbeat"))
+        assertTrue(direct.contains("r14.7-one-shot-screen-kickoff"))
         assertTrue(direct.contains("realtime[4]=state.screenHeartbeatText"))
         assertTrue(direct.contains("SCREEN_HEARTBEAT_INJECTED"))
         assertTrue(direct.contains("screenTurnInFlight"))
-        assertTrue(output.contains("r16.3-postsetup-heartbeat"))
+        assertTrue(output.contains("r16.4-generation-completes-kickoff"))
         assertTrue(output.contains("notifyDirectSetupComplete()"))
+        assertTrue(output.contains("notifyDirectTurnComplete('generationComplete')"))
+        assertTrue(direct.contains("wasInFlight"))
+        val service = source("service/LiveVideoDescriptionService.kt")
+        assertTrue(service.contains("SCREEN_OUTPUT_AUDIO"))
+        assertTrue(service.contains("outputPlayer?.enqueue(pcm24kMono)"))
     }
 
     @Test

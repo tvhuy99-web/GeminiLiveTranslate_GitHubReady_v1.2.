@@ -150,7 +150,7 @@ class AiStudioWebSessionR18SourceTest {
     }
 
     @Test
-    fun screenDescriptionDesktopSharePathUsesDisplayMediaAndDisablesManualHeartbeat() {
+    fun screenDescriptionDesktopSharePathUsesDisplayMediaAndOneShotKickoff() {
         val nativeTap = source("network/AiStudioNativeTapDebugSupport.kt")
         val bootstrap = source("ui/AiStudioWebSessionR17ProductionBootstrap.kt")
         val screenBridge = source("ui/AiStudioWebSessionR19ScreenVideoBridge.kt")
@@ -214,10 +214,14 @@ class AiStudioWebSessionR18SourceTest {
         assertTrue(realtime.contains(".configure(true,false)"))
         assertTrue(realtime.contains("WAITING_DESKTOP_SHARE_STREAM"))
         assertTrue(realtime.contains("displayStreamsReturned <= 0L"))
-        assertTrue(realtime.contains("configureScreenHeartbeat(false"))
-        assertFalse(realtime.contains("configureScreenHeartbeat(true"))
+        assertTrue(realtime.contains("configureScreenHeartbeat(true"))
+        assertTrue(realtime.contains("SCREEN_KICKOFF_QUEUED"))
         assertFalse(realtime.contains("WAITING_SCREEN_CONTROL"))
         assertFalse(realtime.contains("instructionApplied="))
+        assertTrue(realtime.contains("first-frame-once"))
+        assertTrue(realtime.contains("queueInitialScreenKickoff"))
+        assertTrue(realtime.contains("buildScreenKickoffText"))
+        assertTrue(realtime.contains("AUDIO_DROP_BEFORE_SETUP"))
 
         val direct = source("ui/AiStudioWebSessionR14DirectLiveEngine.kt")
         val output = source("ui/AiStudioWebSessionR16LiveOutputEngine.kt")

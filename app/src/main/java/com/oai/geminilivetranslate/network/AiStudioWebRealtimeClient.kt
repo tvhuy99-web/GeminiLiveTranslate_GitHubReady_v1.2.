@@ -74,6 +74,10 @@ internal class AiStudioWebRealtimeClient(
     private val screenFrameNotReady = AtomicLong(0L)
     private val screenFramePosted = AtomicLong(0L)
     private val screenFrameJsCallbacks = AtomicLong(0L)
+    private val screenKickoffArmed = AtomicBoolean(false)
+    private val screenKickoffInjected = AtomicBoolean(false)
+    private val screenKickoffAttempts = AtomicLong(0L)
+    private val screenAudioBeforeSetupDrops = AtomicLong(0L)
 
     @Volatile private var webView: WebView? = null
     @Volatile private var inputClient: AiStudioWebLiveClient? = null
@@ -383,7 +387,19 @@ internal class AiStudioWebRealtimeClient(
             created,
             object : AiStudioWebLiveOutputBridge.Listener {
                 override fun onAudio(pcm24kMono: ByteArray, mimeType: String) {
-                    if (closed.get() || !setupDelivered.get()) return
+                    if (closed.get()) return
+                    if (!setupDelivered.get()) {
+                        val dropped = screenAudioBeforeSetupDrops.incrementAndGet()
+                        if (dropped == 1L || dropped % 25L == 0L) {
+                            logger.log(
+                                1,
+                                "AiStudioOutput",
+                                "AUDIO_DROP_BEFORE_SETUP count=$dropped bytes=${pcm24kMono.size} mime=${safe(mimeType, 100)} " +
+                                    "screenDescription=$screenDescription serverSetupSeen=$serverSetupSeen",
+                            )
+                        }
+                        return
+                    }
                     val chunks = audioChunks.incrementAndGet()
                     val bytes = audioBytes.addAndGet(pcm24kMono.size.toLong())
                     responseServerEvents.incrementAndGet()
@@ -843,7 +859,8 @@ internal class AiStudioWebRealtimeClient(
         val screenJs = if (screenDescription) "true" else "false"
         val requestedModel = JSONObject.quote(targetLiveModel())
         val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
-        val screenHeartbeat = JSONObject.quote(GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT)
+        val kickoffText = buildScreenKickoffText()
+        val screenHeartbeat = JSONObject.quote(kickoffText)
         val languageCall = if (transcribe || screenDescription) {
             "null"
         } else {
@@ -855,7 +872,7 @@ internal class AiStudioWebRealtimeClient(
             "null"
         }
         val directScreenCall = if (screenDescription) {
-            "(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat(false,$screenHeartbeat):({ok:false,error:'r14-screen-heartbeat-not-installed'}))"
+            "(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.configureScreenHeartbeat(true,$screenHeartbeat):({ok:false,error:'r14-screen-heartbeat-not-installed'}))"
         } else {
             "null"
         }
@@ -880,7 +897,13 @@ internal class AiStudioWebRealtimeClient(
                 if (screenBridge != null) lastScreenVideoState = screenBridge.toString()
                 if (directScreen != null) lastDirectState = directScreen.toString()
                 updateBootstrapProgress(bootstrap)
-                logger.log(2, "AiStudioBootstrap", "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} languageGuardConfigured=$languageGuardConfigured screenHeartbeat=${directScreen?.optBoolean("screenHeartbeatEnabled", false) == true}")
+                logger.log(
+                    2,
+                    "AiStudioBootstrap",
+                    "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} " +
+                        "languageGuardConfigured=$languageGuardConfigured screenHeartbeat=${directScreen?.optBoolean("screenHeartbeatEnabled", false) == true} " +
+                        "kickoffMode=${if (screenDescription) "first-frame-once" else "disabled"} kickoffChars=${kickoffText.length}",
+                )
             } else if (decoded.isNotBlank()) {
                 logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk screenOk=$screenOk directScreenOk=$directScreenOk ${safe(decoded, 1200)}")
             }
@@ -1209,6 +1232,7 @@ internal class AiStudioWebRealtimeClient(
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
         private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
+        private const val SCREEN_KICKOFF_MAX_CHARS = 3_900
         private const val DESKTOP_SHARE_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/138.0.7204.179 Safari/537.36"

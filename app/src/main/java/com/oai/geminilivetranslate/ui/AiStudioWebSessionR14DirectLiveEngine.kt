@@ -231,7 +231,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
     state.screenHeartbeatEnabled=enabled===true;state.screenHeartbeatText=state.screenHeartbeatEnabled?String(text||'').trim().slice(0,4000):'';
     state.screenSetupComplete=false;
     if(!state.screenHeartbeatEnabled){state.screenHeartbeatPending=false;state.screenHeartbeatPendingText='';state.screenTurnInFlight=false;}
-    emit('SCREEN_HEARTBEAT_CONFIG',{enabled:state.screenHeartbeatEnabled,setupComplete:false,textChars:heartbeatText.length,realtimeTextField:5});
+    emit('SCREEN_HEARTBEAT_CONFIG',{enabled:state.screenHeartbeatEnabled,setupComplete:false,textChars:state.screenHeartbeatText.length,realtimeTextField:5});
     return describe();
   }
   function markScreenSetupComplete(){

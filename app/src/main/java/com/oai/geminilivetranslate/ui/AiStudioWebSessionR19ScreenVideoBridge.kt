@@ -1,16 +1,20 @@
 package com.oai.geminilivetranslate.ui
 
 object AiStudioWebSessionR19ScreenVideoBridge {
-    const val VERSION = "2026-09-19-r19.17-desktop-share-turn-driver"
-    const val PREVIOUS_VERSION = "2026-09-18-r19.16-display-after-setup-ack"
+    const val VERSION = "2026-09-19-r19.18-hot-upgrade-desktop-share"
+    const val PREVIOUS_VERSION = "2026-09-19-r19.17-desktop-share-turn-driver"
     const val LEGACY_VERSION = "2026-09-18-r19.12-frame-heartbeat"
 
     val DOCUMENT_START: String = """
 (function(){
   'use strict';
-  if(window.__AIS_R19_SCREEN_VIDEO__&&window.__AIS_R19_SCREEN_VIDEO__.version)return;
-
-  const VERSION='2026-09-19-r19.17-desktop-share-turn-driver';
+  const VERSION='2026-09-19-r19.18-hot-upgrade-desktop-share';
+  const previousEngine=window.__AIS_R19_SCREEN_VIDEO__||null;
+  const previousVersion=previousEngine&&previousEngine.version?String(previousEngine.version):'';
+  if(previousVersion===VERSION)return;
+  if(previousEngine&&previousVersion){
+    try{if(typeof previousEngine.configure==='function')previousEngine.configure(false,false);}catch(_){}
+  }
   const DESKTOP_SHARE_EXPERIMENT=true;
   const INITIAL_SCREEN_KICKOFF='Hãy mô tả ngay nội dung quan trọng đang hiển thị trên màn hình trong một câu ngắn, bằng ngôn ngữ đầu ra đã cấu hình. Đây là lượt đầu tiên, luôn trả lời và không im lặng.';
   const CAMERA_POST_START_MIN_MS=350;
@@ -688,7 +692,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
   function installMediaHooks(){
     try{
       const md=navigator.mediaDevices;if(!md)return;
-      if(typeof md.getUserMedia==='function'&&!md.getUserMedia.__aisR19ScreenVideo){
+      if(typeof md.getUserMedia==='function'&&(!md.getUserMedia.__aisR19ScreenVideo||String(md.getUserMedia.__aisR19Version||'')!==VERSION)){
         const inherited=md.getUserMedia.bind(md);
         const platformGum=(window.MediaDevices&&window.MediaDevices.prototype&&typeof window.MediaDevices.prototype.getUserMedia==='function')
           ?window.MediaDevices.prototype.getUserMedia.bind(md)
@@ -757,10 +761,10 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           }
           return inherited(constraints);
         };
-        wrapped.__aisR19ScreenVideo=true;md.getUserMedia=wrapped;
+        wrapped.__aisR19ScreenVideo=true;wrapped.__aisR19Version=VERSION;md.getUserMedia=wrapped;
         diag('GUM_HOOK',{realMicBypassesSynthetic:true,cameraVideoReplacedByScreen:true});
       }
-      if(!md.getDisplayMedia||!md.getDisplayMedia.__aisR19ScreenVideo){
+      if(!md.getDisplayMedia||!md.getDisplayMedia.__aisR19ScreenVideo||String(md.getDisplayMedia.__aisR19Version||'')!==VERSION){
         const nativeDisplay=typeof md.getDisplayMedia==='function'?md.getDisplayMedia.bind(md):null;
         state.displayNativeAvailable=!!nativeDisplay;
         const wrappedDisplay=function(constraints){
@@ -799,6 +803,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
           return Promise.reject(new DOMException('getDisplayMedia unavailable','NotSupportedError'));
         };
         wrappedDisplay.__aisR19ScreenVideo=true;
+        wrappedDisplay.__aisR19Version=VERSION;
         let installed=false;
         try{md.getDisplayMedia=wrappedDisplay;installed=md.getDisplayMedia===wrappedDisplay;}catch(_){}
         if(!installed){
@@ -1061,6 +1066,7 @@ object AiStudioWebSessionR19ScreenVideoBridge {
 
   installPageDiagnostics();installTransportDiagnostics();installMediaHooks();installWebRtcDiagnostics();
   window.__AIS_R19_SCREEN_VIDEO__={version:VERSION,configure:configure,pushJpeg:pushJpeg,describe:describe};
+  if(previousVersion)diag('ENGINE_UPGRADE',{from:previousVersion,to:VERSION});
   setInterval(function(){installMediaHooks();installTransportDiagnostics();installWebRtcDiagnostics();tryEnableVideoInput();},800);
   setInterval(function(){if(state.enabled)pollRtcVideoStats();},1000);
   setInterval(function(){if(state.enabled)scanPageErrors();},PAGE_ERROR_SCAN_MS);

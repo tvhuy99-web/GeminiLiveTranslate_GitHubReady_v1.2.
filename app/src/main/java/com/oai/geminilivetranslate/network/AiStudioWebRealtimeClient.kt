@@ -27,6 +27,7 @@ import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.oai.geminilivetranslate.BuildConfig
 import com.oai.geminilivetranslate.GeminiTranslateApp
 import com.oai.geminilivetranslate.core.AiStudioWebLiveClient
 import com.oai.geminilivetranslate.core.AiStudioWebLiveOutputBridge
@@ -121,6 +122,13 @@ internal class AiStudioWebRealtimeClient(
         backgroundDeferredMs = 0L
         healthWasBackground = false
         lastBootstrapSignature = ""
+        logger.log(
+            2,
+            "AiStudioLive",
+            "BUILD_FINGERPRINT applicationId=${BuildConfig.APPLICATION_ID} versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE} " +
+                "r14=${AiStudioWebSessionR14DirectLiveEngine.VERSION} r16=${AiStudioWebSessionR16LiveOutputEngine.VERSION} " +
+                "r19=${AiStudioWebSessionR19ScreenVideoBridge.VERSION} r20=${AiStudioWebSessionR20ForensicDiagnostics.VERSION}",
+        )
         logger.log(
             2,
             "AiStudioLive",

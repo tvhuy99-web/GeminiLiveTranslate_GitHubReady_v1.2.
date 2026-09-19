@@ -2,8 +2,8 @@ package com.oai.geminilivetranslate.ui
 
 
 object AiStudioWebSessionR14DirectLiveEngine {
-    const val VERSION = "2026-09-18-web-session-r14.6-audio-stream-end-heartbeat"
-    const val PREVIOUS_VERSION = "2026-09-18-web-session-r14.5-postsetup-heartbeat"
+    const val VERSION = "2026-09-19-web-session-r14.7-one-shot-screen-kickoff"
+    const val PREVIOUS_VERSION = "2026-09-18-web-session-r14.6-audio-stream-end-heartbeat"
     const val FRAME_BYTES = 1_280
     const val FRAME_MS = 40
 
@@ -12,7 +12,7 @@ object AiStudioWebSessionR14DirectLiveEngine {
   'use strict';
   if(window.__AIS_LIVE_DIRECT_ENGINE__&&window.__AIS_LIVE_DIRECT_ENGINE__.version){return;}
 
-  const VERSION='2026-09-18-web-session-r14.6-audio-stream-end-heartbeat';
+  const VERSION='2026-09-19-web-session-r14.7-one-shot-screen-kickoff';
   const MAX_QUEUE=256;
   const state={
     armed:false,
@@ -249,11 +249,15 @@ object AiStudioWebSessionR14DirectLiveEngine {
     if(state.screenHeartbeatsQueued===1||state.screenHeartbeatsQueued%20===0)emit('SCREEN_HEARTBEAT_QUEUED',{count:state.screenHeartbeatsQueued,inFlight:state.screenTurnInFlight,inFlightAgeMs:inFlightAgeMs});
     return {ok:true,pending:true,inFlight:state.screenTurnInFlight,inFlightAgeMs:inFlightAgeMs,queued:state.screenHeartbeatsQueued,injects:state.screenHeartbeatsInjected};
   }
-  function onScreenTurnComplete(){
+  function onScreenTurnComplete(reason){
     if(!state.screenHeartbeatEnabled)return describe();
+    const wasInFlight=state.screenTurnInFlight;
     const ageMs=state.lastScreenHeartbeatAt?Date.now()-state.lastScreenHeartbeatAt:-1;
-    state.screenTurnInFlight=false;state.screenTurnCompletes++;state.lastScreenTurnStallLogAt=0;
-    emit('SCREEN_TURN_COMPLETE',{count:state.screenTurnCompletes,pending:state.screenHeartbeatPending,turnAgeMs:ageMs,injects:state.screenHeartbeatsInjected});
+    state.screenTurnInFlight=false;state.lastScreenTurnStallLogAt=0;
+    if(wasInFlight){
+      state.screenTurnCompletes++;
+      emit('SCREEN_TURN_COMPLETE',{count:state.screenTurnCompletes,reason:String(reason||'turnComplete'),pending:state.screenHeartbeatPending,turnAgeMs:ageMs,injects:state.screenHeartbeatsInjected});
+    }
     return describe();
   }
   function arm(enabled){state.armed=enabled!==false;emit('ARM',{armed:state.armed,queueDepth:state.queue.length,templateObserved:state.templateObserved});return describe();}

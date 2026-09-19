@@ -359,7 +359,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()}",
+            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()} kickoffAttempts=${screenKickoffAttempts.get()} kickoffQueued=${screenKickoffInjected.get()} audioBeforeSetupDrops=${screenAudioBeforeSetupDrops.get()}",
         )
     }
 
@@ -1238,8 +1238,14 @@ internal class AiStudioWebRealtimeClient(
                     kind == "R14_MEDIA_REPLACED" ||
                     kind == "R14_INJECT_HTTP_2XX" ||
                     kind == "R14_INJECT_HTTP_ERROR" ||
-                    kind == "R14_INJECT_ZERO_STATUS_END" ->
-                    logger.log(if (kind.contains("ERROR")) 1 else 3, "AiStudioTransport", "JS_$kind ${safe(text, 1800)}")
+                    kind == "R14_INJECT_ZERO_STATUS_END" ||
+                    kind == "R14_SCREEN_HEARTBEAT_TURN_BOUNDARY" ||
+                    kind == "R14_SCREEN_HEARTBEAT_INJECTED" ||
+                    kind == "R14_SCREEN_TURN_COMPLETE" ||
+                    kind == "R14_SCREEN_TURN_STALLED" ->
+                    logger.log(if (kind.contains("ERROR") || kind.contains("STALLED")) 1 else 2, "AiStudioTransport", "JS_$kind ${safe(text, 2200)}")
+                kind == "R16_AUDIO_OUT" || kind == "R16_TEXT_OUT" ->
+                    logger.log(2, "AiStudioOutput", "JS_$kind ${safe(text, 1800)}")
                 kind == "R16_CHUNK_PARSE_ERROR" || kind == "R16_OUTPUT_BRIDGE_ERROR" ->
                     logger.log(1, "AiStudioOutput", "JS_$kind ${safe(text, 1800)}")
             }

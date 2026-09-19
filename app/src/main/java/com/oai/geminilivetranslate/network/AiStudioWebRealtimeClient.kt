@@ -74,9 +74,6 @@ internal class AiStudioWebRealtimeClient(
     private val screenFrameNotReady = AtomicLong(0L)
     private val screenFramePosted = AtomicLong(0L)
     private val screenFrameJsCallbacks = AtomicLong(0L)
-    private val screenKickoffArmed = AtomicBoolean(false)
-    private val screenKickoffInjected = AtomicBoolean(false)
-    private val screenKickoffAttempts = AtomicLong(0L)
     private val screenAudioBeforeSetupDrops = AtomicLong(0L)
 
     @Volatile private var webView: WebView? = null
@@ -250,70 +247,17 @@ internal class AiStudioWebRealtimeClient(
             ) { raw ->
                 val callbackCount = screenFrameJsCallbacks.incrementAndGet()
                 val decoded = decodeEvalValue(raw)
-                val frameDrawn = !decoded.contains("\"ok\":false") && decoded.contains("\"framesDrawn\":")
                 logger.log(
                     if (decoded.contains("\"ok\":false")) 1 else 3,
                     "AiStudioScreenVideo",
                     "FRAME_CAUSAL id=$frameSeq stage=js-eval-result callbacks=$callbackCount jpegBytes=${jpeg.size} " +
                         "result=${safe(decoded, 1800)}",
                 )
-                if (frameDrawn && screenDescription && setupDelivered.get() && !screenKickoffInjected.get()) {
-                    queueInitialScreenKickoff(current, frameSeq)
-                }
             }
         }
         return GeminiLiveClient.SendResult.SENT
     }
 
-    private fun buildScreenKickoffText(): String {
-        val base = screenDescriptionPrompt
-            ?.trim()
-            ?.takeIf(String::isNotBlank)
-            ?: GeminiScreenDescriptionLiveClient.systemInstruction(
-                if (targetLanguage.equals("vi", ignoreCase = true)) "tiếng Việt" else targetLanguage,
-            )
-        val heartbeat = GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT.trim()
-        val baseBudget = (SCREEN_KICKOFF_MAX_CHARS - heartbeat.length - 2).coerceAtLeast(0)
-        return (base.take(baseBudget) + "\n\n" + heartbeat)
-            .trim()
-            .take(SCREEN_KICKOFF_MAX_CHARS)
-    }
-
-    private fun queueInitialScreenKickoff(current: WebView, frameSeq: Long) {
-        if (!screenDescription || closed.get() || !setupDelivered.get() || screenKickoffInjected.get()) return
-        if (!screenKickoffArmed.compareAndSet(false, true)) return
-        val attempt = screenKickoffAttempts.incrementAndGet()
-        logger.log(
-            2,
-            "AiStudioScreenVideo",
-            "SCREEN_KICKOFF_ARM attempt=$attempt frame=$frameSeq setupDelivered=${setupDelivered.get()} " +
-                "serverSetupSeen=$serverSetupSeen frameCallbacks=${screenFrameJsCallbacks.get()}",
-        )
-        current.evaluateJavascript(
-            "JSON.stringify(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.queueScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.queueScreenHeartbeat():({ok:false,error:'r14-kickoff-unavailable'}))",
-        ) { raw ->
-            val decoded = decodeEvalValue(raw)
-            val result = runCatching { JSONObject(decoded) }.getOrNull()
-            val ok = result?.optBoolean("ok", false) == true
-            if (ok) {
-                screenKickoffInjected.set(true)
-                logger.log(
-                    2,
-                    "AiStudioScreenVideo",
-                    "SCREEN_KICKOFF_QUEUED attempt=$attempt frame=$frameSeq pending=${result?.optBoolean("pending", false)} " +
-                        "inFlight=${result?.optBoolean("inFlight", false)} queued=${result?.optLong("queued", 0L)} " +
-                        "injects=${result?.optLong("injects", 0L)}",
-                )
-            } else {
-                screenKickoffArmed.set(false)
-                logger.log(
-                    1,
-                    "AiStudioScreenVideo",
-                    "SCREEN_KICKOFF_RETRY attempt=$attempt frame=$frameSeq result=${safe(decoded, 1200)}",
-                )
-            }
-        }
-    }
     fun backpressureStats(): GeminiLiveClient.BackpressureStats {
         val queued = estimatedQueuedWireBytes()
         updateHighWater(queued)
@@ -361,7 +305,7 @@ internal class AiStudioWebRealtimeClient(
         logger.log(
             2,
             "AiStudioLive",
-            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()} kickoffAttempts=${screenKickoffAttempts.get()} kickoffQueued=${screenKickoffInjected.get()} audioBeforeSetupDrops=${screenAudioBeforeSetupDrops.get()}",
+            "CLOSE hidden=false debugVisible=true graceful=$graceful setup=${setupDelivered.get()} server=${stats.serverContentEvents} inputText=${stats.inputTranscriptEvents} outputText=${stats.outputTextEvents} modelText=${stats.modelTextEvents} audioChunks=${stats.audioChunks} audioBytes=${stats.audioBytes} turns=${stats.turnCompleteEvents} backpressure=${backpressureEvents.get()} bootstrapRecoveries=$bootstrapRecoveryAttempts screenFrameCalls=${screenFrameCalls.get()} screenFrameNotReady=${screenFrameNotReady.get()} screenFramePosted=${screenFramePosted.get()} screenJsCallbacks=${screenFrameJsCallbacks.get()} audioBeforeSetupDrops=${screenAudioBeforeSetupDrops.get()}",
         )
     }
 
@@ -912,8 +856,8 @@ internal class AiStudioWebRealtimeClient(
         val screenJs = if (screenDescription) "true" else "false"
         val requestedModel = JSONObject.quote(targetLiveModel())
         val requestedPrompt = JSONObject.quote(screenDescriptionPrompt.orEmpty())
-        val kickoffText = buildScreenKickoffText()
-        val screenHeartbeat = JSONObject.quote(kickoffText)
+        val screenHeartbeatText = GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT
+        val screenHeartbeat = JSONObject.quote(screenHeartbeatText)
         val languageCall = if (transcribe || screenDescription) {
             "null"
         } else {
@@ -955,7 +899,7 @@ internal class AiStudioWebRealtimeClient(
                     "AiStudioBootstrap",
                     "CONFIGURED target=$targetLanguage transcribe=$transcribe screenDescription=$screenDescription model=${targetLiveModel()} " +
                         "languageGuardConfigured=$languageGuardConfigured screenHeartbeat=${directScreen?.optBoolean("screenHeartbeatEnabled", false) == true} " +
-                        "kickoffMode=${if (screenDescription) "first-frame-once" else "disabled"} kickoffChars=${kickoffText.length}",
+                        "turnDriver=${if (screenDescription) "js-after-frame-draw" else "disabled"} heartbeatChars=${screenHeartbeatText.length}",
                 )
             } else if (decoded.isNotBlank()) {
                 logger.log(2, "AiStudioBootstrap", "CONFIG_PENDING bootstrapOk=$bootstrapOk languageOk=$languageOk screenOk=$screenOk directScreenOk=$directScreenOk ${safe(decoded, 1200)}")
@@ -1291,7 +1235,6 @@ internal class AiStudioWebRealtimeClient(
         private const val INPUT_IDLE_TO_SILENCE_MS = 650L
         private const val STREAM_END_CARRIER_GRACE_MS = 900L
         private const val SCREEN_DESCRIPTION_MAX_BASE64_CHARS = 3_000_000
-        private const val SCREEN_KICKOFF_MAX_CHARS = 3_900
         private const val DESKTOP_SHARE_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/138.0.7204.179 Safari/537.36"

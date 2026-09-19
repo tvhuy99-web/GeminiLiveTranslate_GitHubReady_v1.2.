@@ -250,17 +250,68 @@ internal class AiStudioWebRealtimeClient(
             ) { raw ->
                 val callbackCount = screenFrameJsCallbacks.incrementAndGet()
                 val decoded = decodeEvalValue(raw)
+                val frameDrawn = !decoded.contains("\"ok\":false") && decoded.contains("\"framesDrawn\":")
                 logger.log(
                     if (decoded.contains("\"ok\":false")) 1 else 3,
                     "AiStudioScreenVideo",
                     "FRAME_CAUSAL id=$frameSeq stage=js-eval-result callbacks=$callbackCount jpegBytes=${jpeg.size} " +
                         "result=${safe(decoded, 1800)}",
                 )
+                if (frameDrawn && screenDescription && setupDelivered.get() && !screenKickoffInjected.get()) {
+                    queueInitialScreenKickoff(current, frameSeq)
+                }
             }
         }
         return GeminiLiveClient.SendResult.SENT
     }
 
+    private fun buildScreenKickoffText(): String {
+        val base = screenDescriptionPrompt
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: GeminiScreenDescriptionLiveClient.systemInstruction(
+                if (targetLanguage.equals("vi", ignoreCase = true)) "tiếng Việt" else targetLanguage,
+            )
+        return (base + "\n\n" + GeminiScreenDescriptionLiveClient.HEARTBEAT_TEXT)
+            .trim()
+            .take(SCREEN_KICKOFF_MAX_CHARS)
+    }
+
+    private fun queueInitialScreenKickoff(current: WebView, frameSeq: Long) {
+        if (!screenDescription || closed.get() || !setupDelivered.get() || screenKickoffInjected.get()) return
+        if (!screenKickoffArmed.compareAndSet(false, true)) return
+        val attempt = screenKickoffAttempts.incrementAndGet()
+        logger.log(
+            2,
+            "AiStudioScreenVideo",
+            "SCREEN_KICKOFF_ARM attempt=$attempt frame=$frameSeq setupDelivered=${setupDelivered.get()} " +
+                "serverSetupSeen=$serverSetupSeen frameCallbacks=${screenFrameJsCallbacks.get()}",
+        )
+        current.evaluateJavascript(
+            "JSON.stringify(window.__AIS_LIVE_DIRECT_ENGINE__&&typeof window.__AIS_LIVE_DIRECT_ENGINE__.queueScreenHeartbeat==='function'?window.__AIS_LIVE_DIRECT_ENGINE__.queueScreenHeartbeat():({ok:false,error:'r14-kickoff-unavailable'}))",
+        ) { raw ->
+            val decoded = decodeEvalValue(raw)
+            val result = runCatching { JSONObject(decoded) }.getOrNull()
+            val ok = result?.optBoolean("ok", false) == true
+            if (ok) {
+                screenKickoffInjected.set(true)
+                logger.log(
+                    2,
+                    "AiStudioScreenVideo",
+                    "SCREEN_KICKOFF_QUEUED attempt=$attempt frame=$frameSeq pending=${result?.optBoolean("pending", false)} " +
+                        "inFlight=${result?.optBoolean("inFlight", false)} queued=${result?.optLong("queued", 0L)} " +
+                        "injects=${result?.optLong("injects", 0L)}",
+                )
+            } else {
+                screenKickoffArmed.set(false)
+                logger.log(
+                    1,
+                    "AiStudioScreenVideo",
+                    "SCREEN_KICKOFF_RETRY attempt=$attempt frame=$frameSeq result=${safe(decoded, 1200)}",
+                )
+            }
+        }
+    }
     fun backpressureStats(): GeminiLiveClient.BackpressureStats {
         val queued = estimatedQueuedWireBytes()
         updateHighWater(queued)
